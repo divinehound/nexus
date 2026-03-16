@@ -1,0 +1,32 @@
+{
+  "name": "@nexus/api",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "nest start --watch",
+    "build": "nest build",
+    "start": "node dist/main",
+    "start:prod": "node dist/main",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11",
+    "@nestjs/config": "^4",
+    "@nestjs/core": "^11",
+    "@nestjs/platform-express": "^11",
+    "@nestjs/swagger": "^11",
+    "@nexus/database": "workspace:*",
+    "@nexus/types": "workspace:*",
+    "drizzle-orm": "^0.39",
+    "postgres": "^3.4",
+    "reflect-metadata": "^0.2",
+    "rxjs": "^7"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11",
+    "@nexus/eslint-config": "workspace:*",
+    "@types/express": "^5",
+    "@types/node": "^22",
+    "typescript": "^5.7"
+  }
+}
