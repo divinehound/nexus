@@ -1,0 +1,17 @@
+{
+  "name": "nexus",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "db:generate": "pnpm --filter @nexus/database drizzle-kit generate",
+    "db:migrate": "pnpm --filter @nexus/database drizzle-kit migrate",
+    "db:studio": "pnpm --filter @nexus/database drizzle-kit studio"
+  },
+  "devDependencies": {
+    "turbo": "^2"
+  },
+  "packageManager": "pnpm@10.29.3"
+}
