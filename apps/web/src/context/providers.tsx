@@ -1,20 +1,18 @@
 'use client';
 
 import type { ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/context/auth-context';
 import { wagmiConfig } from '@/lib/wagmi';
 import '@rainbow-me/rainbowkit/styles.css';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
 const solanaEndpoint = process.env.NEXT_PUBLIC_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
+const queryClient = new QueryClient();
 
 export function Providers({ children }: { children: ReactNode }) {
-  // Keep QueryClientProvider present in all render paths so hooks using
-  // react-query (e.g. auth/session hooks) never throw in SSR or hydration.
-  const { QueryClient, QueryClientProvider } = require('@tanstack/react-query');
-  const queryClient = new QueryClient();
-
-  // During SSR/prerender avoid wallet providers that touch browser globals.
+  // During SSR/prerender avoid wallet providers that touch browser globals,
+  // but always provide react-query context so hooks never throw.
   if (typeof window === 'undefined') {
     return (
       <QueryClientProvider client={queryClient}>
@@ -23,7 +21,7 @@ export function Providers({ children }: { children: ReactNode }) {
     );
   }
 
-  // Browser-only requires to prevent SSR evaluation side effects.
+  // Browser-only requires to prevent SSR evaluation side effects from wallet libs.
   const { WagmiProvider } = require('wagmi');
   const { RainbowKitProvider, darkTheme } = require('@rainbow-me/rainbowkit');
   const {
