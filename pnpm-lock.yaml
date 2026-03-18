@@ -230,6 +230,9 @@ importers:
 
   packages/types:
     devDependencies:
+      '@types/node':
+        specifier: ^22
+        version: 22.19.15
       typescript:
         specifier: ^5.7
         version: 5.9.3
