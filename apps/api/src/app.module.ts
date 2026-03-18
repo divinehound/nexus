@@ -11,6 +11,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
 import { SearchModule } from './modules/search/search.module';
 import { HealthScoreModule } from './modules/health-score/health-score.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
+import { AuthModule } from './modules/auth/auth.module';
 import configuration from './config/configuration';
 
 @Module({
@@ -20,6 +21,7 @@ import configuration from './config/configuration';
       load: [configuration],
     }),
     DatabaseModule,
+    AuthModule,
     ProjectsModule,
     CollectionsModule,
     WikiModule,

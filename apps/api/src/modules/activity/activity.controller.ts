@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, Req } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { AuthGuard } from '@nestjs/passport';
 import { ActivityService } from './activity.service';
 
 @ApiTags('activity')
@@ -18,20 +19,28 @@ export class ActivityController {
   }
 
   @Post('flex')
+  @UseGuards(AuthGuard('jwt'))
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Post a flex (verified holder purchase share)' })
   postFlex(
     @Param('projectId') projectId: string,
-    @Body() body: { walletAddress: string; collectionId: string; tokenId: string; message?: string; imageUrl?: string },
+    @Req() req: { user: { address: string } },
+    @Body() body: { collectionId: string; tokenId: string; message?: string; imageUrl?: string },
   ) {
-    return this.activityService.createFlex(projectId, body);
+    return this.activityService.createFlex(projectId, {
+      walletAddress: req.user.address,
+      ...body,
+    });
   }
 
   @Post(':activityId/react')
+  @UseGuards(AuthGuard('jwt'))
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'React to an activity (upvote/fire)' })
   react(
     @Param('activityId') activityId: string,
-    @Body() body: { walletAddress: string },
+    @Req() req: { user: { address: string } },
   ) {
-    return this.activityService.addReaction(activityId, body.walletAddress);
+    return this.activityService.addReaction(activityId, req.user.address);
   }
 }
