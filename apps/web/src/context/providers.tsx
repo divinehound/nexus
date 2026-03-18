@@ -39,8 +39,8 @@ export function Providers({ children }: { children: ReactNode }) {
   const solanaWallets = [new PhantomWalletAdapter(), new SolflareWalletAdapter()];
 
   return (
-    <WagmiProvider config={wagmiConfig}>
-      <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={queryClient}>
+      <WagmiProvider config={wagmiConfig}>
         <RainbowKitProvider theme={darkTheme({ accentColor: '#a855f7' })}>
           <AbstractWalletProvider chain={'abstract' as any}>
             <ConnectionProvider endpoint={solanaEndpoint}>
@@ -50,7 +50,7 @@ export function Providers({ children }: { children: ReactNode }) {
             </ConnectionProvider>
           </AbstractWalletProvider>
         </RainbowKitProvider>
-      </QueryClientProvider>
-    </WagmiProvider>
+      </WagmiProvider>
+    </QueryClientProvider>
   );
 }
