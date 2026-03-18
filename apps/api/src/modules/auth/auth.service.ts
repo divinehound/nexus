@@ -1,11 +1,14 @@
 import { Injectable, Inject, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { SiweMessage, generateNonce } from 'siwe';
+import { JsonRpcProvider } from 'ethers';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { eq } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, users, wallets } from '@nexus/database';
+import { CHAIN_META } from '@nexus/types';
 
 interface NonceRecord {
   nonce: string;
@@ -19,6 +22,7 @@ export class AuthService {
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly jwtService: JwtService,
+    private readonly config: ConfigService,
   ) {}
 
   generateNonce(address: string): { nonce: string } {
@@ -31,7 +35,13 @@ export class AuthService {
   }
 
   async verifyEvm(message: string, signature: string) {
-    const siweMessage = new SiweMessage(message);
+    let siweMessage: SiweMessage;
+    try {
+      siweMessage = new SiweMessage(message);
+    } catch {
+      throw new UnauthorizedException('Malformed SIWE message');
+    }
+
     const address = siweMessage.address.toLowerCase();
 
     const record = this.nonceStore.get(address);
@@ -43,7 +53,11 @@ export class AuthService {
       throw new UnauthorizedException('Invalid nonce');
     }
 
-    const result = await siweMessage.verify({ signature });
+    // Build an ethers provider so SIWE can fall back to ERC-1271
+    // on-chain verification for smart-contract wallets (e.g. Coinbase Smart Wallet).
+    const provider = this.getEvmProvider(siweMessage.chainId);
+
+    const result = await siweMessage.verify({ signature, provider });
     if (!result.success) {
       throw new UnauthorizedException('Invalid signature');
     }
@@ -81,6 +95,28 @@ export class AuthService {
     const tokens = this.issueTokens(user.id, address, user.role);
 
     return { user, ...tokens };
+  }
+
+  private getEvmProvider(chainId?: number): JsonRpcProvider {
+    const chain = this.resolveEvmChain(chainId);
+    const meta = CHAIN_META[chain as keyof typeof CHAIN_META];
+    const apiKey = this.config.get<string>('alchemy.apiKey');
+
+    if (meta?.alchemySubdomain && apiKey) {
+      return new JsonRpcProvider(
+        `https://${meta.alchemySubdomain}.g.alchemy.com/v2/${apiKey}`,
+      );
+    }
+
+    // Fallback to public RPC for chains without Alchemy support
+    const publicRpcs: Record<number, string> = {
+      1: 'https://eth.llamarpc.com',
+      8453: 'https://mainnet.base.org',
+      137: 'https://polygon-rpc.com',
+      2741: 'https://api.abstractions.io',
+      33139: 'https://rpc.apechain.com',
+    };
+    return new JsonRpcProvider(publicRpcs[chainId ?? 1] ?? 'https://eth.llamarpc.com');
   }
 
   private resolveEvmChain(chainId?: number): string {
