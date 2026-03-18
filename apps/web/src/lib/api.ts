@@ -1,4 +1,9 @@
-const API_BASE = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+// Server-side: use the internal Docker network URL to reach the API directly.
+// Client-side: use a relative path that Next.js rewrites to the API server.
+const API_BASE =
+  typeof window === 'undefined'
+    ? (process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api')
+    : (process.env.NEXT_PUBLIC_API_URL || '/api');
 
 export async function apiFetch<T>(
   path: string,
