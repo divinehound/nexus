@@ -9,15 +9,21 @@ import '@solana/wallet-adapter-react-ui/styles.css';
 const solanaEndpoint = process.env.NEXT_PUBLIC_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
 
 export function Providers({ children }: { children: ReactNode }) {
-  // During SSR/prerender we must avoid importing wallet providers that touch
-  // browser-only globals (indexedDB/window). Keep AuthProvider available so
-  // hooks like useAuth still work in server-rendered routes.
+  // Keep QueryClientProvider present in all render paths so hooks using
+  // react-query (e.g. auth/session hooks) never throw in SSR or hydration.
+  const { QueryClient, QueryClientProvider } = require('@tanstack/react-query');
+  const queryClient = new QueryClient();
+
+  // During SSR/prerender avoid wallet providers that touch browser globals.
   if (typeof window === 'undefined') {
-    return <AuthProvider>{children}</AuthProvider>;
+    return (
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>{children}</AuthProvider>
+      </QueryClientProvider>
+    );
   }
 
   // Browser-only requires to prevent SSR evaluation side effects.
-  const { QueryClient, QueryClientProvider } = require('@tanstack/react-query');
   const { WagmiProvider } = require('wagmi');
   const { RainbowKitProvider, darkTheme } = require('@rainbow-me/rainbowkit');
   const {
@@ -30,7 +36,6 @@ export function Providers({ children }: { children: ReactNode }) {
   } = require('@solana/wallet-adapter-wallets');
   const { AbstractWalletProvider } = require('@abstract-foundation/agw-react');
 
-  const queryClient = new QueryClient();
   const solanaWallets = [new PhantomWalletAdapter(), new SolflareWalletAdapter()];
 
   return (
