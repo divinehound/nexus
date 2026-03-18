@@ -25,7 +25,7 @@ export function Providers({ children }: { children: ReactNode }) {
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider theme={darkTheme({ accentColor: '#a855f7' })}>
-          <AbstractWalletProvider chain="abstract">
+          <AbstractWalletProvider chain={"abstract" as any}>
             <ConnectionProvider endpoint={solanaEndpoint}>
               <SolanaWalletProvider wallets={solanaWallets} autoConnect>
                 <AuthProvider>{children}</AuthProvider>
