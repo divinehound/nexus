@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ilike, or, eq, and, inArray } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, projects, collections } from '@nexus/database';
@@ -7,12 +7,15 @@ import { BlockchainLookupService } from './blockchain-lookup.service';
 
 @Injectable()
 export class SearchService {
+  private readonly logger = new Logger(SearchService.name);
+
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly blockchainLookup: BlockchainLookupService,
   ) {}
 
   async search(query: string, chain?: string) {
+    query = query.trim();
     const searchPattern = `%${query}%`;
 
     // Build collection query conditions
@@ -66,8 +69,13 @@ export class SearchService {
     // If the query looks like a contract address and we have no local collection
     // matches, try blockchain lookup
     let blockchainResults: BlockchainContractInfo[] = [];
-    if (isContractAddress(query) && collectionResults.length === 0) {
+    const looksLikeAddress = isContractAddress(query);
+    if (looksLikeAddress && collectionResults.length === 0) {
+      this.logger.debug(`No local match for address ${query}, trying blockchain lookup`);
       blockchainResults = await this.blockchainLookup.lookup(query, chain);
+      this.logger.debug(`Blockchain lookup returned ${blockchainResults.length} result(s)`);
+    } else if (!looksLikeAddress && query.length >= 40) {
+      this.logger.debug(`Query "${query}" (len=${query.length}) did not pass isContractAddress check`);
     }
 
     return {

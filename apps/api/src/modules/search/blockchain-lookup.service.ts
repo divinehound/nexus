@@ -98,7 +98,10 @@ export class BlockchainLookupService {
       const body = (await res.json()) as AlchemyContractMetadata;
 
       // If the contract has no name, it's likely not an NFT contract
-      if (!body.name && !body.symbol) return null;
+      if (!body.name && !body.symbol) {
+        this.logger.debug(`Alchemy returned no name/symbol for ${contractAddress} on ${meta.name} (tokenType: ${body.tokenType})`);
+        return null;
+      }
 
       const tokenType = body.tokenType?.toLowerCase().includes('1155')
         ? 'erc1155'

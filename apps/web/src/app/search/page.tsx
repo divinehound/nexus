@@ -42,8 +42,8 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       const params = new URLSearchParams({ q });
       if (chain) params.set('chain', chain);
       results = await apiFetch<SearchResults>(`/search?${params.toString()}`);
-    } catch {
-      // Search failed silently
+    } catch (err) {
+      console.error('Search API request failed:', err);
     }
   }
 
