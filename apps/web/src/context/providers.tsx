@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/context/auth-context';
 import '@rainbow-me/rainbowkit/styles.css';
@@ -10,9 +10,13 @@ const solanaEndpoint = process.env.NEXT_PUBLIC_SOLANA_RPC || 'https://api.mainne
 const queryClient = new QueryClient();
 
 export function Providers({ children }: { children: ReactNode }) {
-  // During SSR/prerender avoid wallet providers that touch browser globals,
-  // but always provide react-query context so hooks never throw.
-  if (typeof window === 'undefined') {
+  // Render the same tree on both server and first client paint to avoid
+  // hydration mismatch (React error #418). Wallet providers that depend on
+  // browser globals (indexedDB, window) are mounted only after hydration.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  if (!mounted) {
     return (
       <QueryClientProvider client={queryClient}>
         <AuthProvider>{children}</AuthProvider>

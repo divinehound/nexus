@@ -22,7 +22,7 @@ export function ConnectButton() {
   }
 
   if (user) {
-    const primaryWallet = user.wallets[0];
+    const primaryWallet = user.wallets?.[0];
     return (
       <div className="flex items-center gap-3">
         <span className="text-sm text-gray-300">
@@ -38,76 +38,69 @@ export function ConnectButton() {
     );
   }
 
-  return <WalletModal />;
+  return <WalletFlow />;
 }
 
-function WalletModal() {
-  const [isOpen, setIsOpen] = useState(false);
+function WalletFlow() {
   const [tab, setTab] = useState<WalletTab>('evm');
+  const [showSignIn, setShowSignIn] = useState(false);
+  const { isConnected } = useAccount();
+  const { connected: solanaConnected } = useWallet();
 
+  // If wallet just connected, show sign-in dialog
+  const needsSignIn = (tab === 'evm' && isConnected) || (tab === 'solana' && solanaConnected);
+
+  // When not connected, let RainbowKit / Solana adapter handle their own modals
+  if (!needsSignIn && !showSignIn) {
+    return (
+      <div className="flex items-center gap-2">
+        <RainbowConnectButton.Custom>
+          {({ openConnectModal }) => (
+            <button
+              onClick={() => { setTab('evm'); openConnectModal(); }}
+              className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-500"
+            >
+              Connect Wallet
+            </button>
+          )}
+        </RainbowConnectButton.Custom>
+        <button
+          onClick={() => { setTab('solana'); setShowSignIn(true); }}
+          className="rounded-lg border border-gray-700 px-4 py-2 text-sm font-medium text-gray-300 transition-colors hover:border-gray-500 hover:text-white"
+        >
+          Solana
+        </button>
+      </div>
+    );
+  }
+
+  // Sign-in dialog — wallet is connected or Solana flow requested
   return (
     <>
-      <button
-        onClick={() => setIsOpen(true)}
-        className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-500"
-      >
-        Connect Wallet
-      </button>
-      {isOpen && (
-        <>
-          <div className="fixed inset-0 z-50 bg-black/60" onClick={() => setIsOpen(false)} />
-          <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
-            <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-lg font-semibold">Connect Wallet</h2>
-                <button onClick={() => setIsOpen(false)} className="text-gray-400 hover:text-white">
-                  &times;
-                </button>
-              </div>
-              <div className="mb-4 flex gap-2">
-                <TabButton active={tab === 'evm'} onClick={() => setTab('evm')}>
-                  EVM
-                </TabButton>
-                <TabButton active={tab === 'solana'} onClick={() => setTab('solana')}>
-                  Solana
-                </TabButton>
-              </div>
-              {tab === 'evm' ? (
-                <EvmConnect onSuccess={() => setIsOpen(false)} />
-              ) : (
-                <SolanaConnect onSuccess={() => setIsOpen(false)} />
-              )}
-            </div>
+      <div className="fixed inset-0 z-50 bg-black/60" onClick={() => setShowSignIn(false)} />
+      <div className="fixed inset-0 z-[51] flex items-center justify-center pointer-events-none">
+        <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Sign In</h2>
+            <button onClick={() => setShowSignIn(false)} className="text-gray-400 hover:text-white text-xl">
+              &times;
+            </button>
           </div>
-        </>
-      )}
+          {tab === 'solana' && !solanaConnected ? (
+            <SolanaConnect onSuccess={() => setShowSignIn(false)} />
+          ) : tab === 'solana' && solanaConnected ? (
+            <SolanaSign onSuccess={() => setShowSignIn(false)} />
+          ) : (
+            <EvmSign onSuccess={() => setShowSignIn(false)} />
+          )}
+        </div>
+      </div>
     </>
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex-1 rounded-lg py-2 text-sm font-medium transition-colors ${
-        active ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function EvmConnect({ onSuccess }: { onSuccess: () => void }) {
-  const { address, isConnected } = useAccount();
+function EvmSign({ onSuccess }: { onSuccess: () => void }) {
+  const { address } = useAccount();
   const chainId = useChainId();
   const { signMessageAsync } = useSignMessage();
   const { loginEvm, getNonce } = useAuth();
@@ -140,15 +133,6 @@ function EvmConnect({ onSuccess }: { onSuccess: () => void }) {
     }
   };
 
-  if (!isConnected) {
-    return (
-      <div className="flex flex-col items-center gap-3 py-4">
-        <p className="mb-2 text-sm text-gray-400">Connect your EVM wallet</p>
-        <RainbowConnectButton />
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col items-center gap-3 py-4">
       <p className="text-sm text-gray-400">
@@ -167,7 +151,16 @@ function EvmConnect({ onSuccess }: { onSuccess: () => void }) {
 }
 
 function SolanaConnect({ onSuccess }: { onSuccess: () => void }) {
-  const { publicKey, signMessage, connected } = useWallet();
+  return (
+    <div className="flex flex-col items-center gap-3 py-4">
+      <p className="mb-2 text-sm text-gray-400">Connect your Solana wallet first</p>
+      <WalletMultiButton />
+    </div>
+  );
+}
+
+function SolanaSign({ onSuccess }: { onSuccess: () => void }) {
+  const { publicKey, signMessage } = useWallet();
   const { loginSolana, getNonce } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [signing, setSigning] = useState(false);
@@ -192,15 +185,6 @@ function SolanaConnect({ onSuccess }: { onSuccess: () => void }) {
       setSigning(false);
     }
   };
-
-  if (!connected) {
-    return (
-      <div className="flex flex-col items-center gap-3 py-4">
-        <p className="mb-2 text-sm text-gray-400">Connect your Solana wallet first</p>
-        <WalletMultiButton />
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col items-center gap-3 py-4">
