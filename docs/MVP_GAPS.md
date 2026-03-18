@@ -6,20 +6,20 @@ Remaining work to reach a deployable MVP. Items are ordered by priority within e
 
 ## High Priority
 
-- [ ] **OG image generation** — The `/api/og` route exists but doesn't render dynamic project cards. Needed for link previews when sharing projects on Twitter/Discord.
-- [ ] **Drizzle migrations** — Schema is defined but no migration files have been generated yet (`drizzle-kit generate` + `drizzle-kit migrate`). Required before first deploy.
-- [ ] **Seed script** — No way to bootstrap an initial admin user or sample data for development.
+- [x] **OG image generation** — Dynamic project cards with image, stats (health score, floor price, holders, listed %). Supports both generic and project-specific cards via query params.
+- [x] **Drizzle migrations** — Initial migration SQL generated from all schema definitions. Migration runner utility added.
+- [x] **Seed script** — `pnpm db:seed` bootstraps an admin user, sample project, collection, event, wiki entry, and activity.
 
 ## Medium Priority
 
-- [ ] **Live Twitter Spaces detection** — The event system supports `auto_twitter` source but there is no cron/worker that polls the Twitter API for live spaces.
-- [ ] **Health score cron job** — `HealthScoreModule` exists but there is no scheduled recomputation. Needs a `@Cron()` decorator or external trigger.
-- [ ] **On-chain holder verification for flex posts** — The activity controller has a TODO to verify the wallet actually holds the NFT before allowing a flex post.
-- [ ] **Nav link to admin** — The main site nav doesn't expose an admin link for admin users.
+- [x] **Live Twitter Spaces detection** — `TwitterSpacesCron` polls every 5 minutes for live/scheduled spaces on projects with a `twitterId`, auto-creates events with `auto_twitter` source.
+- [x] **Health score cron job** — `HealthScoreCron` recomputes all project health scores every hour via `@Cron(EVERY_HOUR)`.
+- [x] **On-chain holder verification for flex posts** — `HolderVerificationService` checks ERC-721 ownership (Alchemy) and SPL ownership (Helius DAS) before allowing flex posts. Throws `ForbiddenException` if wallet doesn't hold the NFT.
+- [x] **Nav link to admin** — Admin link shown in navbar when `user.role === 'admin'`.
 
 ## Lower Priority
 
-- [ ] **Rate limiting** — No throttle guard on public API endpoints.
-- [ ] **Environment config validation** — No `.env.example` or Zod/Joi validation of required env vars.
-- [ ] **Tests** — No unit or e2e tests for any module.
-- [ ] **Docker / deploy config** — No Dockerfile, docker-compose, or CI/CD pipeline.
+- [x] **Rate limiting** — Global `ThrottlerGuard` via `@nestjs/throttler` (60 req/min per IP).
+- [x] **Environment config validation** — `class-validator` based validation runs at startup. Required: `DATABASE_URL`, `JWT_SECRET`. Optional: API keys.
+- [x] **Tests** — Jest configured for API. Unit tests for `HealthScoreService` and `ActivityService` (holder verification flow).
+- [x] **Docker / deploy config** — Multi-stage `Dockerfile` (api + web targets), updated `docker-compose.yml`, and GitHub Actions CI pipeline (lint, test, build, docker).

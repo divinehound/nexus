@@ -18,6 +18,9 @@ export function Navbar() {
             <NavLink href="/discover">Discover</NavLink>
             <NavLink href="/search">Search</NavLink>
             {user && <NavLink href="/me">My Communities</NavLink>}
+            {user?.role === 'admin' && (
+              <NavLink href="/admin">Admin</NavLink>
+            )}
           </div>
         </div>
         <ConnectButton />

@@ -8,7 +8,8 @@
     "test": "turbo test",
     "db:generate": "pnpm --filter @nexus/database drizzle-kit generate",
     "db:migrate": "pnpm --filter @nexus/database drizzle-kit migrate",
-    "db:studio": "pnpm --filter @nexus/database drizzle-kit studio"
+    "db:studio": "pnpm --filter @nexus/database drizzle-kit studio",
+    "db:seed": "pnpm --filter @nexus/database seed"
   },
   "devDependencies": {
     "turbo": "^2"

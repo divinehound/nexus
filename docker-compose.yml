@@ -18,12 +18,14 @@ services:
   api:
     build:
       context: .
-      dockerfile: apps/api/Dockerfile
+      dockerfile: Dockerfile
+      target: api
     ports:
       - "${API_PORT:-4000}:4000"
     environment:
       DATABASE_URL: postgresql://postgres:password@postgres:5432/nexus
-      API_PORT: 4000
+      JWT_SECRET: ${JWT_SECRET:-nexus-dev-secret-change-in-production}
+      API_PORT: "4000"
       NODE_ENV: production
       ALCHEMY_API_KEY: ${ALCHEMY_API_KEY:-}
       HELIUS_API_KEY: ${HELIUS_API_KEY:-}
@@ -37,7 +39,8 @@ services:
   web:
     build:
       context: .
-      dockerfile: apps/web/Dockerfile
+      dockerfile: Dockerfile
+      target: web
     ports:
       - "${WEB_PORT:-3000}:3000"
     environment:
