@@ -9,6 +9,8 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@abstract-foundation/agw-client": "^2",
+    "@abstract-foundation/agw-react": "^2",
     "@nexus/types": "workspace:*",
     "@rainbow-me/rainbowkit": "^2.2.10",
     "@solana/wallet-adapter-base": "^0.9.27",

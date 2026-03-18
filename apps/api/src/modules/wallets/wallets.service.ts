@@ -21,7 +21,7 @@ export class WalletsService {
 
     const [wallet] = await this.db
       .insert(wallets)
-      .values({ address, chain: chain as 'ethereum' | 'solana' })
+      .values({ address, chain: chain as any })
       .returning();
     return wallet;
   }

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
-import { formatPrice, truncateAddress } from '@/lib/utils';
+import { formatPrice, truncateAddress, chainCurrency } from '@/lib/utils';
 import { ProjectTabs } from '@/components/project/project-tabs';
 
 interface ProjectPageProps {
@@ -143,7 +143,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
                   {c.floorPrice !== null && (
                     <div>
                       <span className="text-gray-500">Floor: </span>
-                      <span>{formatPrice(c.floorPrice, c.chain === 'solana' ? 'SOL' : 'ETH')}</span>
+                      <span>{formatPrice(c.floorPrice, chainCurrency(c.chain))}</span>
                     </div>
                   )}
                   {c.holderCount !== null && (

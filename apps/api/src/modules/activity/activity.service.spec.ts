@@ -24,8 +24,7 @@ describe('ActivityService', () => {
 
   beforeEach(() => {
     holderVerification = {
-      verifyEthereumHolder: jest.fn(),
-      verifySolanaHolder: jest.fn(),
+      verifyHolder: jest.fn(),
     } as any;
 
     service = new ActivityService(mockDb as any, holderVerification);
@@ -37,13 +36,13 @@ describe('ActivityService', () => {
   });
 
   describe('createFlex', () => {
-    it('should throw ForbiddenException when wallet does not hold NFT', async () => {
+    it('should throw ForbiddenException when wallet does not hold NFT (ethereum)', async () => {
       mockDb.query.collections.findFirst.mockResolvedValue({
         id: 'col-1',
         chain: 'ethereum',
         contractAddress: '0xabc',
       });
-      holderVerification.verifyEthereumHolder.mockResolvedValue(false);
+      holderVerification.verifyHolder.mockResolvedValue(false);
 
       await expect(
         service.createFlex('proj-1', {
@@ -52,6 +51,37 @@ describe('ActivityService', () => {
           tokenId: '42',
         }),
       ).rejects.toThrow(ForbiddenException);
+
+      expect(holderVerification.verifyHolder).toHaveBeenCalledWith(
+        'ethereum',
+        '0x123',
+        '0xabc',
+        '42',
+      );
+    });
+
+    it('should throw ForbiddenException for base chain holder check', async () => {
+      mockDb.query.collections.findFirst.mockResolvedValue({
+        id: 'col-2',
+        chain: 'base',
+        contractAddress: '0xdef',
+      });
+      holderVerification.verifyHolder.mockResolvedValue(false);
+
+      await expect(
+        service.createFlex('proj-1', {
+          walletAddress: '0x456',
+          collectionId: 'col-2',
+          tokenId: '99',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(holderVerification.verifyHolder).toHaveBeenCalledWith(
+        'base',
+        '0x456',
+        '0xdef',
+        '99',
+      );
     });
 
     it('should create flex when wallet holds NFT', async () => {
@@ -60,7 +90,7 @@ describe('ActivityService', () => {
         chain: 'ethereum',
         contractAddress: '0xabc',
       });
-      holderVerification.verifyEthereumHolder.mockResolvedValue(true);
+      holderVerification.verifyHolder.mockResolvedValue(true);
 
       const mockFlex = { id: 'flex-1', activityType: 'flex' };
       mockDb.insert.mockReturnValue({

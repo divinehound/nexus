@@ -25,13 +25,23 @@ export class WebhooksService {
     const { event } = payload;
     if (event?.eventType !== 'NFT_ACTIVITY') return;
 
+    // Alchemy webhooks can come from any EVM chain — resolve chain from the
+    // network field, or fall back to looking it up from the collection record.
+    const networkToChain: Record<string, string> = {
+      'ETH_MAINNET': 'ethereum',
+      'BASE_MAINNET': 'base',
+      'MATIC_MAINNET': 'polygon',
+      'ABSTRACT_MAINNET': 'abstract',
+    };
+    const webhookChain = event.network ? networkToChain[event.network] : undefined;
+
     for (const activity of event.data?.activities ?? []) {
       await this.processNftTransfer({
         contractAddress: activity.contractAddress,
         fromAddress: activity.fromAddress,
         toAddress: activity.toAddress,
         tokenId: activity.tokenId,
-        chain: 'ethereum',
+        chain: webhookChain,
         price: activity.value ? parseFloat(activity.value) : null,
       });
     }
@@ -61,6 +71,9 @@ export class WebhooksService {
       this.logger.debug(`Unknown collection: ${transfer.contractAddress}`);
       return;
     }
+
+    // Use chain from webhook payload, or fall back to the collection's chain
+    const chain = transfer.chain ?? collection.chain;
 
     // Mark previous holder as no longer current
     if (transfer.fromAddress) {
@@ -93,7 +106,7 @@ export class WebhooksService {
         await this.db.insert(holders).values({
           walletAddress: transfer.toAddress,
           collectionId: collection.id,
-          chain: transfer.chain as 'ethereum' | 'solana',
+          chain: chain as any,
           quantity: 1,
         });
       }
@@ -118,13 +131,14 @@ interface NftTransfer {
   fromAddress: string | null;
   toAddress: string | null;
   tokenId: string;
-  chain: string;
+  chain?: string;
   price: number | null;
 }
 
 interface AlchemyWebhookPayload {
   event?: {
     eventType: string;
+    network?: string;
     data?: {
       activities?: {
         contractAddress: string;

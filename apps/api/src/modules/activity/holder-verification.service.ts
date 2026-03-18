@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { CHAIN_META, type ChainMeta } from '@nexus/types';
 
 @Injectable()
 export class HolderVerificationService {
@@ -8,13 +9,35 @@ export class HolderVerificationService {
   constructor(private readonly config: ConfigService) {}
 
   /**
-   * Verify that a wallet holds a specific token in a collection.
-   * Checks ERC-721 ownership via Alchemy getNFTsForOwner.
+   * Verify that a wallet holds a token from a collection on any supported chain.
    */
-  async verifyEthereumHolder(
+  async verifyHolder(
+    chain: string,
     walletAddress: string,
     contractAddress: string,
     tokenId: string,
+  ): Promise<boolean> {
+    const meta = CHAIN_META[chain as keyof typeof CHAIN_META] as ChainMeta | undefined;
+    if (!meta) {
+      this.logger.warn(`Unknown chain "${chain}" — skipping verification`);
+      return true;
+    }
+
+    if (chain === 'solana') {
+      return this.verifySolanaHolder(walletAddress, tokenId);
+    }
+
+    return this.verifyEvmHolder(walletAddress, contractAddress, meta);
+  }
+
+  /**
+   * Verify ERC-721 / ERC-1155 ownership via Alchemy isHolderOfContract.
+   * Supports any EVM chain that Alchemy indexes.
+   */
+  private async verifyEvmHolder(
+    walletAddress: string,
+    contractAddress: string,
+    meta: ChainMeta,
   ): Promise<boolean> {
     const apiKey = this.config.get<string>('alchemy.apiKey');
     if (!apiKey) {
@@ -22,18 +45,25 @@ export class HolderVerificationService {
       return true; // fail-open in dev
     }
 
-    const url = `https://eth-mainnet.g.alchemy.com/nft/v3/${apiKey}/isHolderOfContract?wallet=${walletAddress}&contractAddress=${contractAddress}`;
+    if (!meta.alchemySubdomain) {
+      this.logger.warn(
+        `Alchemy does not support ${meta.name} — skipping holder verification`,
+      );
+      return true;
+    }
+
+    const url = `https://${meta.alchemySubdomain}.g.alchemy.com/nft/v3/${apiKey}/isHolderOfContract?wallet=${walletAddress}&contractAddress=${contractAddress}`;
 
     try {
       const res = await fetch(url);
       if (!res.ok) {
-        this.logger.error(`Alchemy API error: ${res.status}`);
+        this.logger.error(`Alchemy API error (${meta.name}): ${res.status}`);
         return false;
       }
       const body = (await res.json()) as { isHolderOfContract: boolean };
       return body.isHolderOfContract;
     } catch (err) {
-      this.logger.error(`Holder verification failed: ${err}`);
+      this.logger.error(`Holder verification failed (${meta.name}): ${err}`);
       return false;
     }
   }
@@ -41,7 +71,7 @@ export class HolderVerificationService {
   /**
    * Verify Solana NFT ownership via Helius DAS API.
    */
-  async verifySolanaHolder(
+  private async verifySolanaHolder(
     walletAddress: string,
     mintAddress: string,
   ): Promise<boolean> {

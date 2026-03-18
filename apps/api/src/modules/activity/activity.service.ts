@@ -32,17 +32,12 @@ export class ActivityService {
     });
 
     if (collection) {
-      const isHolder =
-        collection.chain === 'solana'
-          ? await this.holderVerification.verifySolanaHolder(
-              data.walletAddress,
-              data.tokenId,
-            )
-          : await this.holderVerification.verifyEthereumHolder(
-              data.walletAddress,
-              collection.contractAddress,
-              data.tokenId,
-            );
+      const isHolder = await this.holderVerification.verifyHolder(
+        collection.chain,
+        data.walletAddress,
+        collection.contractAddress,
+        data.tokenId,
+      );
 
       if (!isHolder) {
         throw new ForbiddenException(

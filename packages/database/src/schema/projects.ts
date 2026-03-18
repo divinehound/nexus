@@ -16,7 +16,14 @@ export const collectionTypeEnum = pgEnum('collection_type', [
   'spl',
 ]);
 
-export const chainEnum = pgEnum('chain', ['ethereum', 'solana']);
+export const chainEnum = pgEnum('chain', [
+  'ethereum',
+  'base',
+  'abstract',
+  'apechain',
+  'polygon',
+  'solana',
+]);
 
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),

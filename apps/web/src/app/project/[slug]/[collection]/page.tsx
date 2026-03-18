@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
-import { formatPrice, truncateAddress } from '@/lib/utils';
+import { formatPrice, truncateAddress, chainCurrency } from '@/lib/utils';
 
 interface CollectionPageProps {
   params: Promise<{ slug: string; collection: string }>;
@@ -48,7 +48,7 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
     );
   }
 
-  const currency = collection.chain === 'solana' ? 'SOL' : 'ETH';
+  const currency = chainCurrency(collection.chain);
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">

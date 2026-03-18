@@ -81,6 +81,8 @@ nexus/
 | ORM | Drizzle ORM | 0.39 |
 | Auth | SIWE + JWT (Passport) | — |
 | EVM wallets | RainbowKit + wagmi + viem | 2.x |
+| Base Smart Wallet | Coinbase Wallet SDK (via RainbowKit) | — |
+| Abstract Global Wallet | @abstract-foundation/agw-react | 2.x |
 | Solana wallets | @solana/wallet-adapter | 0.15 |
 | Cron | @nestjs/schedule | 5 |
 | Rate limiting | @nestjs/throttler | 6 |
@@ -95,7 +97,7 @@ nexus/
 
 | Enum | Values | Used by |
 |------|--------|---------|
-| `chain` | `ethereum`, `solana` | collections, wallets, holders |
+| `chain` | `ethereum`, `base`, `abstract`, `apechain`, `polygon`, `solana` | collections, wallets, holders |
 | `collection_type` | `erc721`, `erc1155`, `spl` | collections |
 | `user_role` | `user`, `admin` | users |
 | `event_type` | `spaces`, `ama`, `mint`, `collab`, `irl`, `other` | events |
@@ -437,11 +439,14 @@ A wallet with no holdings returns `echoScore: null`. A wallet with holdings but 
 
 Before a user can post a "flex" (showing off an NFT purchase):
 
-1. Look up the collection by `collectionId`
-2. **Ethereum**: Call Alchemy `isHolderOfContract` API — checks if the wallet holds any token from that contract
-3. **Solana**: Call Helius DAS `getAssetsByOwner` — checks if the specific mint address is in the wallet's assets
-4. If verification fails → `403 Forbidden: "Wallet does not hold this NFT"`
-5. If API keys are not configured → **fail-open** (allow in dev, log warning)
+1. Look up the collection by `collectionId` to determine the chain
+2. **EVM chains (Ethereum, Base, Polygon, Abstract)**: Call Alchemy `isHolderOfContract` API using the chain-specific subdomain (e.g. `eth-mainnet`, `base-mainnet`, `polygon-mainnet`, `abstract-mainnet`)
+3. **ApeChain**: Alchemy does not support ApeChain — verification is skipped (fail-open)
+4. **Solana**: Call Helius DAS `getAssetsByOwner` — checks if the specific mint address is in the wallet's assets
+5. If verification fails → `403 Forbidden: "Wallet does not hold this NFT"`
+6. If API keys are not configured → **fail-open** (allow in dev, log warning)
+
+Chain → Alchemy subdomain mapping is defined in `@nexus/types` (`CHAIN_META`).
 
 ### NFT Transfer Processing (Webhooks)
 
@@ -601,6 +606,20 @@ apiFetch<T>(path, { method?, body?, token? }) → Promise<T>
 - Base URL: `NEXT_PUBLIC_API_URL` (default `http://localhost:4000/api`)
 - Automatically adds `Authorization: Bearer` header when token provided
 - Throws on non-OK responses with parsed error message
+
+### Supported Chains
+
+| Chain | Type | Chain ID | Currency | Smart Wallet |
+|-------|------|----------|----------|-------------|
+| Ethereum | EVM | 1 | ETH | — |
+| Base | EVM | 8453 | ETH | Coinbase Smart Wallet |
+| Abstract | EVM | 2741 | ETH | Abstract Global Wallet |
+| ApeChain | EVM | 33139 | APE | — |
+| Polygon | EVM | 137 | POL | — |
+| Solana | SVM | — | SOL | — |
+
+- **Base Smart Wallet**: Enabled automatically via Coinbase Wallet SDK (bundled with RainbowKit). Supports gasless transactions on Base.
+- **Abstract Global Wallet**: Enabled via `@abstract-foundation/agw-react` `AbstractWalletProvider`. Provides embedded wallet experience on Abstract chain.
 
 ### Styling
 

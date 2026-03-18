@@ -74,6 +74,23 @@ async function seed() {
     .returning();
   console.log(`  Created collection: ${collection.name}`);
 
+  // 3b. Base collection (multi-chain demo)
+  const [baseCollection] = await db
+    .insert(collections)
+    .values({
+      projectId: project.id,
+      contractAddress: '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd',
+      chain: 'base',
+      name: 'Example Base Edition',
+      supply: 10000,
+      floorPrice: 0.01,
+      holderCount: 4500,
+      listedCount: 180,
+      collectionType: 'erc721',
+    })
+    .returning();
+  console.log(`  Created collection: ${baseCollection.name} (Base)`);
+
   // 4. Project owner
   await db.insert(projectOwners).values({
     projectId: project.id,

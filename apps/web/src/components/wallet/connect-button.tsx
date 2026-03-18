@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { ConnectButton as RainbowConnectButton } from '@rainbow-me/rainbowkit';
-import { useAccount, useSignMessage } from 'wagmi';
+import { useAccount, useSignMessage, useChainId } from 'wagmi';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { SiweMessage } from 'siwe';
@@ -64,7 +64,7 @@ function WalletModal() {
             </div>
             <div className="mb-4 flex gap-2">
               <TabButton active={tab === 'evm'} onClick={() => setTab('evm')}>
-                Ethereum
+                EVM
               </TabButton>
               <TabButton active={tab === 'solana'} onClick={() => setTab('solana')}>
                 Solana
@@ -105,6 +105,7 @@ function TabButton({
 
 function EvmConnect({ onSuccess }: { onSuccess: () => void }) {
   const { address, isConnected } = useAccount();
+  const chainId = useChainId();
   const { signMessageAsync } = useSignMessage();
   const { loginEvm, getNonce } = useAuth();
   const [error, setError] = useState<string | null>(null);
@@ -122,7 +123,7 @@ function EvmConnect({ onSuccess }: { onSuccess: () => void }) {
         statement: 'Sign in to NEXUS with your Ethereum wallet.',
         uri: window.location.origin,
         version: '1',
-        chainId: 1,
+        chainId,
         nonce,
       });
       const messageString = message.prepareMessage();
@@ -139,7 +140,7 @@ function EvmConnect({ onSuccess }: { onSuccess: () => void }) {
   if (!isConnected) {
     return (
       <div className="flex flex-col items-center gap-3 py-4">
-        <p className="mb-2 text-sm text-gray-400">Connect your Ethereum wallet first</p>
+        <p className="mb-2 text-sm text-gray-400">Connect your EVM wallet</p>
         <RainbowConnectButton />
       </div>
     );
@@ -155,7 +156,7 @@ function EvmConnect({ onSuccess }: { onSuccess: () => void }) {
         disabled={signing}
         className="w-full rounded-lg bg-purple-600 py-3 text-sm font-medium text-white transition-colors hover:bg-purple-500 disabled:opacity-50"
       >
-        {signing ? 'Signing...' : 'Sign In with Ethereum'}
+        {signing ? 'Signing...' : 'Sign In'}
       </button>
       {error && <p className="text-sm text-red-400">{error}</p>}
     </div>
