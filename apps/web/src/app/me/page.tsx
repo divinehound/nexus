@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
 import { apiFetch } from '@/lib/api';
-import { truncateAddress, formatPrice } from '@/lib/utils';
+import { truncateAddress, formatPrice, chainCurrency } from '@/lib/utils';
 
 interface Holding {
   project: { id: string; name: string; slug: string; imageUrl: string | null };
@@ -108,7 +108,7 @@ function MyCommunitiesContent() {
                       <div className="flex items-center gap-2">
                         <span className="text-gray-500">x{c.quantity}</span>
                         {c.collection.floorPrice !== null && (
-                          <span>{formatPrice(c.collection.floorPrice, c.collection.chain === 'solana' ? 'SOL' : 'ETH')}</span>
+                          <span>{formatPrice(c.collection.floorPrice, chainCurrency(c.collection.chain))}</span>
                         )}
                       </div>
                     </div>

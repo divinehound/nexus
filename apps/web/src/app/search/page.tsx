@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { SearchBar } from '@/components/search/search-bar';
 import { apiFetch } from '@/lib/api';
-import { truncateAddress, formatPrice } from '@/lib/utils';
+import { truncateAddress, formatPrice, chainCurrency } from '@/lib/utils';
 
 interface SearchPageProps {
   searchParams: Promise<{ q?: string; chain?: string }>;
@@ -111,7 +111,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                 </div>
                 <div className="text-right text-sm">
                   {c.floorPrice !== null && (
-                    <p>{formatPrice(c.floorPrice, c.chain === 'solana' ? 'SOL' : 'ETH')}</p>
+                    <p>{formatPrice(c.floorPrice, chainCurrency(c.chain))}</p>
                   )}
                   {c.holderCount !== null && (
                     <p className="text-gray-500">{c.holderCount.toLocaleString()} holders</p>

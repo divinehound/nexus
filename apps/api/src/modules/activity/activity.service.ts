@@ -1,11 +1,15 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, ForbiddenException } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
-import { type Database, activityFeed, flexReactions } from '@nexus/database';
+import { type Database, activityFeed, flexReactions, collections } from '@nexus/database';
+import { HolderVerificationService } from './holder-verification.service';
 
 @Injectable()
 export class ActivityService {
-  constructor(@Inject(DATABASE_TOKEN) private readonly db: Database) {}
+  constructor(
+    @Inject(DATABASE_TOKEN) private readonly db: Database,
+    private readonly holderVerification: HolderVerificationService,
+  ) {}
 
   async getByProjectId(projectId: string, page = 1, limit = 20) {
     const offset = (page - 1) * limit;
@@ -22,7 +26,26 @@ export class ActivityService {
     projectId: string,
     data: { walletAddress: string; collectionId: string; tokenId: string; message?: string; imageUrl?: string },
   ) {
-    // TODO: Verify wallet actually holds the NFT on-chain
+    // Verify wallet actually holds the NFT on-chain
+    const collection = await this.db.query.collections.findFirst({
+      where: eq(collections.id, data.collectionId),
+    });
+
+    if (collection) {
+      const isHolder = await this.holderVerification.verifyHolder(
+        collection.chain,
+        data.walletAddress,
+        collection.contractAddress,
+        data.tokenId,
+      );
+
+      if (!isHolder) {
+        throw new ForbiddenException(
+          'Wallet does not hold this NFT — cannot post flex',
+        );
+      }
+    }
+
     const [flex] = await this.db
       .insert(activityFeed)
       .values({

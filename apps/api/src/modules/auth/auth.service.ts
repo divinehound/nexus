@@ -50,7 +50,10 @@ export class AuthService {
 
     this.nonceStore.delete(address);
 
-    const user = await this.findOrCreateUser(siweMessage.address, 'ethereum');
+    // Resolve chain from SIWE chainId — EVM wallets are interoperable
+    // across chains but the wallet record tracks the chain the user signed from
+    const chain = this.resolveEvmChain(siweMessage.chainId);
+    const user = await this.findOrCreateUser(siweMessage.address, chain);
     const tokens = this.issueTokens(user.id, siweMessage.address, user.role);
 
     return { user, ...tokens };
@@ -80,7 +83,18 @@ export class AuthService {
     return { user, ...tokens };
   }
 
-  private async findOrCreateUser(address: string, chain: 'ethereum' | 'solana') {
+  private resolveEvmChain(chainId?: number): string {
+    const idToChain: Record<number, string> = {
+      1: 'ethereum',
+      8453: 'base',
+      2741: 'abstract',
+      33139: 'apechain',
+      137: 'polygon',
+    };
+    return idToChain[chainId ?? 1] ?? 'ethereum';
+  }
+
+  private async findOrCreateUser(address: string, chain: string) {
     const existingWallet = await this.db.query.wallets.findFirst({
       where: eq(wallets.address, address),
     });
@@ -108,7 +122,7 @@ export class AuthService {
     } else {
       const [newWallet] = await this.db
         .insert(wallets)
-        .values({ address, chain, userId: newUser.id })
+        .values({ address, chain: chain as any, userId: newUser.id })
         .returning();
       await this.db
         .update(users)

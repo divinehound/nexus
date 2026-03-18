@@ -1,4 +1,5 @@
 export * from './common';
+export * from './chains';
 export * from './project';
 export * from './user';
 export * from './activity';

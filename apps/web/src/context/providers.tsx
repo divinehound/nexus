@@ -9,6 +9,7 @@ import {
   WalletProvider as SolanaWalletProvider,
 } from '@solana/wallet-adapter-react';
 import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
+import { AbstractWalletProvider } from '@abstract-foundation/agw-react';
 import { wagmiConfig } from '@/lib/wagmi';
 import { AuthProvider } from '@/context/auth-context';
 import '@rainbow-me/rainbowkit/styles.css';
@@ -24,11 +25,13 @@ export function Providers({ children }: { children: ReactNode }) {
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider theme={darkTheme({ accentColor: '#a855f7' })}>
-          <ConnectionProvider endpoint={solanaEndpoint}>
-            <SolanaWalletProvider wallets={solanaWallets} autoConnect>
-              <AuthProvider>{children}</AuthProvider>
-            </SolanaWalletProvider>
-          </ConnectionProvider>
+          <AbstractWalletProvider chain="abstract">
+            <ConnectionProvider endpoint={solanaEndpoint}>
+              <SolanaWalletProvider wallets={solanaWallets} autoConnect>
+                <AuthProvider>{children}</AuthProvider>
+              </SolanaWalletProvider>
+            </ConnectionProvider>
+          </AbstractWalletProvider>
         </RainbowKitProvider>
       </QueryClientProvider>
     </WagmiProvider>
