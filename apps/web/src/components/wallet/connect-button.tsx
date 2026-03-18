@@ -54,29 +54,32 @@ function WalletModal() {
         Connect Wallet
       </button>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Connect Wallet</h2>
-              <button onClick={() => setIsOpen(false)} className="text-gray-400 hover:text-white">
-                &times;
-              </button>
+        <>
+          <div className="fixed inset-0 z-50 bg-black/60" onClick={() => setIsOpen(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+            <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Connect Wallet</h2>
+                <button onClick={() => setIsOpen(false)} className="text-gray-400 hover:text-white">
+                  &times;
+                </button>
+              </div>
+              <div className="mb-4 flex gap-2">
+                <TabButton active={tab === 'evm'} onClick={() => setTab('evm')}>
+                  EVM
+                </TabButton>
+                <TabButton active={tab === 'solana'} onClick={() => setTab('solana')}>
+                  Solana
+                </TabButton>
+              </div>
+              {tab === 'evm' ? (
+                <EvmConnect onSuccess={() => setIsOpen(false)} />
+              ) : (
+                <SolanaConnect onSuccess={() => setIsOpen(false)} />
+              )}
             </div>
-            <div className="mb-4 flex gap-2">
-              <TabButton active={tab === 'evm'} onClick={() => setTab('evm')}>
-                EVM
-              </TabButton>
-              <TabButton active={tab === 'solana'} onClick={() => setTab('solana')}>
-                Solana
-              </TabButton>
-            </div>
-            {tab === 'evm' ? (
-              <EvmConnect onSuccess={() => setIsOpen(false)} />
-            ) : (
-              <SolanaConnect onSuccess={() => setIsOpen(false)} />
-            )}
           </div>
-        </div>
+        </>
       )}
     </>
   );
