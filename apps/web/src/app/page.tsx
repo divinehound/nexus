@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import Link from 'next/link';
 import { SearchBar } from '@/components/search/search-bar';
 import { apiFetch } from '@/lib/api';
@@ -31,7 +32,9 @@ export default async function HomePage() {
             The Dexscreener for NFT Projects &amp; Communities
           </p>
           <div className="mx-auto mt-8 max-w-2xl">
-            <SearchBar />
+            <Suspense>
+              <SearchBar />
+            </Suspense>
           </div>
         </div>
 
