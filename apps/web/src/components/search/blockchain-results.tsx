@@ -50,7 +50,7 @@ export function BlockchainResults({
 }
 
 function BlockchainResultCard({ info }: { info: BlockchainContractInfo }) {
-  const { token } = useAuth();
+  const { accessToken: token } = useAuth();
   const router = useRouter();
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
