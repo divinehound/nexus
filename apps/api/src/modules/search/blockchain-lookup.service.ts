@@ -99,7 +99,7 @@ export class BlockchainLookupService {
 
       // If the contract has no name, it's likely not an NFT contract
       if (!body.name && !body.symbol) {
-        this.logger.debug(`Alchemy returned no name/symbol for ${contractAddress} on ${meta.name} (tokenType: ${body.tokenType})`);
+        this.logger.log(`Alchemy returned no name/symbol for ${contractAddress} on ${meta.name} (tokenType: ${body.tokenType})`);
         return null;
       }
 
