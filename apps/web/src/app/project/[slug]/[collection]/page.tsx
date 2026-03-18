@@ -85,7 +85,7 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
         </p>
       )}
 
-      {collection.marketSnapshots.length > 0 && (
+      {collection.marketSnapshots?.length > 0 && (
         <section className="mt-8">
           <h2 className="mb-4 text-lg font-semibold text-gray-300">Market History</h2>
           <div className="overflow-x-auto">
