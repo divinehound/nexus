@@ -43,15 +43,26 @@ export function ConnectButton() {
 
 function WalletFlow() {
   const [tab, setTab] = useState<WalletTab>('evm');
-  const [showSignIn, setShowSignIn] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const { isConnected } = useAccount();
   const { connected: solanaConnected } = useWallet();
 
-  // If wallet just connected, show sign-in dialog
-  const needsSignIn = (tab === 'evm' && isConnected) || (tab === 'solana' && solanaConnected);
+  const walletConnected = (tab === 'evm' && isConnected) || (tab === 'solana' && solanaConnected);
 
-  // When not connected, let RainbowKit / Solana adapter handle their own modals
-  if (!needsSignIn && !showSignIn) {
+  // Wallet connected but modal not open — show inline "Sign In" button
+  if (walletConnected && !showModal) {
+    return (
+      <button
+        onClick={() => setShowModal(true)}
+        className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-500"
+      >
+        Sign In
+      </button>
+    );
+  }
+
+  // Not connected — show connect buttons
+  if (!showModal) {
     return (
       <div className="flex items-center gap-2">
         <RainbowConnectButton.Custom>
@@ -65,7 +76,7 @@ function WalletFlow() {
           )}
         </RainbowConnectButton.Custom>
         <button
-          onClick={() => { setTab('solana'); setShowSignIn(true); }}
+          onClick={() => { setTab('solana'); setShowModal(true); }}
           className="rounded-lg border border-gray-700 px-4 py-2 text-sm font-medium text-gray-300 transition-colors hover:border-gray-500 hover:text-white"
         >
           Solana
@@ -74,24 +85,24 @@ function WalletFlow() {
     );
   }
 
-  // Sign-in dialog — wallet is connected or Solana flow requested
+  // Sign-in modal
   return (
     <>
-      <div className="fixed inset-0 z-50 bg-black/60" onClick={() => setShowSignIn(false)} />
-      <div className="fixed inset-0 z-[51] flex items-center justify-center pointer-events-none">
-        <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6">
+      <div className="fixed inset-0 z-50 bg-black/60" onClick={() => setShowModal(false)} />
+      <div className="fixed inset-0 z-[51] flex items-center justify-center">
+        <div className="w-full max-w-md rounded-2xl border border-gray-700 bg-gray-900 p-6">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold">Sign In</h2>
-            <button onClick={() => setShowSignIn(false)} className="text-gray-400 hover:text-white text-xl">
+            <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-white text-xl">
               &times;
             </button>
           </div>
           {tab === 'solana' && !solanaConnected ? (
-            <SolanaConnect onSuccess={() => setShowSignIn(false)} />
+            <SolanaConnect onSuccess={() => setShowModal(false)} />
           ) : tab === 'solana' && solanaConnected ? (
-            <SolanaSign onSuccess={() => setShowSignIn(false)} />
+            <SolanaSign onSuccess={() => setShowModal(false)} />
           ) : (
-            <EvmSign onSuccess={() => setShowSignIn(false)} />
+            <EvmSign onSuccess={() => setShowModal(false)} />
           )}
         </div>
       </div>
