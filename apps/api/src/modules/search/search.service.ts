@@ -71,11 +71,11 @@ export class SearchService {
     let blockchainResults: BlockchainContractInfo[] = [];
     const looksLikeAddress = isContractAddress(query);
     if (looksLikeAddress && collectionResults.length === 0) {
-      this.logger.debug(`No local match for address ${query}, trying blockchain lookup`);
+      this.logger.log(`No local match for address ${query}, trying blockchain lookup`);
       blockchainResults = await this.blockchainLookup.lookup(query, chain);
-      this.logger.debug(`Blockchain lookup returned ${blockchainResults.length} result(s)`);
+      this.logger.log(`Blockchain lookup returned ${blockchainResults.length} result(s)`);
     } else if (!looksLikeAddress && query.length >= 40) {
-      this.logger.debug(`Query "${query}" (len=${query.length}) did not pass isContractAddress check`);
+      this.logger.log(`Query "${query}" (len=${query.length}) did not pass isContractAddress check`);
     }
 
     return {
