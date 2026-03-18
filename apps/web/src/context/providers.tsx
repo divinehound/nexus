@@ -32,21 +32,17 @@ export function Providers({ children }: { children: ReactNode }) {
     PhantomWalletAdapter,
     SolflareWalletAdapter,
   } = require('@solana/wallet-adapter-wallets');
-  const { AbstractWalletProvider } = require('@abstract-foundation/agw-react');
-
   const solanaWallets = [new PhantomWalletAdapter(), new SolflareWalletAdapter()];
 
   return (
     <QueryClientProvider client={queryClient}>
       <WagmiProvider config={wagmiConfig}>
         <RainbowKitProvider theme={darkTheme({ accentColor: '#a855f7' })}>
-          <AbstractWalletProvider chain={'abstract' as any}>
-            <ConnectionProvider endpoint={solanaEndpoint}>
-              <SolanaWalletProvider wallets={solanaWallets} autoConnect>
-                <AuthProvider>{children}</AuthProvider>
-              </SolanaWalletProvider>
-            </ConnectionProvider>
-          </AbstractWalletProvider>
+          <ConnectionProvider endpoint={solanaEndpoint}>
+            <SolanaWalletProvider wallets={solanaWallets} autoConnect>
+              <AuthProvider>{children}</AuthProvider>
+            </SolanaWalletProvider>
+          </ConnectionProvider>
         </RainbowKitProvider>
       </WagmiProvider>
     </QueryClientProvider>
