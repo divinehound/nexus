@@ -1,0 +1,145 @@
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Param,
+  Query,
+  Body,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { AdminGuard } from '../../common/guards/admin.guard';
+import { AdminService } from './admin.service';
+
+@ApiTags('admin')
+@ApiBearerAuth()
+@UseGuards(AdminGuard)
+@Controller('admin')
+export class AdminController {
+  constructor(private readonly adminService: AdminService) {}
+
+  // --- Dashboard ---
+
+  @Get('stats')
+  @ApiOperation({ summary: 'Get dashboard statistics' })
+  getStats() {
+    return this.adminService.getStats();
+  }
+
+  // --- Projects ---
+
+  @Get('projects')
+  @ApiOperation({ summary: 'List all projects (paginated)' })
+  listProjects(@Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.adminService.listProjects(
+      page ? parseInt(page) : 1,
+      limit ? parseInt(limit) : 50,
+    );
+  }
+
+  @Patch('projects/:id/verify')
+  @ApiOperation({ summary: 'Set project verification status' })
+  setProjectVerified(
+    @Param('id') id: string,
+    @Body() body: { isVerified: boolean },
+  ) {
+    return this.adminService.setProjectVerified(id, body.isVerified);
+  }
+
+  @Delete('projects/:id')
+  @ApiOperation({ summary: 'Delete a project' })
+  deleteProject(@Param('id') id: string) {
+    return this.adminService.deleteProject(id);
+  }
+
+  // --- Wiki Suggestions ---
+
+  @Get('wiki/suggestions')
+  @ApiOperation({ summary: 'List wiki suggestions' })
+  listWikiSuggestions(@Query('status') status?: string) {
+    return this.adminService.listWikiSuggestions(status);
+  }
+
+  @Patch('wiki/suggestions/:id/approve')
+  @ApiOperation({ summary: 'Approve a wiki suggestion (applies it to the wiki)' })
+  approveWikiSuggestion(@Param('id') id: string) {
+    return this.adminService.approveWikiSuggestion(id);
+  }
+
+  @Patch('wiki/suggestions/:id/reject')
+  @ApiOperation({ summary: 'Reject a wiki suggestion' })
+  rejectWikiSuggestion(@Param('id') id: string) {
+    return this.adminService.rejectWikiSuggestion(id);
+  }
+
+  // --- Events ---
+
+  @Get('events')
+  @ApiOperation({ summary: 'List all events' })
+  listEvents(@Query('status') status?: string) {
+    return this.adminService.listAllEvents(status);
+  }
+
+  @Patch('events/:id/status')
+  @ApiOperation({ summary: 'Update event status' })
+  updateEventStatus(
+    @Param('id') id: string,
+    @Body() body: { status: 'upcoming' | 'live' | 'ended' },
+  ) {
+    return this.adminService.updateEventStatus(id, body.status);
+  }
+
+  @Delete('events/:id')
+  @ApiOperation({ summary: 'Delete an event' })
+  deleteEvent(@Param('id') id: string) {
+    return this.adminService.deleteEvent(id);
+  }
+
+  // --- Users ---
+
+  @Get('users')
+  @ApiOperation({ summary: 'List all users (paginated)' })
+  listUsers(@Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.adminService.listUsers(
+      page ? parseInt(page) : 1,
+      limit ? parseInt(limit) : 50,
+    );
+  }
+
+  @Patch('users/:id/role')
+  @ApiOperation({ summary: 'Set user role' })
+  setUserRole(
+    @Param('id') id: string,
+    @Body() body: { role: 'user' | 'admin' },
+  ) {
+    return this.adminService.setUserRole(id, body.role);
+  }
+
+  // --- Project Ownership ---
+
+  @Get('projects/:id/owners')
+  @ApiOperation({ summary: 'Get owners for a project' })
+  getProjectOwners(@Param('id') id: string) {
+    return this.adminService.getProjectOwners(id);
+  }
+
+  @Post('projects/:id/owners')
+  @ApiOperation({ summary: 'Add an owner to a project' })
+  addProjectOwner(
+    @Param('id') id: string,
+    @Body() body: { userId: string; role?: 'owner' | 'editor' },
+  ) {
+    return this.adminService.addProjectOwner(id, body.userId, body.role);
+  }
+
+  @Delete('projects/:id/owners/:userId')
+  @ApiOperation({ summary: 'Remove an owner from a project' })
+  removeProjectOwner(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+  ) {
+    return this.adminService.removeProjectOwner(id, userId);
+  }
+}

@@ -5,12 +5,14 @@ import { projectWiki, wikiSuggestions } from './wiki';
 import { events } from './events';
 import { activityFeed, flexReactions } from './activity';
 import { marketSnapshots } from './market';
+import { projectOwners } from './ownership';
 
 export const projectsRelations = relations(projects, ({ many, one }) => ({
   collections: many(collections),
   wiki: one(projectWiki),
   events: many(events),
   activityFeed: many(activityFeed),
+  owners: many(projectOwners),
 }));
 
 export const collectionsRelations = relations(collections, ({ one, many }) => ({
@@ -24,6 +26,7 @@ export const collectionsRelations = relations(collections, ({ one, many }) => ({
 export const usersRelations = relations(users, ({ many }) => ({
   wallets: many(wallets),
   wikiSuggestions: many(wikiSuggestions),
+  ownedProjects: many(projectOwners),
 }));
 
 export const walletsRelations = relations(wallets, ({ one }) => ({
@@ -63,6 +66,17 @@ export const flexReactionsRelations = relations(flexReactions, ({ one }) => ({
   activity: one(activityFeed, {
     fields: [flexReactions.activityId],
     references: [activityFeed.id],
+  }),
+}));
+
+export const projectOwnersRelations = relations(projectOwners, ({ one }) => ({
+  project: one(projects, {
+    fields: [projectOwners.projectId],
+    references: [projects.id],
+  }),
+  user: one(users, {
+    fields: [projectOwners.userId],
+    references: [users.id],
   }),
 }));
 
