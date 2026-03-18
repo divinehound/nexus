@@ -1,20 +1,4 @@
 services:
-  postgres:
-    image: postgres:18-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: nexus
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   api:
     build:
       context: .
@@ -23,7 +7,7 @@ services:
     ports:
       - "${API_PORT:-4000}:4000"
     environment:
-      DATABASE_URL: postgresql://postgres:password@postgres:5432/nexus
+      DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: ${JWT_SECRET:-nexus-dev-secret-change-in-production}
       API_PORT: "4000"
       NODE_ENV: production
@@ -32,9 +16,6 @@ services:
       TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
       OPENSEA_API_KEY: ${OPENSEA_API_KEY:-}
       RESERVOIR_API_KEY: ${RESERVOIR_API_KEY:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   web:
     build:
@@ -47,6 +28,3 @@ services:
       NODE_ENV: production
     depends_on:
       - api
-
-volumes:
-  pgdata:
