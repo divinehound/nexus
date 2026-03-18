@@ -8,5 +8,6 @@
     "types": ["node"],
     "lib": ["ES2022"]
   },
-  "include": ["src"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/migrate.ts", "src/seed.ts"]
 }

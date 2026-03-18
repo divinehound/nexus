@@ -18,7 +18,7 @@ COPY apps/api/ apps/api/
 RUN pnpm --filter @nexus/database build
 RUN pnpm --filter @nexus/types build
 RUN pnpm --filter @nexus/api build
-RUN pnpm deploy --filter @nexus/api --prod /app/out
+RUN pnpm deploy --filter @nexus/api --prod --legacy /app/out
 
 FROM base AS runner
 WORKDIR /app
