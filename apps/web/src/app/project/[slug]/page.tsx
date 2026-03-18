@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
 import { formatPrice, truncateAddress } from '@/lib/utils';
+import { ProjectTabs } from '@/components/project/project-tabs';
 
 interface ProjectPageProps {
   params: Promise<{ slug: string }>;
@@ -112,9 +113,13 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
         </div>
       </div>
 
-      {/* Collections */}
-      <section className="mt-10">
-        <h2 className="mb-4 text-lg font-semibold text-gray-300">Collections</h2>
+      {/* Tabbed Content */}
+      <ProjectTabs
+        projectId={project.id}
+        wikiContent={project.wiki?.descriptionMd ?? null}
+        events={project.events}
+      >
+        {/* Overview tab content: Collections grid */}
         {project.collections.length === 0 ? (
           <p className="text-sm text-gray-500">No collections found.</p>
         ) : (
@@ -164,50 +169,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
             ))}
           </div>
         )}
-      </section>
-
-      {/* Wiki */}
-      {project.wiki?.descriptionMd && (
-        <section className="mt-10">
-          <h2 className="mb-4 text-lg font-semibold text-gray-300">Wiki</h2>
-          <div className="rounded-xl border border-gray-800 p-6 text-gray-300">
-            {project.wiki.descriptionMd}
-          </div>
-        </section>
-      )}
-
-      {/* Events */}
-      <section className="mt-10">
-        <h2 className="mb-4 text-lg font-semibold text-gray-300">Events</h2>
-        {project.events.length === 0 ? (
-          <p className="text-sm text-gray-500">No upcoming events.</p>
-        ) : (
-          <div className="space-y-3">
-            {project.events.map((e) => (
-              <div key={e.id} className="flex items-center justify-between rounded-xl border border-gray-800 px-4 py-3">
-                <div>
-                  <span className={`mr-2 text-xs font-medium uppercase ${
-                    e.status === 'live' ? 'text-red-400' :
-                    e.status === 'upcoming' ? 'text-green-400' : 'text-gray-500'
-                  }`}>
-                    {e.status}
-                  </span>
-                  <span className="font-medium">{e.title}</span>
-                  <span className="ml-2 text-xs text-gray-500">{e.eventType}</span>
-                </div>
-                <div className="text-sm text-gray-500">
-                  {new Date(e.startTime).toLocaleDateString()}
-                  {e.link && (
-                    <a href={e.link} target="_blank" rel="noopener noreferrer" className="ml-3 text-purple-400 hover:text-purple-300">
-                      Link
-                    </a>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      </ProjectTabs>
     </main>
   );
 }
