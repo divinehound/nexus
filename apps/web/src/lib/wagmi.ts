@@ -48,7 +48,10 @@ export const supportedChains = [
   apechain,
 ] as const;
 
-const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_ID || 'nexus-dev';
+const projectId =
+  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ||
+  process.env.NEXT_PUBLIC_WALLETCONNECT_ID ||
+  'nexus-dev';
 
 const connectors = connectorsForWallets(
   [
