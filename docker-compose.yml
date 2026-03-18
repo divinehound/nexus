@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: nexus
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "${API_PORT:-4000}:4000"
+    environment:
+      DATABASE_URL: postgresql://postgres:password@postgres:5432/nexus
+      API_PORT: 4000
+      NODE_ENV: production
+      ALCHEMY_API_KEY: ${ALCHEMY_API_KEY:-}
+      HELIUS_API_KEY: ${HELIUS_API_KEY:-}
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+      OPENSEA_API_KEY: ${OPENSEA_API_KEY:-}
+      RESERVOIR_API_KEY: ${RESERVOIR_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

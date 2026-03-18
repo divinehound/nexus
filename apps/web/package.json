@@ -6,7 +6,7 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@nexus/types": "workspace:*",
@@ -18,9 +18,9 @@
     "@solana/web3.js": "^1.98.4",
     "@tanstack/react-query": "^5.90.21",
     "bs58": "^6.0.0",
-    "next": "^15",
-    "react": "^19",
-    "react-dom": "^19",
+    "next": "^16",
+    "react": "^19.2",
+    "react-dom": "^19.2",
     "siwe": "^3.0.0",
     "viem": "^2.47.4",
     "wagmi": "^2.19.5"
@@ -29,8 +29,8 @@
     "@nexus/eslint-config": "workspace:*",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^22",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
+    "@types/react": "^19.2",
+    "@types/react-dom": "^19.2",
     "tailwindcss": "^4",
     "typescript": "^5.7"
   }
