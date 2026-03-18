@@ -3,7 +3,6 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/context/auth-context';
-import { wagmiConfig } from '@/lib/wagmi';
 import '@rainbow-me/rainbowkit/styles.css';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
@@ -22,6 +21,7 @@ export function Providers({ children }: { children: ReactNode }) {
   }
 
   // Browser-only requires to prevent SSR evaluation side effects from wallet libs.
+  const { wagmiConfig } = require('@/lib/wagmi');
   const { WagmiProvider } = require('wagmi');
   const { RainbowKitProvider, darkTheme } = require('@rainbow-me/rainbowkit');
   const {
