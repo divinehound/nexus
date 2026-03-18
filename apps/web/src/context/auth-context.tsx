@@ -6,6 +6,7 @@ import { apiFetch } from '@/lib/api';
 interface AuthUser {
   id: string;
   primaryWalletId: string | null;
+  role: string;
   echoScore: number | null;
   wallets: { id: string; address: string; chain: string; ensName: string | null; snsName: string | null }[];
 }

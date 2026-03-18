@@ -51,7 +51,7 @@ export class AuthService {
     this.nonceStore.delete(address);
 
     const user = await this.findOrCreateUser(siweMessage.address, 'ethereum');
-    const tokens = this.issueTokens(user.id, siweMessage.address);
+    const tokens = this.issueTokens(user.id, siweMessage.address, user.role);
 
     return { user, ...tokens };
   }
@@ -75,7 +75,7 @@ export class AuthService {
     this.nonceStore.delete(address.toLowerCase());
 
     const user = await this.findOrCreateUser(address, 'solana');
-    const tokens = this.issueTokens(user.id, address);
+    const tokens = this.issueTokens(user.id, address, user.role);
 
     return { user, ...tokens };
   }
@@ -119,8 +119,8 @@ export class AuthService {
     return newUser;
   }
 
-  private issueTokens(userId: string, address: string) {
-    const payload = { sub: userId, address };
+  private issueTokens(userId: string, address: string, role = 'user') {
+    const payload = { sub: userId, address, role };
     return {
       accessToken: this.jwtService.sign(payload),
       refreshToken: this.jwtService.sign(payload, { expiresIn: '30d' }),
@@ -130,7 +130,7 @@ export class AuthService {
   async refresh(refreshToken: string) {
     try {
       const payload = this.jwtService.verify(refreshToken);
-      return this.issueTokens(payload.sub, payload.address);
+      return this.issueTokens(payload.sub, payload.address, payload.role);
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }

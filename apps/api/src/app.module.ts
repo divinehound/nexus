@@ -12,6 +12,7 @@ import { SearchModule } from './modules/search/search.module';
 import { HealthScoreModule } from './modules/health-score/health-score.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { AdminModule } from './modules/admin/admin.module';
 import configuration from './config/configuration';
 
 @Module({
@@ -22,6 +23,7 @@ import configuration from './config/configuration';
     }),
     DatabaseModule,
     AuthModule,
+    AdminModule,
     ProjectsModule,
     CollectionsModule,
     WikiModule,

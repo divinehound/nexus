@@ -5,12 +5,16 @@ import {
   integer,
   boolean,
   timestamp,
+  pgEnum,
 } from 'drizzle-orm/pg-core';
 import { chainEnum } from './projects';
+
+export const userRoleEnum = pgEnum('user_role', ['user', 'admin']);
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   primaryWalletId: uuid('primary_wallet_id'),
+  role: userRoleEnum('role').default('user').notNull(),
   echoScore: integer('echo_score'),
   clusterIds: uuid('cluster_ids').array().default([]),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
