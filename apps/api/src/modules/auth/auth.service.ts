@@ -57,7 +57,7 @@ export class AuthService {
     // on-chain verification for smart-contract wallets (e.g. Coinbase Smart Wallet).
     const provider = this.getEvmProvider(siweMessage.chainId);
 
-    const result = await siweMessage.verify({ signature, provider });
+    const result = await siweMessage.verify({ signature }, { provider });
     if (!result.success) {
       throw new UnauthorizedException('Invalid signature');
     }
