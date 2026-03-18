@@ -1,7 +1,10 @@
+import { Suspense } from 'react';
 import Link from 'next/link';
 import { SearchBar } from '@/components/search/search-bar';
+import { BlockchainResults } from '@/components/search/blockchain-results';
 import { apiFetch } from '@/lib/api';
 import { truncateAddress, formatPrice, chainCurrency } from '@/lib/utils';
+import type { BlockchainContractInfo } from '@nexus/types';
 
 interface SearchPageProps {
   searchParams: Promise<{ q?: string; chain?: string }>;
@@ -27,6 +30,7 @@ interface SearchResults {
     imageUrl: string | null;
     project: { id: string; name: string; slug: string };
   }[];
+  blockchainResults: BlockchainContractInfo[];
 }
 
 export default async function SearchPage({ searchParams }: SearchPageProps) {
@@ -43,19 +47,22 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     }
   }
 
-  const hasResults = results && (results.projects.length > 0 || results.collections.length > 0);
+  const hasLocalResults = results && (results.projects.length > 0 || results.collections.length > 0);
+  const hasBlockchainResults = results && results.blockchainResults?.length > 0;
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
       <div className="mb-8">
-        <SearchBar />
+        <Suspense>
+          <SearchBar />
+        </Suspense>
       </div>
 
       {!q && (
         <p className="text-gray-500">Search for a project, collection, or contract address.</p>
       )}
 
-      {q && !hasResults && (
+      {q && !hasLocalResults && !hasBlockchainResults && (
         <p className="text-gray-500">No results found for &ldquo;{q}&rdquo;</p>
       )}
 
@@ -121,6 +128,10 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
             ))}
           </div>
         </section>
+      )}
+
+      {hasBlockchainResults && (
+        <BlockchainResults results={results!.blockchainResults} />
       )}
     </main>
   );
