@@ -26,5 +26,6 @@ services:
       - "${WEB_PORT:-3000}:3000"
     environment:
       NODE_ENV: production
+      API_URL: http://api:4000/api
     depends_on:
       - api
