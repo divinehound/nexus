@@ -1,7 +1,7 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { eq, desc, inArray } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
-import { type Database, projects } from '@nexus/database';
+import { type Database, projects, projectAffinity } from '@nexus/database';
 
 @Injectable()
 export class ProjectsService {
@@ -24,15 +24,42 @@ export class ProjectsService {
   }
 
   async getTrending() {
-    // TODO: Implement trending logic based on search volume / holder growth
     return this.db.query.projects.findMany({
       limit: 10,
       orderBy: (projects, { desc }) => [desc(projects.healthScore)],
+      with: { collections: true },
     });
   }
 
   async getOverlap(slug: string) {
-    // TODO: Implement overlap query via project_affinity table
-    return [];
+    const project = await this.db.query.projects.findFirst({
+      where: eq(projects.slug, slug),
+    });
+
+    if (!project) return [];
+
+    const affinities = await this.db.query.projectAffinity.findMany({
+      where: eq(projectAffinity.projectAId, project.id),
+      orderBy: [desc(projectAffinity.overlapPct)],
+      limit: 10,
+    });
+
+    if (affinities.length === 0) return [];
+
+    const relatedProjectIds = affinities.map((a) => a.projectBId);
+    const relatedProjects = await this.db.query.projects.findMany({
+      where: inArray(projects.id, relatedProjectIds),
+      with: { collections: true },
+    });
+
+    const projectMap = new Map(relatedProjects.map((p) => [p.id, p]));
+
+    return affinities
+      .map((a) => ({
+        project: projectMap.get(a.projectBId),
+        overlapCount: a.overlapCount,
+        overlapPct: a.overlapPct,
+      }))
+      .filter((item) => item.project);
   }
 }
