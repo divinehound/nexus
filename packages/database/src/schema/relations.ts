@@ -12,7 +12,7 @@ import { marketSnapshots } from './market';
 import { projectOwners } from './ownership';
 
 export const projectsRelations = relations(projects, ({ many, one }) => ({
-  collections: many(collections),
+  collections: many(collections, { relationName: 'primary_project' }),
   wiki: one(projectWiki),
   events: many(events),
   activityFeed: many(activityFeed),
@@ -24,6 +24,7 @@ export const collectionsRelations = relations(collections, ({ one, many }) => ({
   project: one(projects, {
     fields: [collections.projectId],
     references: [projects.id],
+    relationName: 'primary_project',
   }),
   proposedProject: one(projects, {
     fields: [collections.proposedProjectId],
