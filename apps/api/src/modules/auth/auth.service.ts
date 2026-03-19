@@ -62,12 +62,14 @@ export class AuthService {
     }
 
     // Detect ERC-6492 signatures from smart contract wallets (e.g. Coinbase
-    // Smart Wallet with passkeys). For ERC-6492, verify against Base where
-    // Coinbase Smart Wallets live; otherwise use the SIWE chainId.
+    // Smart Wallet with passkeys). Always verify on the chain from the SIWE
+    // message — the wallet's replaySafeHash uses block.chainid in its EIP-712
+    // domain separator, so the verification chain must match the signing chain.
+    // ERC-6492 handles deploying the wallet on any chain during eth_call.
     const isErc6492 = signature.endsWith(
       '6492649264926492649264926492649264926492649264926492649264926492',
     );
-    const verifyChainId = isErc6492 ? 8453 : (siweMessage.chainId ?? 1);
+    const verifyChainId = siweMessage.chainId ?? 1;
     const client = this.getViemClient(verifyChainId);
 
     this.logger.debug(
