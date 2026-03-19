@@ -1,4 +1,4 @@
-import { Injectable, Inject, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Inject, UnauthorizedException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { SiweMessage, generateNonce } from 'siwe';
@@ -18,6 +18,7 @@ interface NonceRecord {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private nonceStore = new Map<string, NonceRecord>();
 
   constructor(
@@ -64,13 +65,32 @@ export class AuthService {
     const verifyChainId = isErc6492 ? 8453 : (siweMessage.chainId ?? 1);
     const client = this.getViemClient(verifyChainId);
 
-    const valid = await client.verifyMessage({
-      address: siweMessage.address as Hex,
-      message: siweMessage.prepareMessage(),
-      signature: signature as Hex,
-    });
+    this.logger.debug(
+      `Verifying EVM signature: address=${siweMessage.address}, chainId=${verifyChainId}, isErc6492=${isErc6492}`,
+    );
+
+    let valid: boolean;
+    try {
+      valid = await client.verifyMessage({
+        address: siweMessage.address as Hex,
+        // Use the raw message string from the client — NOT prepareMessage() —
+        // to avoid any round-trip mutations (timestamp format, whitespace)
+        // that would change the message hash.
+        message,
+        signature: signature as Hex,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Signature verification RPC error for ${siweMessage.address} on chain ${verifyChainId}`,
+        err instanceof Error ? err.stack : err,
+      );
+      throw new UnauthorizedException('Signature verification failed');
+    }
 
     if (!valid) {
+      this.logger.warn(
+        `Invalid signature for ${siweMessage.address} on chain ${verifyChainId} (isErc6492=${isErc6492})`,
+      );
       throw new UnauthorizedException('Invalid signature');
     }
 
