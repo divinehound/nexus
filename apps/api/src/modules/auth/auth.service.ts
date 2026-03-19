@@ -2,7 +2,7 @@ import { Injectable, Inject, UnauthorizedException, Logger } from '@nestjs/commo
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { SiweMessage, generateNonce } from 'siwe';
-import { createPublicClient, http, type Hex } from 'viem';
+import { createPublicClient, http, hashMessage, encodeAbiParameters, concat, type Hex } from 'viem';
 import { mainnet, base, abstract as abstractChain, polygon } from 'viem/chains';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
@@ -10,6 +10,12 @@ import { eq } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, users, wallets } from '@nexus/database';
 import { CHAIN_META } from '@nexus/types';
+
+// Compiled bytecode of the ERC-6492 ValidateSigOffchain contract.
+// Deploys a UniversalSigValidator in-memory via eth_call to verify any
+// signature type: EOA (ecrecover), ERC-1271, and ERC-6492.
+// Source: https://eips.ethereum.org/EIPS/eip-6492
+const ERC6492_UNIVERSAL_VALIDATOR: Hex = '0x608060405234801561000f575f5ffd5b506040516106fb3803806106fb83398101604081905261002e91610559565b5f61003a848484610045565b9050805f526001601ff35b5f5f846001600160a01b0316803b806020016040519081016040528181525f908060200190933c90507f649264926492649264926492649264926492649264926492649264926492649261009884610470565b036101f9575f606080858060200190518101906100b591906105ae565b865192955090935091505f03610174575f836001600160a01b0316836040516100de919061060f565b5f604051808303815f865af19150503d805f8114610117576040519150601f19603f3d011682016040523d82523d5f602084013e61011c565b606091505b50509050806101725760405162461bcd60e51b815260206004820152601e60248201527f5369676e617475726556616c696461746f723a206465706c6f796d656e74000060448201526064015b60405180910390fd5b505b604051630b135d3f60e11b808252906001600160a01b038a1690631626ba7e906101a4908b908690600401610625565b602060405180830381865afa1580156101bf573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906101e39190610661565b6001600160e01b03191614945050505050610469565b8051156102e3575f5f866001600160a01b0316631626ba7e60e01b8787604051602401610227929190610625565b60408051601f198184030181529181526020820180516001600160e01b03166001600160e01b0319909416939093179092529051610265919061060f565b5f60405180830381855afa9150503d805f811461029d576040519150601f19603f3d011682016040523d82523d5f602084013e6102a2565b606091505b50915091508180156102b5575080516020145b156102e057630b135d3f60e11b6102cb82610688565b6001600160e01b031916149350505050610469565b50505b82516041146103475760405162461bcd60e51b815260206004820152603a60248201525f5160206106db5f395f51905f5260448201527f3a20696e76616c6964207369676e6174757265206c656e6774680000000000006064820152608401610169565b61034f610487565b50602083015160408085015185518693925f918591908110610373576103736106c6565b016020015160f81c9050601b811480159061039257508060ff16601c14155b156103f25760405162461bcd60e51b815260206004820152603b60248201525f5160206106db5f395f51905f5260448201527f3a20696e76616c6964207369676e617475726520762076616c756500000000006064820152608401610169565b604080515f8152602081018083528a905260ff83169181019190915260608101849052608081018390526001600160a01b038a169060019060a0016020604051602081039080840390855afa15801561044d573d5f5f3e3d5ffd5b505050602060405103516001600160a01b031614955050505050505b9392505050565b5f60208251101561047f575f5ffd5b508051015190565b60405180606001604052806003906020820280368337509192915050565b6001600160a01b03811681146104b9575f5ffd5b50565b634e487b7160e01b5f52604160045260245ffd5b5f82601f8301126104df575f5ffd5b81516001600160401b038111156104f8576104f86104bc565b604051601f8201601f19908116603f011681016001600160401b0381118282101715610526576105266104bc565b60405281815283820160200185101561053d575f5ffd5b8160208501602083015e5f918101602001919091529392505050565b5f5f5f6060848603121561056b575f5ffd5b8351610576816104a5565b6020850151604086015191945092506001600160401b03811115610598575f5ffd5b6105a4868287016104d0565b9150509250925092565b5f5f5f606084860312156105c0575f5ffd5b83516105cb816104a5565b60208501519093506001600160401b038111156105e6575f5ffd5b6105f2868287016104d0565b604086015190935090506001600160401b03811115610598575f5ffd5b5f82518060208501845e5f920191825250919050565b828152604060208201525f82518060408401528060208501606085015e5f606082850101526060601f19601f8301168401019150509392505050565b5f60208284031215610671575f5ffd5b81516001600160e01b031981168114610469575f5ffd5b805160208201516001600160e01b03198116919060048210156106bf576001600160e01b0319600483900360031b81901b82161692505b5050919050565b634e487b7160e01b5f52603260045260245ffdfe5369676e617475726556616c696461746f72237265636f7665725369676e6572';
 
 interface NonceRecord {
   nonce: string;
@@ -55,10 +61,9 @@ export class AuthService {
       throw new UnauthorizedException('Invalid nonce');
     }
 
-    // Use viem's verifyMessage which natively supports ERC-6492 signatures
-    // from smart contract wallets (e.g. Coinbase Smart Wallet).
-    // For ERC-6492 signatures, verify against Base where Coinbase Smart
-    // Wallets live; otherwise use the chain from the SIWE message.
+    // Detect ERC-6492 signatures from smart contract wallets (e.g. Coinbase
+    // Smart Wallet with passkeys). For ERC-6492, verify against Base where
+    // Coinbase Smart Wallets live; otherwise use the SIWE chainId.
     const isErc6492 = signature.endsWith(
       '6492649264926492649264926492649264926492649264926492649264926492',
     );
@@ -70,21 +75,27 @@ export class AuthService {
     );
 
     let valid: boolean;
-    try {
-      valid = await client.verifyMessage({
-        address: siweMessage.address as Hex,
-        // Use the raw message string from the client — NOT prepareMessage() —
-        // to avoid any round-trip mutations (timestamp format, whitespace)
-        // that would change the message hash.
+    if (isErc6492) {
+      valid = await this.verifyErc6492Signature(
+        client,
+        siweMessage.address as Hex,
         message,
-        signature: signature as Hex,
-      });
-    } catch (err) {
-      this.logger.error(
-        `Signature verification RPC error for ${siweMessage.address} on chain ${verifyChainId}`,
-        err instanceof Error ? err.stack : err,
+        signature as Hex,
       );
-      throw new UnauthorizedException('Signature verification failed');
+    } else {
+      try {
+        valid = await client.verifyMessage({
+          address: siweMessage.address as Hex,
+          message,
+          signature: signature as Hex,
+        });
+      } catch (err) {
+        this.logger.error(
+          `Signature verification RPC error for ${siweMessage.address} on chain ${verifyChainId}`,
+          err instanceof Error ? err.stack : err,
+        );
+        throw new UnauthorizedException('Signature verification failed');
+      }
     }
 
     if (!valid) {
@@ -129,6 +140,54 @@ export class AuthService {
     return { user, ...tokens };
   }
 
+  /**
+   * Verify an ERC-6492 signature by making a raw eth_call with the
+   * ERC-6492 UniversalSigValidator bytecode. This bypasses viem's
+   * verifyMessage which silently swallows CallExecutionErrors, making
+   * it impossible to diagnose failures.
+   *
+   * Source: https://eips.ethereum.org/EIPS/eip-6492
+   */
+  private async verifyErc6492Signature(
+    client: ReturnType<typeof createPublicClient>,
+    address: Hex,
+    message: string,
+    signature: Hex,
+  ): Promise<boolean> {
+    const hash = hashMessage(message);
+
+    // Encode constructor args: (address signer, bytes32 hash, bytes signature)
+    const constructorArgs = encodeAbiParameters(
+      [
+        { type: 'address' },
+        { type: 'bytes32' },
+        { type: 'bytes' },
+      ],
+      [address, hash, signature],
+    );
+
+    // Concatenate validator bytecode + constructor args for deployless eth_call
+    const callData = concat([ERC6492_UNIVERSAL_VALIDATOR, constructorArgs]);
+
+    try {
+      const result = await client.call({ data: callData });
+      const valid = result.data === '0x01';
+      this.logger.debug(
+        `ERC-6492 eth_call result for ${address}: data=${result.data}, valid=${valid}`,
+      );
+      return valid;
+    } catch (err) {
+      // Log the full error — this is what viem silently swallows
+      this.logger.error(
+        `ERC-6492 eth_call reverted for ${address}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      if (err instanceof Error && err.stack) {
+        this.logger.error(err.stack);
+      }
+      return false;
+    }
+  }
+
   private getViemClient(chainId: number) {
     const chains: Record<number, Parameters<typeof createPublicClient>[0]['chain']> = {
       1: mainnet,
@@ -142,10 +201,15 @@ export class AuthService {
     const resolvedChainName = this.resolveEvmChain(chainId);
     const meta = CHAIN_META[resolvedChainName as keyof typeof CHAIN_META];
 
-    const transport =
+    const rpcUrl =
       meta?.alchemySubdomain && apiKey
-        ? http(`https://${meta.alchemySubdomain}.g.alchemy.com/v2/${apiKey}`)
-        : http();
+        ? `https://${meta.alchemySubdomain}.g.alchemy.com/v2/${apiKey}`
+        : undefined;
+    const transport = rpcUrl ? http(rpcUrl) : http();
+
+    this.logger.debug(
+      `Viem client for chain ${chainId}: rpc=${rpcUrl ?? 'default public RPC'}`,
+    );
 
     return createPublicClient({ chain, transport });
   }
