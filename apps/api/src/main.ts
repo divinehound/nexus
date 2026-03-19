@@ -2,8 +2,13 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { runMigrations } from '@nexus/database';
 
 async function bootstrap() {
+  if (process.env.DATABASE_URL) {
+    await runMigrations(process.env.DATABASE_URL);
+  }
+
   const app = await NestFactory.create(AppModule);
 
   app.setGlobalPrefix('api');
@@ -25,4 +30,5 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`NEXUS API running on http://localhost:${port}`);
 }
+
 bootstrap();
