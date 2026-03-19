@@ -72,7 +72,7 @@ export class AuthService {
     const verifyChainId = siweMessage.chainId ?? 1;
     const client = this.getViemClient(verifyChainId);
 
-    this.logger.debug(
+    this.logger.log(
       `Verifying EVM signature: address=${siweMessage.address}, chainId=${verifyChainId}, isErc6492=${isErc6492}`,
     );
 
@@ -173,11 +173,7 @@ export class AuthService {
 
     try {
       const result = await client.call({ data: callData });
-      const valid = result.data === '0x01';
-      this.logger.debug(
-        `ERC-6492 eth_call result for ${address}: data=${result.data}, valid=${valid}`,
-      );
-      return valid;
+      return result.data === '0x01';
     } catch (err) {
       // Log the full error — this is what viem silently swallows
       this.logger.error(
@@ -203,15 +199,10 @@ export class AuthService {
     const resolvedChainName = this.resolveEvmChain(chainId);
     const meta = CHAIN_META[resolvedChainName as keyof typeof CHAIN_META];
 
-    const rpcUrl =
+    const transport =
       meta?.alchemySubdomain && apiKey
-        ? `https://${meta.alchemySubdomain}.g.alchemy.com/v2/${apiKey}`
-        : undefined;
-    const transport = rpcUrl ? http(rpcUrl) : http();
-
-    this.logger.debug(
-      `Viem client for chain ${chainId}: rpc=${rpcUrl ?? 'default public RPC'}`,
-    );
+        ? http(`https://${meta.alchemySubdomain}.g.alchemy.com/v2/${apiKey}`)
+        : http();
 
     return createPublicClient({ chain, transport });
   }
