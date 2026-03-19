@@ -1,5 +1,15 @@
 # nexus
 
+## Frontend contract intake flow
+
+- Search keeps existing project and collection lookup behavior.
+- If a search query looks like a contract address and search has no direct hit, web calls `POST /api/collections/track` and redirects to:
+  - `/collection/[chain]/[contract]`
+- Collection detail route (`/collection/[chain]/[contract]`) fetches `GET /api/collections/:chain/:contractAddress` and renders verification/mapping status.
+- Unverified trust copy is shown for `tracked_unverified` and `rejected`:
+  - `Tracked, not yet verified. Data may be incomplete or unaffiliated.`
+- Admin review queue is available at `/admin/collections` for verify/reject/suggest actions.
+
 ## API Endpoints
 
 ### Collections

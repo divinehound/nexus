@@ -1,8 +1,9 @@
 import { Suspense } from 'react';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { SearchBar } from '@/components/search/search-bar';
 import { BlockchainResults } from '@/components/search/blockchain-results';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, trackCollection } from '@/lib/api';
 import { truncateAddress, formatPrice, chainCurrency } from '@/lib/utils';
 import type { BlockchainContractInfo } from '@nexus/types';
 
@@ -33,6 +34,27 @@ interface SearchResults {
   blockchainResults: BlockchainContractInfo[];
 }
 
+const EVM_CONTRACT_PATTERN = /^0x[a-fA-F0-9]{40}$/;
+const SOLANA_ADDRESS_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+function getContractInput(query: string, chain?: string): { chain: string; contractAddress: string } | null {
+  const normalized = query.trim();
+  const normalizedChain = (chain || 'ethereum').toLowerCase();
+
+  if (normalizedChain === 'solana') {
+    return SOLANA_ADDRESS_PATTERN.test(normalized)
+      ? { chain: 'solana', contractAddress: normalized }
+      : null;
+  }
+
+  if (!EVM_CONTRACT_PATTERN.test(normalized)) return null;
+
+  return {
+    chain: normalizedChain,
+    contractAddress: normalized.toLowerCase(),
+  };
+}
+
 export default async function SearchPage({ searchParams }: SearchPageProps) {
   const { q, chain } = await searchParams;
 
@@ -49,6 +71,20 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
 
   const hasLocalResults = results && (results.projects.length > 0 || results.collections.length > 0);
   const hasBlockchainResults = results && results.blockchainResults?.length > 0;
+
+  const hasResults = Boolean(hasLocalResults || hasBlockchainResults);
+
+  if (q && !hasResults) {
+    const contractInput = getContractInput(q, chain);
+    if (contractInput) {
+      try {
+        await trackCollection(contractInput);
+        redirect(`/collection/${contractInput.chain}/${contractInput.contractAddress}`);
+      } catch {
+        // Keep normal "No results" UX if tracking fails
+      }
+    }
+  }
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">

@@ -25,3 +25,113 @@ export async function apiFetch<T>(
   }
   return res.json();
 }
+
+export type CollectionVerificationStatus =
+  | 'tracked_unverified'
+  | 'pending_claim'
+  | 'verified'
+  | 'rejected';
+
+export type CollectionMappingStatus =
+  | 'unmapped'
+  | 'suggested'
+  | 'mapped'
+  | 'rejected';
+
+export interface CollectionProjectRef {
+  id: string;
+  name: string;
+  slug: string;
+  isVerified: boolean;
+}
+
+export interface CollectionMetrics {
+  floorPrice: number | null;
+  holderCount: number | null;
+  listedCount: number | null;
+  volume24h: number | null;
+}
+
+export interface CollectionDetails {
+  id: string;
+  chain: string;
+  contractAddress: string;
+  name: string;
+  imageUrl: string | null;
+  collectionType: string;
+  verificationStatus: CollectionVerificationStatus;
+  mappingStatus: CollectionMappingStatus;
+  verificationNotes: string | null;
+  mappingConfidence: number | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  project: CollectionProjectRef | null;
+  proposedProject: CollectionProjectRef | null;
+  metrics: CollectionMetrics;
+}
+
+export interface TrackCollectionResponse {
+  statusCode: number;
+  collectionId: string;
+  status: CollectionVerificationStatus;
+  routeHint: string;
+}
+
+export interface TrackCollectionInput {
+  chain: string;
+  contractAddress: string;
+}
+
+export function trackCollection(input: TrackCollectionInput) {
+  return apiFetch<TrackCollectionResponse>('/collections/track', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function getCollectionByChainAndContract(chain: string, contractAddress: string) {
+  return apiFetch<CollectionDetails>(`/collections/${encodeURIComponent(chain)}/${encodeURIComponent(contractAddress)}`);
+}
+
+export interface AdminCollectionActionInput {
+  notes?: string;
+  projectId?: string;
+}
+
+export function adminVerifyCollection(
+  collectionId: string,
+  input: AdminCollectionActionInput,
+  token: string,
+) {
+  return apiFetch<CollectionDetails>(`/admin/collections/${collectionId}/verify`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+export function adminRejectCollection(collectionId: string, input: { notes?: string }, token: string) {
+  return apiFetch<CollectionDetails>(`/admin/collections/${collectionId}/reject`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+export interface AdminSuggestProjectInput {
+  projectId: string;
+  confidence: number;
+  notes?: string;
+}
+
+export function adminSuggestProject(
+  collectionId: string,
+  input: AdminSuggestProjectInput,
+  token: string,
+) {
+  return apiFetch<CollectionDetails>(`/admin/collections/${collectionId}/suggest-project`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify(input),
+  });
+}
