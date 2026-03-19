@@ -97,6 +97,32 @@ export class AdminController {
     return this.adminService.deleteEvent(id);
   }
 
+  // --- Collection Verification / Mapping ---
+
+  @Post('collections/:id/verify')
+  @ApiOperation({ summary: 'Mark a collection as verified' })
+  verifyCollection(
+    @Param('id') id: string,
+    @Body() body: { notes?: string; projectId?: string },
+  ) {
+    return this.adminService.verifyCollection(id, body);
+  }
+
+  @Post('collections/:id/reject')
+  @ApiOperation({ summary: 'Reject a collection verification request' })
+  rejectCollection(@Param('id') id: string, @Body() body: { notes?: string }) {
+    return this.adminService.rejectCollection(id, body.notes);
+  }
+
+  @Post('collections/:id/suggest-project')
+  @ApiOperation({ summary: 'Suggest a project mapping for a tracked collection' })
+  suggestProject(
+    @Param('id') id: string,
+    @Body() body: { projectId: string; confidence: number; notes?: string },
+  ) {
+    return this.adminService.suggestProject(id, body);
+  }
+
   // --- Users ---
 
   @Get('users')

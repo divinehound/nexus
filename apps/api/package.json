@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "nest start --watch",
     "build": "nest build",
+    "typecheck": "tsc --noEmit",
     "start": "node dist/main",
     "start:prod": "node dist/main",
     "lint": "eslint src/",

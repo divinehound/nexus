@@ -15,6 +15,13 @@
       "when": 1742342400000,
       "tag": "0001_add_evm_chains",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1773944760000,
+      "tag": "0002_collection_intake_tracking",
+      "breakpoints": true
     }
   ]
 }

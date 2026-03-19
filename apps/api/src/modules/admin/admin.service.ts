@@ -1,4 +1,9 @@
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { eq, and, count, sql, desc } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import {
@@ -9,6 +14,7 @@ import {
   projectWiki,
   events,
   projectOwners,
+  collections,
 } from '@nexus/database';
 
 @Injectable()
@@ -172,6 +178,103 @@ export class AdminService {
       .where(eq(events.id, eventId))
       .returning();
     if (!updated) throw new NotFoundException('Event not found');
+    return updated;
+  }
+
+  // --- Collection Verification / Mapping ---
+
+  async verifyCollection(
+    collectionId: string,
+    input: { notes?: string; projectId?: string },
+  ) {
+    const existing = await this.db.query.collections.findFirst({
+      where: eq(collections.id, collectionId),
+    });
+    if (!existing) throw new NotFoundException('Collection not found');
+
+    if (input.projectId) {
+      const project = await this.db.query.projects.findFirst({
+        where: eq(projects.id, input.projectId),
+      });
+      if (!project) throw new NotFoundException('Project not found');
+    }
+
+    const [updated] = await this.db
+      .update(collections)
+      .set({
+        verificationStatus: 'verified',
+        mappingStatus: input.projectId ? 'mapped' : existing.mappingStatus,
+        projectId: input.projectId ?? existing.projectId,
+        proposedProjectId: input.projectId ?? existing.proposedProjectId,
+        verificationNotes: input.notes ?? existing.verificationNotes,
+        lastSeenAt: new Date(),
+      })
+      .where(eq(collections.id, collectionId))
+      .returning();
+
+    return updated;
+  }
+
+  async rejectCollection(collectionId: string, notes?: string) {
+    const [updated] = await this.db
+      .update(collections)
+      .set({
+        verificationStatus: 'rejected',
+        mappingStatus: 'rejected',
+        verificationNotes: notes ?? null,
+        lastSeenAt: new Date(),
+      })
+      .where(eq(collections.id, collectionId))
+      .returning();
+
+    if (!updated) throw new NotFoundException('Collection not found');
+    return updated;
+  }
+
+  async suggestProject(
+    collectionId: string,
+    input: { projectId: string; confidence: number; notes?: string },
+  ) {
+    if (typeof input.confidence !== 'number' || Number.isNaN(input.confidence)) {
+      throw new BadRequestException({
+        error: 'VALIDATION_ERROR',
+        message: 'confidence must be a number between 0 and 1',
+      });
+    }
+
+    if (input.confidence < 0 || input.confidence > 1) {
+      throw new BadRequestException({
+        error: 'VALIDATION_ERROR',
+        message: 'confidence must be between 0 and 1',
+      });
+    }
+
+    const collection = await this.db.query.collections.findFirst({
+      where: eq(collections.id, collectionId),
+    });
+    if (!collection) throw new NotFoundException('Collection not found');
+
+    const project = await this.db.query.projects.findFirst({
+      where: eq(projects.id, input.projectId),
+    });
+    if (!project) throw new NotFoundException('Project not found');
+
+    const [updated] = await this.db
+      .update(collections)
+      .set({
+        mappingStatus: 'suggested',
+        proposedProjectId: input.projectId,
+        mappingConfidence: input.confidence.toString(),
+        verificationStatus:
+          collection.verificationStatus === 'tracked_unverified'
+            ? 'pending_claim'
+            : collection.verificationStatus,
+        verificationNotes: input.notes ?? collection.verificationNotes,
+        lastSeenAt: new Date(),
+      })
+      .where(eq(collections.id, collectionId))
+      .returning();
+
     return updated;
   }
 

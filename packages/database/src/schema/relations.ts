@@ -1,5 +1,9 @@
 import { relations } from 'drizzle-orm';
-import { projects, collections } from './projects';
+import {
+  projects,
+  collections,
+  collectionIntakeRequests,
+} from './projects';
 import { users, wallets, holders } from './users';
 import { projectWiki, wikiSuggestions } from './wiki';
 import { events } from './events';
@@ -13,6 +17,7 @@ export const projectsRelations = relations(projects, ({ many, one }) => ({
   events: many(events),
   activityFeed: many(activityFeed),
   owners: many(projectOwners),
+  proposedCollections: many(collections, { relationName: 'proposed_project' }),
 }));
 
 export const collectionsRelations = relations(collections, ({ one, many }) => ({
@@ -20,13 +25,29 @@ export const collectionsRelations = relations(collections, ({ one, many }) => ({
     fields: [collections.projectId],
     references: [projects.id],
   }),
+  proposedProject: one(projects, {
+    fields: [collections.proposedProjectId],
+    references: [projects.id],
+    relationName: 'proposed_project',
+  }),
   marketSnapshots: many(marketSnapshots),
 }));
+
+export const collectionIntakeRequestsRelations = relations(
+  collectionIntakeRequests,
+  ({ one }) => ({
+    requestedByUser: one(users, {
+      fields: [collectionIntakeRequests.requestedByUserId],
+      references: [users.id],
+    }),
+  }),
+);
 
 export const usersRelations = relations(users, ({ many }) => ({
   wallets: many(wallets),
   wikiSuggestions: many(wikiSuggestions),
   ownedProjects: many(projectOwners),
+  collectionIntakeRequests: many(collectionIntakeRequests),
 }));
 
 export const walletsRelations = relations(wallets, ({ one }) => ({
