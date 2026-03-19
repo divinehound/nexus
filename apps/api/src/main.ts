@@ -5,7 +5,9 @@ import { AppModule } from './app.module';
 import { runMigrations } from '@nexus/database';
 
 async function bootstrap() {
-  if (process.env.DATABASE_URL) {
+  const shouldRunMigrations = (process.env.RUN_MIGRATIONS_ON_BOOT ?? 'true') === 'true';
+
+  if (shouldRunMigrations && process.env.DATABASE_URL) {
     await runMigrations(process.env.DATABASE_URL);
   }
 
