@@ -22,6 +22,13 @@
       "when": 1773944760000,
       "tag": "0002_collection_intake_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1773949200000,
+      "tag": "0003_add_projects_is_featured",
+      "breakpoints": true
     }
   ]
 }
