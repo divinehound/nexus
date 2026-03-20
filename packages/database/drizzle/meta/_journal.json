@@ -64,6 +64,13 @@
       "when": 1774046025000,
       "tag": "0008_index_status_tracking_v1",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1774050600000,
+      "tag": "0009_unified_indexing_jobs",
+      "breakpoints": true
     }
   ]
 }
