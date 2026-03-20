@@ -16,10 +16,21 @@ export function Providers({ children }: { children: ReactNode }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
+  // Keep Solana wallet context mounted even before full hydration so hooks
+  // like useWallet on /me never throw "without providing WalletProvider".
+  const {
+    ConnectionProvider,
+    WalletProvider: SolanaWalletProvider,
+  } = require('@solana/wallet-adapter-react');
+
   if (!mounted) {
     return (
       <QueryClientProvider client={queryClient}>
-        <AuthProvider>{children}</AuthProvider>
+        <ConnectionProvider endpoint={solanaEndpoint}>
+          <SolanaWalletProvider wallets={[]} autoConnect={false}>
+            <AuthProvider>{children}</AuthProvider>
+          </SolanaWalletProvider>
+        </ConnectionProvider>
       </QueryClientProvider>
     );
   }
@@ -28,10 +39,6 @@ export function Providers({ children }: { children: ReactNode }) {
   const { wagmiConfig } = require('@/lib/wagmi');
   const { WagmiProvider } = require('wagmi');
   const { RainbowKitProvider, darkTheme } = require('@rainbow-me/rainbowkit');
-  const {
-    ConnectionProvider,
-    WalletProvider: SolanaWalletProvider,
-  } = require('@solana/wallet-adapter-react');
   const {
     PhantomWalletAdapter,
     SolflareWalletAdapter,
