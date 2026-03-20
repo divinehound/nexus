@@ -13,6 +13,16 @@ export class ProjectsService {
       limit,
       offset,
       with: { collections: true },
+      orderBy: (projects, { desc }) => [desc(projects.isFeatured), desc(projects.healthScore), desc(projects.createdAt)],
+    });
+  }
+
+  async getFeatured(limit = 6) {
+    return this.db.query.projects.findMany({
+      where: eq(projects.isFeatured, true),
+      limit,
+      orderBy: (projects, { desc }) => [desc(projects.healthScore), desc(projects.createdAt)],
+      with: { collections: true },
     });
   }
 

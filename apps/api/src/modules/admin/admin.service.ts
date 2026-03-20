@@ -69,6 +69,16 @@ export class AdminService {
     return updated;
   }
 
+  async setProjectFeatured(projectId: string, isFeatured: boolean) {
+    const [updated] = await this.db
+      .update(projects)
+      .set({ isFeatured })
+      .where(eq(projects.id, projectId))
+      .returning();
+    if (!updated) throw new NotFoundException('Project not found');
+    return updated;
+  }
+
   async deleteProject(projectId: string) {
     const [deleted] = await this.db
       .delete(projects)

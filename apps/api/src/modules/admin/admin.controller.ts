@@ -48,6 +48,15 @@ export class AdminController {
     return this.adminService.setProjectVerified(id, body.isVerified);
   }
 
+  @Patch('projects/:id/featured')
+  @ApiOperation({ summary: 'Set project featured status' })
+  setProjectFeatured(
+    @Param('id') id: string,
+    @Body() body: { isFeatured: boolean },
+  ) {
+    return this.adminService.setProjectFeatured(id, body.isFeatured);
+  }
+
   @Delete('projects/:id')
   @ApiOperation({ summary: 'Delete a project' })
   deleteProject(@Param('id') id: string) {

@@ -19,6 +19,12 @@ export class ProjectsController {
     return this.projectsService.getTrending();
   }
 
+  @Get('featured')
+  @ApiOperation({ summary: 'Get featured projects' })
+  getFeatured(@Query('limit') limit?: string) {
+    return this.projectsService.getFeatured(limit ? parseInt(limit, 10) : 6);
+  }
+
   @Get(':slug')
   @ApiOperation({ summary: 'Get project by slug' })
   findBySlug(@Param('slug') slug: string) {

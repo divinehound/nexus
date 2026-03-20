@@ -70,6 +70,7 @@ export const projects = pgTable('projects', {
   healthScore: integer('health_score'),
   clusterId: uuid('cluster_id'),
   isVerified: boolean('is_verified').default(false).notNull(),
+  isFeatured: boolean('is_featured').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
