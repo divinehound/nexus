@@ -15,6 +15,7 @@ import {
   events,
   projectOwners,
   collections,
+  indexingJobs,
   walletIndexingJobs,
   wallets,
 } from '@nexus/database';
@@ -395,31 +396,39 @@ export class AdminService {
     const limit = Math.min(100, Math.max(1, input.limit ?? 20));
     const offset = (page - 1) * limit;
 
-    const conditions = [] as Array<any>;
-    if (input.status) conditions.push(eq(walletIndexingJobs.status, input.status));
-    if (input.walletId) conditions.push(eq(walletIndexingJobs.walletId, input.walletId));
-
-    const whereClause =
-      conditions.length === 0
+    const walletConditions = [] as Array<any>;
+    if (input.status) walletConditions.push(eq(walletIndexingJobs.status, input.status));
+    if (input.walletId) walletConditions.push(eq(walletIndexingJobs.walletId, input.walletId));
+    const walletWhere =
+      walletConditions.length === 0
         ? undefined
-        : conditions.length === 1
-          ? conditions[0]
-          : and(...conditions);
+        : walletConditions.length === 1
+          ? walletConditions[0]
+          : and(...walletConditions);
 
-    const items = await this.db.query.walletIndexingJobs.findMany({
-      where: whereClause,
-      limit,
-      offset,
-      orderBy: [desc(walletIndexingJobs.startedAt)],
-    });
+    const generalConditions = [] as Array<any>;
+    if (input.status) generalConditions.push(eq(indexingJobs.status, input.status));
+    if (input.walletId) generalConditions.push(eq(indexingJobs.walletId, input.walletId));
+    const generalWhere =
+      generalConditions.length === 0
+        ? undefined
+        : generalConditions.length === 1
+          ? generalConditions[0]
+          : and(...generalConditions);
 
-    const [totalRow] = await this.db
-      .select({ value: count() })
-      .from(walletIndexingJobs)
-      .where(whereClause as any);
+    const [walletItems, generalItems] = await Promise.all([
+      this.db.query.walletIndexingJobs.findMany({
+        where: walletWhere,
+        orderBy: [desc(walletIndexingJobs.startedAt)],
+      }),
+      this.db.query.indexingJobs.findMany({
+        where: generalWhere,
+        orderBy: [desc(indexingJobs.startedAt)],
+      }),
+    ]);
 
-    return {
-      items: items.map((job) => ({
+    const combined = [
+      ...walletItems.map((job) => ({
         id: job.id,
         type: job.type,
         status: job.status,
@@ -433,26 +442,72 @@ export class AdminService {
         walletId: job.walletId,
         statsJson: job.statsJson,
         error: job.error,
+        entityType: 'wallet' as const,
+        entityId: job.walletId,
       })),
-      total: totalRow?.value ?? 0,
+      ...generalItems.map((job) => ({
+        id: job.id,
+        type: job.type,
+        status: job.status,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+        durationMs:
+          job.startedAt && job.finishedAt
+            ? new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()
+            : null,
+        userId: job.triggeredByUserId,
+        walletId: job.walletId,
+        statsJson: job.statsJson,
+        error: job.error,
+        entityType: job.entityType,
+        entityId: job.entityId,
+      })),
+    ].sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+
+    return {
+      items: combined.slice(offset, offset + limit),
+      total: combined.length,
       page,
       limit,
     };
   }
 
   async getIndexingJob(jobId: string) {
-    const job = await this.db.query.walletIndexingJobs.findFirst({
+    const walletJob = await this.db.query.walletIndexingJobs.findFirst({
       where: eq(walletIndexingJobs.id, jobId),
+    });
+
+    if (walletJob) {
+      const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, walletJob.walletId) });
+      return {
+        ...walletJob,
+        entityType: 'wallet',
+        entityId: walletJob.walletId,
+        wallet,
+        durationMs:
+          walletJob.startedAt && walletJob.finishedAt
+            ? new Date(walletJob.finishedAt).getTime() - new Date(walletJob.startedAt).getTime()
+            : null,
+      };
+    }
+
+    const job = await this.db.query.indexingJobs.findFirst({
+      where: eq(indexingJobs.id, jobId),
     });
 
     if (!job) {
       throw new NotFoundException('Indexing job not found');
     }
 
-    const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, job.walletId) });
+    const wallet = job.walletId
+      ? await this.db.query.wallets.findFirst({ where: eq(wallets.id, job.walletId) })
+      : null;
 
     return {
       ...job,
+      userId: job.triggeredByUserId,
+      entityType: job.entityType,
+      entityId: job.entityId,
       wallet,
       durationMs:
         job.startedAt && job.finishedAt
@@ -467,7 +522,7 @@ export class AdminService {
     });
 
     if (!original) {
-      throw new NotFoundException('Indexing job not found');
+      throw new BadRequestException('Retry is only supported for wallet indexing jobs');
     }
 
     const retryJob = await this.holdingsService.retryIndexingJob(jobId);

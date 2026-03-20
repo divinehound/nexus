@@ -6,4 +6,5 @@ export * from './activity';
 export * from './discovery';
 export * from './market';
 export * from './ownership';
+export * from './indexing';
 export * from './relations';

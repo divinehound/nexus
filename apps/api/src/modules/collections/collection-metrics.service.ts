@@ -2,7 +2,7 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { and, asc, desc, eq, gte } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
-import { type Database, collections, marketSnapshots, projects } from '@nexus/database';
+import { type Database, collections, indexingJobs, marketSnapshots, projects } from '@nexus/database';
 
 const STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000;
 const HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -152,11 +152,47 @@ export class CollectionMetricsService {
     };
   }
 
+  private async createMetricsIndexJob(entityType: 'collection' | 'project', entityId: string) {
+    const jobId = randomUUID();
+    const [job] = await this.db
+      .insert(indexingJobs)
+      .values({
+        id: jobId,
+        entityType,
+        entityId,
+        type: `${entityType}_metrics_refresh`,
+        status: 'queued',
+      })
+      .returning();
+
+    return job;
+  }
+
+  private async markMetricsIndexJob(
+    jobId: string,
+    input: {
+      status: 'queued' | 'running' | 'completed' | 'failed';
+      finishedAt?: Date | null;
+      error?: string | null;
+      statsJson?: Record<string, unknown> | null;
+    },
+  ) {
+    await this.db
+      .update(indexingJobs)
+      .set({
+        status: input.status,
+        ...(input.finishedAt !== undefined ? { finishedAt: input.finishedAt } : {}),
+        ...(input.error !== undefined ? { error: input.error } : {}),
+        ...(input.statsJson !== undefined ? { statsJson: input.statsJson } : {}),
+      })
+      .where(eq(indexingJobs.id, jobId));
+  }
+
   async refreshCollectionMetricsNow(collectionId: string) {
     const collection = await this.db.query.collections.findFirst({ where: eq(collections.id, collectionId) });
     if (!collection) throw new NotFoundException('Collection not found');
 
-    const jobId = randomUUID();
+    const job = await this.createMetricsIndexJob('collection', collectionId);
     const startedAt = new Date();
 
     await this.setCollectionIndexStatus(collectionId, {
@@ -164,8 +200,9 @@ export class CollectionMetricsService {
       finishedAt: null,
       status: 'running',
       error: null,
-      jobId,
+      jobId: job.id,
     });
+    await this.markMetricsIndexJob(job.id, { status: 'running' });
 
     try {
       const generated = this.generateDeterministicSnapshot(collection.id, {
@@ -192,10 +229,18 @@ export class CollectionMetricsService {
         finishedAt: now,
         status: 'done',
         error: null,
-        jobId,
+        jobId: job.id,
+      });
+      await this.markMetricsIndexJob(job.id, {
+        status: 'completed',
+        finishedAt: now,
+        statsJson: {
+          snapshotsWritten: 1,
+          collectionId,
+        },
       });
 
-      return { queued: true, jobId, entityType: 'collection' as const, entityId: collectionId };
+      return { queued: true, jobId: job.id, entityType: 'collection' as const, entityId: collectionId };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown indexing error';
       const finishedAt = new Date();
@@ -203,7 +248,12 @@ export class CollectionMetricsService {
         finishedAt,
         status: 'failed',
         error: message,
-        jobId,
+        jobId: job.id,
+      });
+      await this.markMetricsIndexJob(job.id, {
+        status: 'failed',
+        finishedAt,
+        error: message,
       });
       throw error;
     }
@@ -213,15 +263,16 @@ export class CollectionMetricsService {
     const project = await this.db.query.projects.findFirst({ where: eq(projects.id, projectId) });
     if (!project) throw new NotFoundException('Project not found');
 
-    const projectJobId = randomUUID();
+    const job = await this.createMetricsIndexJob('project', projectId);
     const startedAt = new Date();
     await this.setProjectIndexStatus(projectId, {
       startedAt,
       finishedAt: null,
       status: 'running',
       error: null,
-      jobId: projectJobId,
+      jobId: job.id,
     });
+    await this.markMetricsIndexJob(job.id, { status: 'running' });
 
     try {
       const projectCollections = await this.db.query.collections.findMany({ where: eq(collections.projectId, projectId) });
@@ -235,10 +286,18 @@ export class CollectionMetricsService {
         finishedAt,
         status: 'done',
         error: null,
-        jobId: projectJobId,
+        jobId: job.id,
+      });
+      await this.markMetricsIndexJob(job.id, {
+        status: 'completed',
+        finishedAt,
+        statsJson: {
+          collectionsProcessed: projectCollections.length,
+          projectId,
+        },
       });
 
-      return { queued: true, jobId: projectJobId, entityType: 'project' as const, entityId: projectId };
+      return { queued: true, jobId: job.id, entityType: 'project' as const, entityId: projectId };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown indexing error';
       const finishedAt = new Date();
@@ -246,7 +305,12 @@ export class CollectionMetricsService {
         finishedAt,
         status: 'failed',
         error: message,
-        jobId: projectJobId,
+        jobId: job.id,
+      });
+      await this.markMetricsIndexJob(job.id, {
+        status: 'failed',
+        finishedAt,
+        error: message,
       });
       throw error;
     }

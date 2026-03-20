@@ -192,8 +192,10 @@ export interface AdminIndexingJobListItem {
   startedAt: string;
   finishedAt: string | null;
   durationMs: number | null;
-  userId: string;
-  walletId: string;
+  userId: string | null;
+  walletId: string | null;
+  entityType?: string;
+  entityId?: string;
   statsJson: Record<string, unknown> | null;
   error: string | null;
 }
