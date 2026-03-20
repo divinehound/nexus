@@ -7,7 +7,7 @@ interface CollectionPageProps {
   params: Promise<{ slug: string; collection: string }>;
 }
 
-interface CollectionDetail {
+interface ProjectCollection {
   id: string;
   name: string;
   contractAddress: string;
@@ -20,21 +20,30 @@ interface CollectionDetail {
   mintDate: string | null;
   collectionType: string;
   verificationStatus: CollectionVerificationStatus;
-  project: { id: string; name: string; slug: string };
-  marketSnapshots: { timestamp: string; floorPrice: number | null; volume24h: number | null; holderCount: number | null }[];
+}
+
+interface ProjectData {
+  id: string;
+  name: string;
+  slug: string;
+  collections: ProjectCollection[];
 }
 
 export default async function CollectionPage({ params }: CollectionPageProps) {
   const { slug, collection: contractAddress } = await params;
 
-  let collection: CollectionDetail | null = null;
+  let project: ProjectData | null = null;
   try {
-    collection = await apiFetch<CollectionDetail>(`/collections/address/${contractAddress}`);
+    project = await apiFetch<ProjectData>(`/projects/${slug}`);
   } catch {
-    // Collection not found
+    // handled below
   }
 
-  if (!collection) {
+  const collection = project?.collections?.find(
+    (c) => c.contractAddress.toLowerCase() === contractAddress.toLowerCase(),
+  ) ?? null;
+
+  if (!project || !collection) {
     return (
       <main className="mx-auto max-w-7xl px-4 py-8">
         <nav className="text-sm text-gray-500">
@@ -43,6 +52,9 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
           <span className="text-white">{truncateAddress(contractAddress)}</span>
         </nav>
         <h1 className="mt-4 text-3xl font-bold">Collection not found</h1>
+        <p className="mt-2 text-sm text-gray-400">
+          This collection is not mapped under the selected project yet.
+        </p>
         <div className="mt-4 flex items-center gap-4">
           <Link href={`/project/${slug}/${contractAddress}`} className="text-purple-400 hover:text-purple-300">
             Retry
@@ -61,7 +73,7 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
     <main className="mx-auto max-w-7xl px-4 py-8">
       <nav className="text-sm text-gray-500">
         <Link href={`/project/${slug}`} className="hover:text-white">
-          {collection.project.name}
+          {project.name}
         </Link>
         <span className="mx-2">/</span>
         <span className="text-white">{collection.name}</span>
@@ -94,34 +106,6 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
         <p className="mt-4 text-sm text-gray-500">
           Minted: {new Date(collection.mintDate).toLocaleDateString()}
         </p>
-      )}
-
-      {collection.marketSnapshots?.length > 0 && (
-        <section className="mt-8">
-          <h2 className="mb-4 text-lg font-semibold text-gray-300">Market History</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-gray-800 text-gray-500">
-                <tr>
-                  <th className="pb-2">Date</th>
-                  <th className="pb-2">Floor</th>
-                  <th className="pb-2">Volume 24h</th>
-                  <th className="pb-2">Holders</th>
-                </tr>
-              </thead>
-              <tbody className="text-gray-300">
-                {collection.marketSnapshots.slice(0, 14).map((s, i) => (
-                  <tr key={i} className="border-b border-gray-800/50">
-                    <td className="py-2">{new Date(s.timestamp).toLocaleDateString()}</td>
-                    <td>{s.floorPrice !== null ? formatPrice(s.floorPrice, currency) : '—'}</td>
-                    <td>{s.volume24h !== null ? formatPrice(s.volume24h, currency) : '—'}</td>
-                    <td>{s.holderCount?.toLocaleString() ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
       )}
     </main>
   );
