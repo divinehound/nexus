@@ -109,14 +109,20 @@ function BlockchainResultCard({ info }: { info: BlockchainContractInfo }) {
     );
   }
 
+  const initials = (info.name || info.symbol || '?').slice(0, 2).toUpperCase();
+
   return (
     <div className="flex items-center gap-4 rounded-xl border border-dashed border-gray-700 px-4 py-3 transition-colors hover:border-gray-500">
-      {info.imageUrl && (
+      {info.imageUrl ? (
         <img
           src={info.imageUrl}
           alt={info.name}
           className="h-12 w-12 rounded-lg object-cover"
         />
+      ) : (
+        <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-gray-700 bg-gray-900 text-xs font-semibold text-gray-300">
+          {initials}
+        </div>
       )}
       <div className="flex-1">
         <div className="flex items-center gap-2">
