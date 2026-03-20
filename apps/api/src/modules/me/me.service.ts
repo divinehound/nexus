@@ -26,6 +26,8 @@ import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { randomBytes } from 'crypto';
 import { createPublicClient, http, isAddress } from 'viem';
 import { mainnet } from 'viem/chains';
+import nacl from 'tweetnacl';
+import bs58 from 'bs58';
 import { HoldingsService } from '../holdings/holdings.service';
 
 @Injectable()
@@ -57,6 +59,25 @@ export class MeService {
     return `${lines.join('\n')}\n`;
   }
 
+  private decodeSolanaPublicKey(address: string): Uint8Array {
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) {
+      throw new BadRequestException({ error: 'VALIDATION_ERROR', message: 'Invalid Solana wallet address' });
+    }
+
+    let decoded: Uint8Array;
+    try {
+      decoded = bs58.decode(address);
+    } catch {
+      throw new BadRequestException({ error: 'VALIDATION_ERROR', message: 'Invalid Solana wallet address' });
+    }
+
+    if (decoded.length !== 32 || bs58.encode(decoded) !== address) {
+      throw new BadRequestException({ error: 'VALIDATION_ERROR', message: 'Invalid Solana wallet address' });
+    }
+
+    return decoded;
+  }
+
   normalizeAndValidateAddress(chain: string, address: string): string {
     const value = address?.trim();
     if (!value) {
@@ -64,9 +85,7 @@ export class MeService {
     }
 
     if (chain === 'solana') {
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)) {
-        throw new BadRequestException({ error: 'VALIDATION_ERROR', message: 'Invalid Solana wallet address' });
-      }
+      this.decodeSolanaPublicKey(value);
       return value;
     }
 
@@ -85,6 +104,24 @@ export class MeService {
   private async verifyEvmSignature(address: string, message: string, signature: string) {
     const client = createPublicClient({ chain: mainnet, transport: http() });
     return client.verifyMessage({ address: address as `0x${string}`, message, signature: signature as `0x${string}` });
+  }
+
+  private verifySolanaSignature(address: string, message: string, signature: string): boolean {
+    const publicKey = this.decodeSolanaPublicKey(address);
+
+    let signatureBytes: Uint8Array;
+    try {
+      signatureBytes = bs58.decode(signature);
+    } catch {
+      throw new ForbiddenException({ error: 'INVALID_SIGNATURE', message: 'Signature could not be verified' });
+    }
+
+    if (signatureBytes.length !== 64) {
+      throw new ForbiddenException({ error: 'INVALID_SIGNATURE', message: 'Signature could not be verified' });
+    }
+
+    const messageBytes = new TextEncoder().encode(message);
+    return nacl.sign.detached.verify(messageBytes, signatureBytes, publicKey);
   }
 
   private preferredDisplayName(user: typeof users.$inferSelect, userWallets: (typeof wallets.$inferSelect)[]) {
@@ -135,11 +172,42 @@ export class MeService {
     return this.getMe(userId);
   }
 
-  async createWalletChallenge(userId: string, body: { chain: string; address: string; purpose: 'link_wallet' }) {
+  async createWalletChallenge(
+    userId: string,
+    body: { chain: string; address: string; purpose: 'link_wallet' | 'move_wallet'; confirmationToken?: string },
+  ) {
     const chain = body.chain;
     const address = this.normalizeAndValidateAddress(chain, body.address);
+
+    if (body.purpose === 'move_wallet') {
+      if (!body.confirmationToken) {
+        throw new BadRequestException({ error: 'VALIDATION_ERROR', message: 'confirmationToken is required for move_wallet' });
+      }
+
+      const confirmation = await this.db.query.walletMoveConfirmations.findFirst({
+        where: and(
+          eq(walletMoveConfirmations.toUserId, userId),
+          eq(walletMoveConfirmations.chain, chain as any),
+          eq(walletMoveConfirmations.address, address),
+          eq(walletMoveConfirmations.token, body.confirmationToken),
+          isNull(walletMoveConfirmations.usedAt),
+          gt(walletMoveConfirmations.expiresAt, new Date()),
+        ),
+      });
+
+      if (!confirmation) {
+        throw new ForbiddenException({ error: 'INVALID_CONFIRMATION_TOKEN', message: 'Confirmation token is invalid or expired' });
+      }
+    }
+
     const nonce = randomBytes(16).toString('hex');
-    const message = this.formatWalletMessage({ purpose: body.purpose, chain, address, nonce });
+    const message = this.formatWalletMessage({
+      purpose: body.purpose,
+      chain,
+      address,
+      nonce,
+      confirmationToken: body.purpose === 'move_wallet' ? body.confirmationToken : undefined,
+    });
 
     await this.db.insert(walletLinkChallenges).values({
       userId,
@@ -175,11 +243,9 @@ export class MeService {
       throw new ForbiddenException({ error: 'INVALID_OR_EXPIRED_CHALLENGE', message: 'Challenge not found or expired' });
     }
 
-    if (chain === 'solana') {
-      throw new BadRequestException({ error: 'UNSUPPORTED_CHAIN_SIGNATURE', message: 'Solana verification is not enabled for wallet linking yet' });
-    }
-
-    const validSignature = await this.verifyEvmSignature(address, body.message, body.signature);
+    const validSignature = chain === 'solana'
+      ? this.verifySolanaSignature(address, body.message, body.signature)
+      : await this.verifyEvmSignature(address, body.message, body.signature);
     if (!validSignature) {
       throw new ForbiddenException({ error: 'INVALID_SIGNATURE', message: 'Signature could not be verified' });
     }
@@ -263,19 +329,36 @@ export class MeService {
       throw new ForbiddenException({ error: 'INVALID_CONFIRMATION_TOKEN', message: 'Confirmation token is invalid or expired' });
     }
 
+    const challenge = await this.db.query.walletLinkChallenges.findFirst({
+      where: and(
+        eq(walletLinkChallenges.userId, userId),
+        eq(walletLinkChallenges.chain, chain as any),
+        eq(walletLinkChallenges.address, address),
+        eq(walletLinkChallenges.purpose, 'move_wallet'),
+        eq(walletLinkChallenges.message, body.message),
+        isNull(walletLinkChallenges.usedAt),
+        gt(walletLinkChallenges.expiresAt, new Date()),
+      ),
+      orderBy: [desc(walletLinkChallenges.createdAt)],
+    });
+
+    if (!challenge) {
+      throw new ForbiddenException({ error: 'INVALID_OR_EXPIRED_CHALLENGE', message: 'Challenge not found or expired' });
+    }
+
     const expectedPrefix = `Confirmation Token: ${body.confirmationToken}`;
     if (!body.message.includes(expectedPrefix)) {
       throw new ForbiddenException({ error: 'INVALID_MOVE_MESSAGE', message: 'Signed message must include confirmation token' });
     }
 
-    if (chain === 'solana') {
-      throw new BadRequestException({ error: 'UNSUPPORTED_CHAIN_SIGNATURE', message: 'Solana verification is not enabled for wallet moves yet' });
-    }
-
-    const validSignature = await this.verifyEvmSignature(address, body.message, body.signature);
+    const validSignature = chain === 'solana'
+      ? this.verifySolanaSignature(address, body.message, body.signature)
+      : await this.verifyEvmSignature(address, body.message, body.signature);
     if (!validSignature) {
       throw new ForbiddenException({ error: 'INVALID_SIGNATURE', message: 'Signature could not be verified' });
     }
+
+    await this.db.update(walletLinkChallenges).set({ usedAt: new Date() }).where(eq(walletLinkChallenges.id, challenge.id));
 
     const movedWallet = await this.db.transaction(async (tx) => {
       const walletRow = await tx.query.wallets.findFirst({ where: eq(wallets.id, confirmation.walletId) });

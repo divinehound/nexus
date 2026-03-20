@@ -2,6 +2,8 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useAccount, useSignMessage } from 'wagmi';
+import { useWallet } from '@solana/wallet-adapter-react';
+import bs58 from 'bs58';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
 import {
@@ -46,6 +48,7 @@ function MePageContent() {
   const { accessToken } = useAuth();
   const { address: connectedAddress } = useAccount();
   const { signMessageAsync } = useSignMessage();
+  const { publicKey: solanaPublicKey, signMessage: signSolanaMessage } = useWallet();
 
   const [me, setMe] = useState<MeResponse | null>(null);
   const [wallets, setWallets] = useState<LinkedWallet[]>([]);
@@ -167,25 +170,30 @@ function MePageContent() {
     }
   };
 
-  const buildMoveMessage = (chain: string, address: string, nonce: string, confirmationToken: string) => {
-    return [
-      'NEXUS Wallet Verification',
-      'Purpose: move_wallet',
-      `Chain: ${chain}`,
-      `Address: ${address.toLowerCase()}`,
-      `Nonce: ${nonce}`,
-      `Confirmation Token: ${confirmationToken}`,
-      '',
-    ].join('\n');
+  const signWalletChallenge = async (chain: string, message: string) => {
+    if (chain === 'solana') {
+      if (!signSolanaMessage) {
+        throw new Error('Connected Solana wallet cannot sign messages. Use a wallet that supports signMessage.');
+      }
+      const signatureBytes = await signSolanaMessage(new TextEncoder().encode(message));
+      return bs58.encode(signatureBytes);
+    }
+
+    return signMessageAsync({ message });
   };
 
   const onAddWallet = async (e: FormEvent) => {
     e.preventDefault();
     if (!accessToken) return;
 
-    const normalizedAddress = addAddress.trim().toLowerCase();
+    const normalizedAddress = addChain === 'solana' ? addAddress.trim() : addAddress.trim().toLowerCase();
     if (!normalizedAddress) {
       setAddWalletError('Wallet address is required');
+      return;
+    }
+
+    if (addChain === 'solana' && !signSolanaMessage) {
+      setAddWalletError('Connected Solana wallet cannot sign messages. Use a wallet that supports signMessage.');
       return;
     }
 
@@ -199,7 +207,7 @@ function MePageContent() {
         accessToken,
       );
 
-      const signature = await signMessageAsync({ message: challenge.message });
+      const signature = await signWalletChallenge(addChain, challenge.message);
       const verifyResult = await verifyWalletLink(
         {
           chain: addChain,
@@ -239,21 +247,27 @@ function MePageContent() {
     setMoveError(null);
 
     try {
-      const nonce = crypto.randomUUID().replace(/-/g, '').slice(0, 32);
-      const message = buildMoveMessage(
-        moveConfirmation.chain,
-        moveConfirmation.address,
-        nonce,
-        moveConfirmation.confirmationToken,
+      if (moveConfirmation.chain === 'solana' && !signSolanaMessage) {
+        throw new Error('Connected Solana wallet cannot sign messages. Use a wallet that supports signMessage.');
+      }
+
+      const challenge = await createWalletChallenge(
+        {
+          chain: moveConfirmation.chain,
+          address: moveConfirmation.address,
+          purpose: 'move_wallet',
+          confirmationToken: moveConfirmation.confirmationToken,
+        },
+        accessToken,
       );
-      const signature = await signMessageAsync({ message });
+      const signature = await signWalletChallenge(moveConfirmation.chain, challenge.message);
 
       await moveWalletLink(
         {
           chain: moveConfirmation.chain,
           address: moveConfirmation.address,
           confirmationToken: moveConfirmation.confirmationToken,
-          message,
+          message: challenge.message,
           signature,
         },
         accessToken,
@@ -454,6 +468,7 @@ function MePageContent() {
               <option value="ethereum">Ethereum</option>
               <option value="base">Base</option>
               <option value="polygon">Polygon</option>
+              <option value="solana">Solana</option>
             </select>
           </label>
 
@@ -463,18 +478,30 @@ function MePageContent() {
               value={addAddress}
               onChange={(e) => setAddAddress(e.target.value)}
               className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
-              placeholder="0x..."
+              placeholder={addChain === 'solana' ? 'Solana base58 address' : '0x...'}
             />
           </label>
 
-          {connectedAddress && (
-            <button
-              type="button"
-              className="text-xs text-purple-400 hover:text-purple-300"
-              onClick={() => setAddAddress(connectedAddress)}
-            >
-              Use connected wallet ({truncateAddress(connectedAddress)})
-            </button>
+          {addChain === 'solana' ? (
+            solanaPublicKey && (
+              <button
+                type="button"
+                className="text-xs text-purple-400 hover:text-purple-300"
+                onClick={() => setAddAddress(solanaPublicKey.toBase58())}
+              >
+                Use connected wallet ({truncateAddress(solanaPublicKey.toBase58())})
+              </button>
+            )
+          ) : (
+            connectedAddress && (
+              <button
+                type="button"
+                className="text-xs text-purple-400 hover:text-purple-300"
+                onClick={() => setAddAddress(connectedAddress)}
+              >
+                Use connected wallet ({truncateAddress(connectedAddress)})
+              </button>
+            )
           )}
 
           <div>

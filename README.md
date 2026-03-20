@@ -161,6 +161,7 @@ Returns profile + wallets and computed `displayName` fallback order:
   "purpose": "link_wallet"
 }
 ```
+For wallet move confirmations, use `purpose: "move_wallet"` and pass `confirmationToken`.
 Response:
 ```json
 {
@@ -183,6 +184,10 @@ Behavior:
 - already owned by current user: idempotent success
 - owned by another user: `409 WALLET_ALREADY_LINKED` with `confirmationToken`
 
+Signature verification notes:
+- EVM chains: standard signed challenge message verification
+- Solana: verifies base58 `signMessage` signature against the exact challenge message and base58 public key
+
 #### `POST /api/me/wallets/move`
 ```json
 {
@@ -194,6 +199,8 @@ Behavior:
 }
 ```
 Behavior:
+- requires valid `confirmationToken`
+- requires a fresh `move_wallet` challenge + signature over that challenge message
 - validates token expiry + signature
 - atomically reassigns wallet
 - records wallet ownership move audit row

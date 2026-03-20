@@ -293,7 +293,7 @@ export function getMyWallets(token: string) {
 }
 
 export function createWalletChallenge(
-  input: { chain: string; address: string; purpose: 'link_wallet' },
+  input: { chain: string; address: string; purpose: 'link_wallet' | 'move_wallet'; confirmationToken?: string },
   token: string,
 ) {
   return apiFetch<WalletChallengeResponse>('/me/wallets/challenge', {

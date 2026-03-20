@@ -44,7 +44,7 @@ export class MeController {
   @ApiOperation({ summary: 'Create wallet linking challenge message' })
   createWalletChallenge(
     @Req() req: AuthRequest,
-    @Body() body: { chain: string; address: string; purpose: 'link_wallet' },
+    @Body() body: { chain: string; address: string; purpose: 'link_wallet' | 'move_wallet'; confirmationToken?: string },
   ) {
     return this.meService.createWalletChallenge(req.user.sub, body);
   }
