@@ -1,195 +1,476 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useAccount, useSignMessage } from 'wagmi';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
-import { apiFetch } from '@/lib/api';
-import { truncateAddress, formatPrice, chainCurrency } from '@/lib/utils';
+import {
+  ApiError,
+  LinkedWallet,
+  MeResponse,
+  createWalletChallenge,
+  getMe,
+  moveWalletLink,
+  patchMyProfile,
+  removeWallet,
+  setPrimaryWallet,
+  verifyWalletLink,
+} from '@/lib/api';
+import { truncateAddress } from '@/lib/utils';
 
-interface Holding {
-  project: { id: string; name: string; slug: string; imageUrl: string | null };
-  collections: { collection: { id: string; name: string; chain: string; floorPrice: number | null }; quantity: number }[];
+interface ProfileFormState {
+  displayName: string;
+  avatarUrl: string;
+  bio: string;
 }
 
-interface MyEvent {
-  id: string;
-  title: string;
-  eventType: string;
-  startTime: string;
-  status: string;
-  link: string | null;
+interface MoveConfirmationState {
+  chain: string;
+  address: string;
+  confirmationToken: string;
 }
 
-interface MyActivity {
-  id: string;
-  activityType: string;
-  walletAddress: string | null;
-  price: number | null;
-  message: string | null;
-  createdAt: string;
-}
-
-export default function MyCommunitiesPage() {
+export default function MePage() {
   return (
     <AuthGate>
-      <MyCommunitiesContent />
+      <MePageContent />
     </AuthGate>
   );
 }
 
-function MyCommunitiesContent() {
-  const { user } = useAuth();
-  const address = user?.wallets[0]?.address;
+function MePageContent() {
+  const { accessToken } = useAuth();
+  const { address: connectedAddress } = useAccount();
+  const { signMessageAsync } = useSignMessage();
 
-  const [holdings, setHoldings] = useState<Holding[]>([]);
-  const [events, setEvents] = useState<MyEvent[]>([]);
-  const [activity, setActivity] = useState<MyActivity[]>([]);
+  const [me, setMe] = useState<MeResponse | null>(null);
+  const [wallets, setWallets] = useState<LinkedWallet[]>([]);
+  const [profileForm, setProfileForm] = useState<ProfileFormState>({ displayName: '', avatarUrl: '', bio: '' });
+
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileStatus, setProfileStatus] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
+  const [walletActionId, setWalletActionId] = useState<string | null>(null);
+  const [walletError, setWalletError] = useState<string | null>(null);
+
+  const [addChain, setAddChain] = useState('ethereum');
+  const [addAddress, setAddAddress] = useState('');
+  const [addWalletLoading, setAddWalletLoading] = useState(false);
+  const [addWalletSuccess, setAddWalletSuccess] = useState<string | null>(null);
+  const [addWalletError, setAddWalletError] = useState<string | null>(null);
+
+  const [moveConfirmation, setMoveConfirmation] = useState<MoveConfirmationState | null>(null);
+  const [moveLoading, setMoveLoading] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+
+  const hasToken = Boolean(accessToken);
+
+  const profileDisplayName = useMemo(() => me?.displayName || 'Unnamed user', [me?.displayName]);
+
+  const fetchMe = async () => {
+    if (!accessToken) return;
+
+    const meData = await getMe(accessToken);
+    setMe(meData);
+    setWallets(meData.wallets || []);
+    setProfileForm({
+      displayName: meData.displayName || '',
+      avatarUrl: meData.avatarUrl || '',
+      bio: meData.bio || '',
+    });
+  };
 
   useEffect(() => {
-    if (!address) return;
+    if (!accessToken) return;
+
     setLoading(true);
-    Promise.all([
-      apiFetch<Holding[]>(`/wallets/${address}/holdings`).catch(() => []),
-      apiFetch<MyEvent[]>(`/wallets/${address}/events`).catch(() => []),
-      apiFetch<MyActivity[]>(`/wallets/${address}/activity`).catch(() => []),
-    ]).then(([h, e, a]) => {
-      setHoldings(h);
-      setEvents(e);
-      setActivity(a);
-      setLoading(false);
-    });
-  }, [address]);
+    setLoadError(null);
+
+    fetchMe()
+      .catch((err) => {
+        setLoadError(err instanceof Error ? err.message : 'Failed to load your profile');
+      })
+      .finally(() => setLoading(false));
+  }, [accessToken]);
+
+  const onSaveProfile = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!accessToken) return;
+
+    setProfileSaving(true);
+    setProfileError(null);
+    setProfileStatus(null);
+
+    try {
+      const updated = await patchMyProfile(
+        {
+          displayName: profileForm.displayName.trim() || undefined,
+          avatarUrl: profileForm.avatarUrl.trim() || undefined,
+          bio: profileForm.bio.trim() || undefined,
+        },
+        accessToken,
+      );
+      setMe(updated);
+      setWallets(updated.wallets || wallets);
+      setProfileStatus('Profile saved');
+    } catch (err) {
+      setProfileError(err instanceof Error ? err.message : 'Failed to save profile');
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
+  const onSetPrimary = async (walletId: string) => {
+    if (!accessToken) return;
+    setWalletError(null);
+    setWalletActionId(walletId);
+
+    try {
+      await setPrimaryWallet(walletId, accessToken);
+      await fetchMe();
+    } catch (err) {
+      setWalletError(err instanceof Error ? err.message : 'Failed to set primary wallet');
+    } finally {
+      setWalletActionId(null);
+    }
+  };
+
+  const onRemoveWallet = async (walletId: string) => {
+    if (!accessToken) return;
+    setWalletError(null);
+    setWalletActionId(walletId);
+
+    try {
+      await removeWallet(walletId, accessToken);
+      await fetchMe();
+    } catch (err) {
+      setWalletError(err instanceof Error ? err.message : 'Failed to remove wallet');
+    } finally {
+      setWalletActionId(null);
+    }
+  };
+
+  const buildMoveMessage = (chain: string, address: string, nonce: string, confirmationToken: string) => {
+    return [
+      'NEXUS Wallet Verification',
+      'Purpose: move_wallet',
+      `Chain: ${chain}`,
+      `Address: ${address.toLowerCase()}`,
+      `Nonce: ${nonce}`,
+      `Confirmation Token: ${confirmationToken}`,
+      '',
+    ].join('\n');
+  };
+
+  const onAddWallet = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!accessToken) return;
+
+    const normalizedAddress = addAddress.trim().toLowerCase();
+    if (!normalizedAddress) {
+      setAddWalletError('Wallet address is required');
+      return;
+    }
+
+    setAddWalletLoading(true);
+    setAddWalletError(null);
+    setAddWalletSuccess(null);
+
+    try {
+      const challenge = await createWalletChallenge(
+        { chain: addChain, address: normalizedAddress, purpose: 'link_wallet' },
+        accessToken,
+      );
+
+      const signature = await signMessageAsync({ message: challenge.message });
+      const verifyResult = await verifyWalletLink(
+        {
+          chain: addChain,
+          address: normalizedAddress,
+          message: challenge.message,
+          signature,
+        },
+        accessToken,
+      );
+
+      await fetchMe();
+      setAddWalletSuccess(
+        verifyResult.idempotent
+          ? 'Wallet already linked to your account'
+          : 'Wallet linked successfully',
+      );
+      setAddAddress('');
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && err.data?.error === 'WALLET_ALREADY_LINKED' && err.data?.confirmationToken) {
+        setMoveConfirmation({
+          chain: addChain,
+          address: normalizedAddress,
+          confirmationToken: err.data.confirmationToken,
+        });
+      } else {
+        setAddWalletError(err instanceof Error ? err.message : 'Failed to link wallet');
+      }
+    } finally {
+      setAddWalletLoading(false);
+    }
+  };
+
+  const onConfirmWalletMove = async () => {
+    if (!accessToken || !moveConfirmation) return;
+
+    setMoveLoading(true);
+    setMoveError(null);
+
+    try {
+      const nonce = crypto.randomUUID().replace(/-/g, '').slice(0, 32);
+      const message = buildMoveMessage(
+        moveConfirmation.chain,
+        moveConfirmation.address,
+        nonce,
+        moveConfirmation.confirmationToken,
+      );
+      const signature = await signMessageAsync({ message });
+
+      await moveWalletLink(
+        {
+          chain: moveConfirmation.chain,
+          address: moveConfirmation.address,
+          confirmationToken: moveConfirmation.confirmationToken,
+          message,
+          signature,
+        },
+        accessToken,
+      );
+
+      await fetchMe();
+      setMoveConfirmation(null);
+      setAddWalletSuccess('Wallet moved and linked to your account');
+      setAddAddress('');
+    } catch (err) {
+      setMoveError(err instanceof Error ? err.message : 'Failed to move wallet');
+    } finally {
+      setMoveLoading(false);
+    }
+  };
+
+  if (!hasToken) {
+    return null;
+  }
 
   if (loading) {
     return (
-      <main className="mx-auto max-w-7xl px-4 py-8">
-        <div className="flex items-center gap-3">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-600 border-t-purple-500" />
-          <span className="text-gray-400">Loading your communities...</span>
-        </div>
+      <main className="mx-auto max-w-4xl px-4 py-8">
+        <p className="text-gray-400">Loading profile...</p>
+      </main>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <main className="mx-auto max-w-4xl px-4 py-8">
+        <p className="text-red-400">{loadError}</p>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8">
-      <h1 className="text-3xl font-bold">My Communities</h1>
-      <p className="mt-2 text-gray-400">
-        Signed in as {user?.wallets[0]?.ensName || user?.wallets[0]?.snsName || truncateAddress(address || '')}
-      </p>
+    <main className="mx-auto max-w-4xl space-y-8 px-4 py-8">
+      <section className="rounded-xl border border-gray-800 p-6">
+        <h1 className="text-2xl font-semibold">My Identity</h1>
+        <p className="mt-1 text-sm text-gray-400">Current display name: {profileDisplayName}</p>
 
-      {/* Holdings */}
-      <section className="mt-8">
-        <h2 className="mb-4 text-lg font-semibold text-gray-300">
-          My Projects ({holdings.length})
-        </h2>
-        {holdings.length === 0 ? (
-          <p className="text-sm text-gray-500">No holdings found for this wallet.</p>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {holdings.map((h) => (
-              <Link
-                key={h.project.id}
-                href={`/project/${h.project.slug}`}
-                className="rounded-xl border border-gray-800 p-4 transition-colors hover:border-gray-600"
-              >
-                <div className="flex items-center gap-3">
-                  {h.project.imageUrl && (
-                    <img src={h.project.imageUrl} alt={h.project.name} className="h-10 w-10 rounded-lg object-cover" />
-                  )}
-                  <h3 className="font-medium">{h.project.name}</h3>
-                </div>
-                <div className="mt-3 space-y-1">
-                  {h.collections.map((c) => (
-                    <div key={c.collection.id} className="flex items-center justify-between text-sm">
-                      <span className="text-gray-400">{c.collection.name}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-gray-500">x{c.quantity}</span>
-                        {c.collection.floorPrice !== null && (
-                          <span>{formatPrice(c.collection.floorPrice, chainCurrency(c.collection.chain))}</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Link>
-            ))}
-          </div>
-        )}
+        <form className="mt-6 space-y-4" onSubmit={onSaveProfile}>
+          <label className="block space-y-1">
+            <span className="text-sm text-gray-300">Display name</span>
+            <input
+              value={profileForm.displayName}
+              onChange={(e) => {
+                setProfileForm((prev) => ({ ...prev, displayName: e.target.value }));
+                setProfileStatus(null);
+                setProfileError(null);
+              }}
+              className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+              placeholder={me?.displayName || 'Display name'}
+            />
+          </label>
+
+          <label className="block space-y-1">
+            <span className="text-sm text-gray-300">Avatar URL</span>
+            <input
+              value={profileForm.avatarUrl}
+              onChange={(e) => {
+                setProfileForm((prev) => ({ ...prev, avatarUrl: e.target.value }));
+                setProfileStatus(null);
+                setProfileError(null);
+              }}
+              className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+              placeholder="https://..."
+            />
+          </label>
+
+          <label className="block space-y-1">
+            <span className="text-sm text-gray-300">Bio</span>
+            <textarea
+              value={profileForm.bio}
+              onChange={(e) => {
+                setProfileForm((prev) => ({ ...prev, bio: e.target.value }));
+                setProfileStatus(null);
+                setProfileError(null);
+              }}
+              className="h-24 w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+              placeholder="Tell people who you are"
+            />
+          </label>
+
+          <button
+            type="submit"
+            disabled={profileSaving}
+            className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-500 disabled:opacity-60"
+          >
+            {profileSaving ? 'Saving...' : 'Save profile'}
+          </button>
+
+          {profileStatus && <p className="text-sm text-green-400">{profileStatus}</p>}
+          {profileError && <p className="text-sm text-red-400">{profileError}</p>}
+        </form>
       </section>
 
-      <div className="mt-10 grid grid-cols-1 gap-8 lg:grid-cols-2">
-        {/* Events */}
-        <section>
-          <h2 className="mb-4 text-lg font-semibold text-gray-300">Upcoming Events</h2>
-          {events.length === 0 ? (
-            <p className="text-sm text-gray-500">No upcoming events from your communities.</p>
-          ) : (
-            <div className="space-y-2">
-              {events.map((e) => (
-                <div key={e.id} className="rounded-lg border border-gray-800 px-4 py-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className={`mr-2 text-xs font-medium uppercase ${
-                        e.status === 'live' ? 'text-red-400' : 'text-green-400'
-                      }`}>
-                        {e.status}
-                      </span>
-                      <span className="text-sm font-medium">{e.title}</span>
-                    </div>
-                    <span className="text-xs text-gray-500">
-                      {new Date(e.startTime).toLocaleDateString()}
-                    </span>
-                  </div>
-                  {e.link && (
-                    <a href={e.link} target="_blank" rel="noopener noreferrer" className="mt-1 block text-xs text-purple-400 hover:text-purple-300">
-                      Open link
-                    </a>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+      <section className="rounded-xl border border-gray-800 p-6">
+        <h2 className="text-xl font-semibold">Linked Wallets</h2>
 
-        {/* Activity */}
-        <section>
-          <h2 className="mb-4 text-lg font-semibold text-gray-300">Recent Activity</h2>
-          {activity.length === 0 ? (
-            <p className="text-sm text-gray-500">No recent activity from your communities.</p>
+        <div className="mt-4 space-y-2">
+          {wallets.length === 0 ? (
+            <p className="text-sm text-gray-500">No linked wallets.</p>
           ) : (
-            <div className="space-y-2">
-              {activity.map((a) => (
-                <div key={a.id} className="rounded-lg border border-gray-800 px-4 py-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className={`rounded px-1.5 py-0.5 text-xs ${
-                        a.activityType === 'sale' ? 'bg-green-900/30 text-green-400' :
-                        a.activityType === 'flex' ? 'bg-purple-900/30 text-purple-400' :
-                        'bg-gray-800 text-gray-400'
-                      }`}>
-                        {a.activityType}
-                      </span>
-                      {a.walletAddress && (
-                        <span className="text-xs text-gray-500">{truncateAddress(a.walletAddress)}</span>
-                      )}
-                    </div>
-                    <span className="text-xs text-gray-500">
-                      {new Date(a.createdAt).toLocaleDateString()}
-                    </span>
-                  </div>
-                  {a.message && <p className="mt-1 text-sm text-gray-400">{a.message}</p>}
-                  {a.price !== null && (
-                    <p className="mt-1 text-sm font-medium">{a.price} ETH</p>
-                  )}
+            wallets.map((wallet) => (
+              <div key={wallet.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-800 p-3">
+                <div>
+                  <p className="text-sm font-medium text-white">
+                    {wallet.chain.toUpperCase()} {truncateAddress(wallet.address)}
+                    {wallet.isPrimary && <span className="ml-2 text-xs text-green-400">PRIMARY</span>}
+                  </p>
+                  <p className="text-xs text-gray-500">{wallet.address}</p>
                 </div>
-              ))}
-            </div>
+                <div className="flex items-center gap-2">
+                  {!wallet.isPrimary && (
+                    <button
+                      onClick={() => onSetPrimary(wallet.id)}
+                      disabled={walletActionId === wallet.id}
+                      className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-200 hover:border-gray-500 disabled:opacity-60"
+                    >
+                      Set Primary
+                    </button>
+                  )}
+                  <button
+                    onClick={() => onRemoveWallet(wallet.id)}
+                    disabled={walletActionId === wallet.id}
+                    className="rounded-md border border-red-800 px-3 py-1.5 text-xs text-red-300 hover:border-red-600 disabled:opacity-60"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))
           )}
-        </section>
-      </div>
+        </div>
+
+        {walletError && <p className="mt-3 text-sm text-red-400">{walletError}</p>}
+      </section>
+
+      <section className="rounded-xl border border-gray-800 p-6">
+        <h2 className="text-xl font-semibold">Add Wallet</h2>
+        <p className="mt-1 text-sm text-gray-400">EVM flow: challenge to signature to verify</p>
+
+        <form className="mt-4 space-y-3" onSubmit={onAddWallet}>
+          <label className="block space-y-1">
+            <span className="text-sm text-gray-300">Chain</span>
+            <select
+              value={addChain}
+              onChange={(e) => setAddChain(e.target.value)}
+              className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+            >
+              <option value="ethereum">Ethereum</option>
+              <option value="base">Base</option>
+              <option value="polygon">Polygon</option>
+            </select>
+          </label>
+
+          <label className="block space-y-1">
+            <span className="text-sm text-gray-300">Wallet address</span>
+            <input
+              value={addAddress}
+              onChange={(e) => setAddAddress(e.target.value)}
+              className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+              placeholder="0x..."
+            />
+          </label>
+
+          {connectedAddress && (
+            <button
+              type="button"
+              className="text-xs text-purple-400 hover:text-purple-300"
+              onClick={() => setAddAddress(connectedAddress)}
+            >
+              Use connected wallet ({truncateAddress(connectedAddress)})
+            </button>
+          )}
+
+          <div>
+            <button
+              type="submit"
+              disabled={addWalletLoading}
+              className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-500 disabled:opacity-60"
+            >
+              {addWalletLoading ? 'Linking...' : 'Link wallet'}
+            </button>
+          </div>
+
+          {addWalletSuccess && <p className="text-sm text-green-400">{addWalletSuccess}</p>}
+          {addWalletError && <p className="text-sm text-red-400">{addWalletError}</p>}
+        </form>
+      </section>
+
+      {moveConfirmation && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/70" />
+          <div className="fixed inset-0 z-[51] flex items-center justify-center px-4">
+            <div className="w-full max-w-lg rounded-xl border border-gray-700 bg-gray-900 p-6">
+              <h3 className="text-lg font-semibold">Confirm Wallet Move</h3>
+              <p className="mt-2 text-sm text-gray-300">
+                This wallet is linked to another account. Confirm to transfer ownership to your current account.
+              </p>
+              <p className="mt-2 text-xs text-gray-500">Wallet: {moveConfirmation.address}</p>
+
+              <div className="mt-6 flex gap-2">
+                <button
+                  className="rounded-lg border border-gray-700 px-4 py-2 text-sm text-gray-300 hover:border-gray-500"
+                  onClick={() => {
+                    if (moveLoading) return;
+                    setMoveConfirmation(null);
+                    setMoveError(null);
+                  }}
+                  disabled={moveLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-60"
+                  onClick={onConfirmWalletMove}
+                  disabled={moveLoading}
+                >
+                  {moveLoading ? 'Confirming...' : 'Confirm Transfer'}
+                </button>
+              </div>
+
+              {moveError && <p className="mt-3 text-sm text-red-400">{moveError}</p>}
+            </div>
+          </div>
+        </>
+      )}
     </main>
   );
 }

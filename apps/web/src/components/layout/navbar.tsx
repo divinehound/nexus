@@ -17,7 +17,7 @@ export function Navbar() {
           <div className="hidden items-center gap-6 md:flex">
             <NavLink href="/discover">Discover</NavLink>
             <NavLink href="/search">Search</NavLink>
-            {user && <NavLink href="/me">My Communities</NavLink>}
+            {user && <NavLink href="/me">Me</NavLink>}
             {user?.role === 'admin' && (
               <NavLink href="/admin">Admin</NavLink>
             )}
