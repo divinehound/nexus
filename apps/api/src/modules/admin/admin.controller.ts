@@ -188,4 +188,10 @@ export class AdminController {
   refreshMetrics() {
     return this.adminService.refreshCollectionMetrics();
   }
+
+  @Post('indexing/wallet/:walletId/refresh')
+  @ApiOperation({ summary: 'Manually trigger holdings indexing refresh for a wallet' })
+  refreshWalletIndexing(@Param('walletId') walletId: string) {
+    return this.adminService.refreshWalletIndexing(walletId);
+  }
 }

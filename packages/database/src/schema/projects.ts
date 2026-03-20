@@ -54,6 +54,12 @@ export const intakeStatusEnum = pgEnum('collection_intake_status', [
   'failed',
 ]);
 
+export const trackingTierEnum = pgEnum('tracking_tier', [
+  'active',
+  'lightweight',
+  'suppressed',
+]);
+
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 255 }).notNull(),
@@ -100,6 +106,9 @@ export const collections = pgTable(
     }),
     mappingConfidence: numeric('mapping_confidence', { precision: 4, scale: 3 }),
     verificationNotes: text('verification_notes'),
+    trackingTier: trackingTierEnum('tracking_tier').default('lightweight').notNull(),
+    qualityScore: numeric('quality_score', { precision: 5, scale: 2 }),
+    qualityReason: text('quality_reason'),
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
   },

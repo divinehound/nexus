@@ -11,6 +11,8 @@ import {
   walletLinkChallenges,
   walletMoveConfirmations,
   walletOwnershipMoves,
+  walletHoldingsSnapshots,
+  walletIndexingJobs,
 } from './users';
 import { projectWiki, wikiSuggestions } from './wiki';
 import { events } from './events';
@@ -66,6 +68,8 @@ export const usersRelations = relations(users, ({ many }) => ({
   walletOwnershipMovesAsTo: many(walletOwnershipMoves, {
     relationName: 'wallet_ownership_to_user',
   }),
+  walletHoldingsSnapshots: many(walletHoldingsSnapshots),
+  walletIndexingJobs: many(walletIndexingJobs),
   wikiSuggestions: many(wikiSuggestions),
   ownedProjects: many(projectOwners),
   collectionIntakeRequests: many(collectionIntakeRequests),
@@ -79,6 +83,8 @@ export const walletsRelations = relations(wallets, ({ one, many }) => ({
   linkChallenges: many(walletLinkChallenges),
   moveConfirmations: many(walletMoveConfirmations),
   ownershipMoves: many(walletOwnershipMoves),
+  holdingsSnapshots: many(walletHoldingsSnapshots),
+  indexingJobs: many(walletIndexingJobs),
 }));
 
 export const walletLinkChallengesRelations = relations(walletLinkChallenges, ({ one }) => ({
@@ -119,6 +125,28 @@ export const walletOwnershipMovesRelations = relations(walletOwnershipMoves, ({ 
     fields: [walletOwnershipMoves.toUserId],
     references: [users.id],
     relationName: 'wallet_ownership_to_user',
+  }),
+}));
+
+export const walletHoldingsSnapshotsRelations = relations(walletHoldingsSnapshots, ({ one }) => ({
+  user: one(users, {
+    fields: [walletHoldingsSnapshots.userId],
+    references: [users.id],
+  }),
+  wallet: one(wallets, {
+    fields: [walletHoldingsSnapshots.walletId],
+    references: [wallets.id],
+  }),
+}));
+
+export const walletIndexingJobsRelations = relations(walletIndexingJobs, ({ one }) => ({
+  user: one(users, {
+    fields: [walletIndexingJobs.userId],
+    references: [users.id],
+  }),
+  wallet: one(wallets, {
+    fields: [walletIndexingJobs.walletId],
+    references: [wallets.id],
   }),
 }));
 

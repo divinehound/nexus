@@ -26,10 +26,14 @@ import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { randomBytes } from 'crypto';
 import { createPublicClient, http, isAddress } from 'viem';
 import { mainnet } from 'viem/chains';
+import { HoldingsService } from '../holdings/holdings.service';
 
 @Injectable()
 export class MeService {
-  constructor(@Inject(DATABASE_TOKEN) private readonly db: Database) {}
+  constructor(
+    @Inject(DATABASE_TOKEN) private readonly db: Database,
+    private readonly holdingsService: HoldingsService,
+  ) {}
 
   private formatWalletMessage(params: {
     purpose: 'link_wallet' | 'move_wallet';
@@ -204,10 +208,17 @@ export class MeService {
         await this.db.update(users).set({ primaryWalletId: linked.id }).where(eq(users.id, userId));
       }
 
+      void this.holdingsService.queueWalletIndexing(userId, linked.id).catch(() => {
+        // best-effort fire-and-forget
+      });
+
       return { success: true, wallet: linked, moved: false };
     }
 
     if (existingWallet.userId === userId) {
+      void this.holdingsService.queueWalletIndexing(userId, existingWallet.id).catch(() => {
+        // best-effort fire-and-forget
+      });
       return { success: true, wallet: existingWallet, moved: false, idempotent: true };
     }
 
@@ -320,7 +331,33 @@ export class MeService {
       return updatedWallet;
     });
 
+    void this.holdingsService.queueWalletIndexing(userId, movedWallet.id).catch(() => {
+      // best-effort fire-and-forget
+    });
+
     return { success: true, wallet: movedWallet, moved: true };
+  }
+
+  async getHoldingsSummary(userId: string) {
+    return this.holdingsService.getMyHoldingsSummary(userId);
+  }
+
+  async getHoldingsCollections(
+    userId: string,
+    tier: 'active' | 'lightweight' | 'suppressed',
+    page = 1,
+    limit = 20,
+  ) {
+    if (!['active', 'lightweight', 'suppressed'].includes(tier)) {
+      throw new BadRequestException({ error: 'VALIDATION_ERROR', message: 'Invalid tier value' });
+    }
+
+    return this.holdingsService.getMyHoldingsCollections(
+      userId,
+      tier,
+      Number.isFinite(page) && page > 0 ? page : 1,
+      Number.isFinite(limit) && limit > 0 ? Math.min(limit, 100) : 20,
+    );
   }
 
   async listWallets(userId: string) {

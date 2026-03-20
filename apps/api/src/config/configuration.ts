@@ -21,4 +21,7 @@ export default () => ({
   reservoir: {
     apiKey: process.env.RESERVOIR_API_KEY || '',
   },
+  holdings: {
+    maxCollectionsPerRun: parseInt(process.env.HOLDINGS_MAX_COLLECTIONS_PER_RUN || '50', 10),
+  },
 });

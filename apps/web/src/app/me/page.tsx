@@ -10,6 +10,10 @@ import {
   MeResponse,
   createWalletChallenge,
   getMe,
+  getMyHoldingsCollections,
+  getMyHoldingsSummary,
+  HoldingsCollectionItem,
+  HoldingsSummaryResponse,
   moveWalletLink,
   patchMyProfile,
   removeWallet,
@@ -45,6 +49,8 @@ function MePageContent() {
 
   const [me, setMe] = useState<MeResponse | null>(null);
   const [wallets, setWallets] = useState<LinkedWallet[]>([]);
+  const [holdingsSummary, setHoldingsSummary] = useState<HoldingsSummaryResponse | null>(null);
+  const [topActiveCollections, setTopActiveCollections] = useState<HoldingsCollectionItem[]>([]);
   const [profileForm, setProfileForm] = useState<ProfileFormState>({ displayName: '', avatarUrl: '', bio: '' });
 
   const [loading, setLoading] = useState(true);
@@ -74,9 +80,16 @@ function MePageContent() {
   const fetchMe = async () => {
     if (!accessToken) return;
 
-    const meData = await getMe(accessToken);
+    const [meData, summary, activeCollections] = await Promise.all([
+      getMe(accessToken),
+      getMyHoldingsSummary(accessToken),
+      getMyHoldingsCollections(accessToken, 'active', 1, 5),
+    ]);
+
     setMe(meData);
     setWallets(meData.wallets || []);
+    setHoldingsSummary(summary);
+    setTopActiveCollections(activeCollections.items || []);
     setProfileForm({
       displayName: meData.displayName || '',
       avatarUrl: meData.avatarUrl || '',
@@ -337,6 +350,51 @@ function MePageContent() {
           {profileStatus && <p className="text-sm text-green-400">{profileStatus}</p>}
           {profileError && <p className="text-sm text-red-400">{profileError}</p>}
         </form>
+      </section>
+
+      <section className="rounded-xl border border-gray-800 p-6">
+        <h2 className="text-xl font-semibold">Holdings Tracking</h2>
+        <p className="mt-1 text-sm text-gray-400">
+          Suppressed collections are hidden from main discovery surfaces, but still retained for auditability and future review.
+        </p>
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <div className="rounded-lg border border-gray-800 p-3">
+            <p className="text-xs text-gray-500">Active tracked</p>
+            <p className="mt-1 text-xl font-semibold">{holdingsSummary?.tiers.active ?? 0}</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 p-3">
+            <p className="text-xs text-gray-500">Lightweight tracked</p>
+            <p className="mt-1 text-xl font-semibold">{holdingsSummary?.tiers.lightweight ?? 0}</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 p-3">
+            <p className="text-xs text-gray-500">Suppressed</p>
+            <p className="mt-1 text-xl font-semibold">{holdingsSummary?.tiers.suppressed ?? 0}</p>
+          </div>
+          <div className="rounded-lg border border-gray-800 p-3">
+            <p className="text-xs text-gray-500">Last indexed</p>
+            <p className="mt-1 text-sm font-medium text-gray-200">
+              {holdingsSummary?.lastIndexedAt ? new Date(holdingsSummary.lastIndexedAt).toLocaleString() : 'Never'}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-gray-400">Top Active Collections</h3>
+          <div className="mt-3 space-y-2">
+            {topActiveCollections.length === 0 ? (
+              <p className="text-sm text-gray-500">No active tracked collections yet.</p>
+            ) : (
+              topActiveCollections.map((collection) => (
+                <div key={collection.id} className="rounded-lg border border-gray-800 p-3">
+                  <p className="text-sm font-medium text-white">{collection.name}</p>
+                  <p className="text-xs text-gray-500">
+                    {collection.chain.toUpperCase()} • {truncateAddress(collection.contractAddress)} • Tokens: {collection.tokenCount}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </section>
 
       <section className="rounded-xl border border-gray-800 p-6">

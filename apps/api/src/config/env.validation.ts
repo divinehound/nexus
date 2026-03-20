@@ -37,6 +37,12 @@ export class EnvironmentVariables {
   @IsString()
   @IsOptional()
   RESERVOIR_API_KEY?: string;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(1)
+  @Type(() => Number)
+  HOLDINGS_MAX_COLLECTIONS_PER_RUN: number = 50;
 }
 
 export function validate(config: Record<string, unknown>) {

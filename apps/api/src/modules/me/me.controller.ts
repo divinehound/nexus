@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -71,6 +72,28 @@ export class MeController {
     },
   ) {
     return this.meService.moveWallet(req.user.sub, body);
+  }
+
+  @Get('holdings/summary')
+  @ApiOperation({ summary: 'Get current user holdings tier summary' })
+  getHoldingsSummary(@Req() req: AuthRequest) {
+    return this.meService.getHoldingsSummary(req.user.sub);
+  }
+
+  @Get('holdings/collections')
+  @ApiOperation({ summary: 'List current user holdings collections by tracking tier' })
+  getHoldingsCollections(
+    @Req() req: AuthRequest,
+    @Query('tier') tier: 'active' | 'lightweight' | 'suppressed' = 'active',
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.meService.getHoldingsCollections(
+      req.user.sub,
+      tier,
+      page ? parseInt(page, 10) : 1,
+      limit ? parseInt(limit, 10) : 20,
+    );
   }
 
   @Get('wallets')

@@ -43,6 +43,13 @@
       "when": 1774026600000,
       "tag": "0005_user_identity_v1",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1774032060000,
+      "tag": "0006_wallet_holdings_tiering_v1",
+      "breakpoints": true
     }
   ]
 }

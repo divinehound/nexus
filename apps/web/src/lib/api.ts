@@ -224,6 +224,39 @@ export interface WalletMoveResponse {
   moved: boolean;
 }
 
+export interface HoldingsSummaryResponse {
+  tiers: {
+    active: number;
+    lightweight: number;
+    suppressed: number;
+  };
+  walletCoverage: number;
+  lastIndexedAt: string | null;
+  lastJobStatus: string | null;
+}
+
+export interface HoldingsCollectionItem {
+  id: string;
+  name: string;
+  chain: string;
+  contractAddress: string;
+  imageUrl: string | null;
+  tier: 'active' | 'lightweight' | 'suppressed';
+  qualityScore: string | null;
+  qualityReason: string | null;
+  projectName: string | null;
+  projectSlug: string | null;
+  tokenCount: number;
+}
+
+export interface HoldingsCollectionsResponse {
+  items: HoldingsCollectionItem[];
+  total: number;
+  page: number;
+  limit: number;
+  tier: 'active' | 'lightweight' | 'suppressed';
+}
+
 export function getMe(token: string) {
   return apiFetch<MeResponse>('/me', { token });
 }
@@ -237,6 +270,22 @@ export function patchMyProfile(
     token,
     body: JSON.stringify(input),
   });
+}
+
+export function getMyHoldingsSummary(token: string) {
+  return apiFetch<HoldingsSummaryResponse>('/me/holdings/summary', { token });
+}
+
+export function getMyHoldingsCollections(
+  token: string,
+  tier: 'active' | 'lightweight' | 'suppressed',
+  page = 1,
+  limit = 10,
+) {
+  return apiFetch<HoldingsCollectionsResponse>(
+    `/me/holdings/collections?tier=${encodeURIComponent(tier)}&page=${page}&limit=${limit}`,
+    { token },
+  );
 }
 
 export function getMyWallets(token: string) {

@@ -9,6 +9,7 @@ import {
   text,
   uniqueIndex,
   index,
+  jsonb,
 } from 'drizzle-orm/pg-core';
 import { chainEnum } from './projects';
 
@@ -104,6 +105,59 @@ export const walletOwnershipMoves = pgTable('wallet_ownership_moves', {
   reason: varchar('reason', { length: 255 }),
   movedAt: timestamp('moved_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const walletIndexingStatusEnum = pgEnum('wallet_indexing_status', [
+  'queued',
+  'running',
+  'completed',
+  'failed',
+]);
+
+export const walletHoldingsSnapshots = pgTable(
+  'wallet_holdings_snapshots',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    walletId: uuid('wallet_id')
+      .notNull()
+      .references(() => wallets.id, { onDelete: 'cascade' }),
+    chain: chainEnum('chain').notNull(),
+    contractAddress: varchar('contract_address', { length: 255 }).notNull(),
+    tokenCount: integer('token_count').default(0).notNull(),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('wallet_holdings_wallet_contract_unique').on(table.walletId, table.chain, table.contractAddress),
+    index('wallet_holdings_user_wallet_idx').on(table.userId, table.walletId),
+    index('wallet_holdings_contract_idx').on(table.chain, table.contractAddress),
+  ],
+);
+
+export const walletIndexingJobs = pgTable(
+  'wallet_indexing_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    walletId: uuid('wallet_id')
+      .notNull()
+      .references(() => wallets.id, { onDelete: 'cascade' }),
+    status: walletIndexingStatusEnum('status').default('queued').notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    statsJson: jsonb('stats_json').$type<Record<string, unknown>>(),
+    error: text('error'),
+  },
+  (table) => [
+    index('wallet_indexing_jobs_user_wallet_idx').on(table.userId, table.walletId),
+    index('wallet_indexing_jobs_wallet_status_idx').on(table.walletId, table.status),
+    index('wallet_indexing_jobs_started_idx').on(table.startedAt),
+  ],
+);
 
 export const holders = pgTable('holders', {
   id: uuid('id').primaryKey().defaultRandom(),

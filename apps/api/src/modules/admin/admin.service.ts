@@ -17,12 +17,14 @@ import {
   collections,
 } from '@nexus/database';
 import { CollectionMetricsService } from '../collections/collection-metrics.service';
+import { HoldingsService } from '../holdings/holdings.service';
 
 @Injectable()
 export class AdminService {
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly collectionMetricsService: CollectionMetricsService,
+    private readonly holdingsService: HoldingsService,
   ) {}
 
   // --- Dashboard Stats ---
@@ -383,5 +385,9 @@ export class AdminService {
 
   async refreshCollectionMetrics() {
     return this.collectionMetricsService.refreshTrackedCollectionsMetrics();
+  }
+
+  async refreshWalletIndexing(walletId: string) {
+    return this.holdingsService.refreshWalletIndexing(walletId);
   }
 }
