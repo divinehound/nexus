@@ -1,5 +1,7 @@
 import { Suspense } from 'react';
 import Link from 'next/link';
+
+export const dynamic = 'force-dynamic';
 import { SearchBar } from '@/components/search/search-bar';
 import { FeaturedProjectsSection } from '@/components/project/featured-projects-section';
 import { apiFetch } from '@/lib/api';
