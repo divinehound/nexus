@@ -2,24 +2,31 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useParams } from 'next/navigation';
 import { getCollectionByChainAndContract, type CollectionDetails } from '@/lib/api';
 import { chainCurrency, formatPrice, truncateAddress } from '@/lib/utils';
 import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
 
-interface CollectionPageProps {
-  params: { chain: string; contract: string };
-}
+export default function CollectionPage() {
+  const routeParams = useParams<{ chain: string; contract: string }>();
+  const chain = routeParams?.chain;
+  const contract = routeParams?.contract;
 
-export default function CollectionPage({ params }: CollectionPageProps) {
   const [collection, setCollection] = useState<CollectionDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadCollection = useCallback(async () => {
+    if (!chain || !contract) {
+      setError('Invalid collection route');
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
-      const data = await getCollectionByChainAndContract(params.chain, params.contract);
+      const data = await getCollectionByChainAndContract(chain, contract);
       setCollection(data);
     } catch (err) {
       setCollection(null);
@@ -27,7 +34,7 @@ export default function CollectionPage({ params }: CollectionPageProps) {
     } finally {
       setLoading(false);
     }
-  }, [params.chain, params.contract]);
+  }, [chain, contract]);
 
   useEffect(() => {
     loadCollection();
@@ -35,8 +42,8 @@ export default function CollectionPage({ params }: CollectionPageProps) {
 
   const pageTitle = useMemo(() => {
     if (collection) return collection.name;
-    return truncateAddress(params.contract, 6);
-  }, [collection, params.contract]);
+    return contract ? truncateAddress(contract, 6) : 'Collection';
+  }, [collection, contract]);
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8">
