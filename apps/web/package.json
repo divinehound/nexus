@@ -4,7 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 3000",
+    "prebuild": "corepack pnpm --filter @nexus/types build",
     "build": "next build",
+    "pretypecheck": "corepack pnpm --filter @nexus/types build",
+    "typecheck": "tsc --noEmit",
     "start": "next start",
     "lint": "eslint ."
   },

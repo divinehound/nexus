@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "nest start --watch",
+    "prebuild": "corepack pnpm --filter @nexus/types build",
     "build": "nest build",
+    "pretypecheck": "corepack pnpm --filter @nexus/types build",
     "typecheck": "tsc --noEmit",
     "start": "node dist/main",
     "start:prod": "node dist/main",
