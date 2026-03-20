@@ -8,6 +8,7 @@ import {
   Query,
   Body,
   UseGuards,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminGuard } from '../../common/guards/admin.guard';
@@ -54,6 +55,10 @@ export class AdminController {
     @Param('id') id: string,
     @Body() body: { isFeatured: boolean },
   ) {
+    if (typeof body?.isFeatured !== 'boolean') {
+      throw new BadRequestException('isFeatured must be a boolean');
+    }
+
     return this.adminService.setProjectFeatured(id, body.isFeatured);
   }
 

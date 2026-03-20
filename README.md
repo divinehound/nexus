@@ -35,7 +35,16 @@
 - `GET /api/collections/:chain/:contractAddress`
   - Returns tracked collection details, verification + mapping states, project/proposed project, and basic metrics placeholders.
 
-### Admin Collections (admin auth required)
+### Admin Routes (admin auth required)
+
+Authentication method for all `/api/admin/*` endpoints:
+- Header: `Authorization: Bearer <jwt>`
+- Requirement: authenticated user with `role = "admin"`
+- Failure responses:
+  - `401` when Bearer token is missing/invalid
+  - `403` when authenticated user is not an admin
+
+### Admin Collections
 
 - `POST /api/admin/collections/:id/verify`
   - Body (optional):
@@ -64,3 +73,20 @@
     }
     ```
   - `confidence` must be between `0` and `1`.
+
+### Admin Projects
+
+- `PATCH /api/admin/projects/:id/featured`
+  - Body:
+    ```json
+    {
+      "isFeatured": true
+    }
+    ```
+  - Example:
+    ```bash
+    curl -X PATCH "http://localhost:4000/api/admin/projects/<project-id>/featured" \
+      -H "Authorization: Bearer <jwt>" \
+      -H "Content-Type: application/json" \
+      -d '{"isFeatured": true}'
+    ```

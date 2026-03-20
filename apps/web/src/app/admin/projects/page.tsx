@@ -39,6 +39,8 @@ export default function AdminProjectsPage() {
   const [owners, setOwners] = useState<ProjectOwner[]>([]);
   const [newOwnerUserId, setNewOwnerUserId] = useState('');
   const [newOwnerRole, setNewOwnerRole] = useState<'owner' | 'editor'>('editor');
+  const [featurePending, setFeaturePending] = useState<Record<string, boolean>>({});
+  const [featureError, setFeatureError] = useState<Record<string, string | null>>({});
 
   const fetchProjects = () => {
     if (!accessToken) return;
@@ -62,13 +64,43 @@ export default function AdminProjectsPage() {
   };
 
   const toggleFeatured = async (project: Project) => {
-    if (!accessToken) return;
-    await apiFetch(`/admin/projects/${project.id}/featured`, {
-      method: 'PATCH',
-      token: accessToken,
-      body: JSON.stringify({ isFeatured: !project.isFeatured }),
+    if (!accessToken || featurePending[project.id]) return;
+
+    setFeatureError((prev) => ({ ...prev, [project.id]: null }));
+    setFeaturePending((prev) => ({ ...prev, [project.id]: true }));
+
+    setData((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: prev.items.map((item) =>
+          item.id === project.id ? { ...item, isFeatured: !project.isFeatured } : item,
+        ),
+      };
     });
-    fetchProjects();
+
+    try {
+      await apiFetch(`/admin/projects/${project.id}/featured`, {
+        method: 'PATCH',
+        token: accessToken,
+        body: JSON.stringify({ isFeatured: !project.isFeatured }),
+      });
+    } catch (error) {
+      setData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          items: prev.items.map((item) =>
+            item.id === project.id ? { ...item, isFeatured: project.isFeatured } : item,
+          ),
+        };
+      });
+
+      const message = error instanceof Error ? error.message : 'Failed to update featured status';
+      setFeatureError((prev) => ({ ...prev, [project.id]: message }));
+    } finally {
+      setFeaturePending((prev) => ({ ...prev, [project.id]: false }));
+    }
   };
 
   const deleteProject = async (project: Project) => {
@@ -166,13 +198,18 @@ export default function AdminProjectsPage() {
                 </button>
                 <button
                   onClick={() => toggleFeatured(p)}
-                  className={`rounded px-2 py-0.5 text-xs font-medium ${
+                  disabled={Boolean(featurePending[p.id])}
+                  className={`rounded px-2 py-0.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-60 ${
                     p.isFeatured
                       ? 'bg-amber-900/40 text-amber-300'
                       : 'bg-gray-800 text-gray-500'
                   }`}
                 >
-                  {p.isFeatured ? 'Featured' : 'Not Featured'}
+                  {featurePending[p.id]
+                    ? 'Updating...'
+                    : p.isFeatured
+                      ? 'Featured'
+                      : 'Not Featured'}
                 </button>
                 <button
                   onClick={() => toggleOwners(p.id)}
@@ -188,6 +225,10 @@ export default function AdminProjectsPage() {
                 </button>
               </div>
             </div>
+
+            {featureError[p.id] && (
+              <div className="px-4 pb-2 text-xs text-red-400">{featureError[p.id]}</div>
+            )}
 
             {/* Owners panel */}
             {expandedId === p.id && (
