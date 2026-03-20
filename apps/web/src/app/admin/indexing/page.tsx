@@ -58,7 +58,11 @@ export default function AdminIndexingPage() {
   const [detailsLoading, setDetailsLoading] = useState(false);
 
   const loadJobs = () => {
-    if (!accessToken) return;
+    if (!accessToken) {
+      setLoading(false);
+      setError('Please connect your wallet and ensure this account is admin.');
+      return;
+    }
     setLoading(true);
     setError(null);
 
