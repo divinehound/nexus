@@ -9,6 +9,7 @@ interface Project {
   name: string;
   slug: string;
   isVerified: boolean;
+  isFeatured: boolean;
   healthScore: number | null;
   createdAt: string;
   collections: { id: string; name: string; contractAddress: string; chain: string }[];
@@ -56,6 +57,16 @@ export default function AdminProjectsPage() {
       method: 'PATCH',
       token: accessToken,
       body: JSON.stringify({ isVerified: !project.isVerified }),
+    });
+    fetchProjects();
+  };
+
+  const toggleFeatured = async (project: Project) => {
+    if (!accessToken) return;
+    await apiFetch(`/admin/projects/${project.id}/featured`, {
+      method: 'PATCH',
+      token: accessToken,
+      body: JSON.stringify({ isFeatured: !project.isFeatured }),
     });
     fetchProjects();
   };
@@ -152,6 +163,16 @@ export default function AdminProjectsPage() {
                   }`}
                 >
                   {p.isVerified ? 'Verified' : 'Unverified'}
+                </button>
+                <button
+                  onClick={() => toggleFeatured(p)}
+                  className={`rounded px-2 py-0.5 text-xs font-medium ${
+                    p.isFeatured
+                      ? 'bg-amber-900/40 text-amber-300'
+                      : 'bg-gray-800 text-gray-500'
+                  }`}
+                >
+                  {p.isFeatured ? 'Featured' : 'Not Featured'}
                 </button>
                 <button
                   onClick={() => toggleOwners(p.id)}

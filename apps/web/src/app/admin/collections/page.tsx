@@ -27,6 +27,8 @@ interface AdminCollection {
   verificationStatus: CollectionVerificationStatus;
   mappingStatus: CollectionMappingStatus;
   proposedProjectId: string | null;
+  mappingConfidence: string | null;
+  verificationNotes: string | null;
   projectId: string;
 }
 
@@ -47,6 +49,7 @@ export default function AdminCollectionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [projectIdInput, setProjectIdInput] = useState<Record<string, string>>({});
   const [notesInput, setNotesInput] = useState<Record<string, string>>({});
+  const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'all'>('pending');
 
   const fetchData = async () => {
     if (!accessToken) return;
@@ -86,6 +89,15 @@ export default function AdminCollectionsPage() {
       suggested: collections.filter((c) => c.mappingStatus === 'suggested').length,
     };
   }, [collections]);
+
+  const filteredCollections = useMemo(() => {
+    if (filter === 'all') return collections;
+    if (filter === 'pending') {
+      return collections.filter((c) => c.verificationStatus === 'tracked_unverified' || c.verificationStatus === 'pending_claim');
+    }
+    if (filter === 'suggested') return collections.filter((c) => c.mappingStatus === 'suggested');
+    return collections.filter((c) => c.verificationStatus === filter);
+  }, [collections, filter]);
 
   const handleVerify = async (collection: AdminCollection) => {
     if (!accessToken) return;
@@ -131,12 +143,25 @@ export default function AdminCollectionsPage() {
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-semibold">Collections Review Queue</h2>
-        <button
-          onClick={fetchData}
-          className="rounded border border-gray-700 px-3 py-1 text-sm text-gray-300 hover:text-white"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value as typeof filter)}
+            className="rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-white"
+          >
+            <option value="pending">Pending</option>
+            <option value="tracked_unverified">Tracked Unverified</option>
+            <option value="pending_claim">Pending Claim</option>
+            <option value="suggested">Suggested</option>
+            <option value="all">All</option>
+          </select>
+          <button
+            onClick={fetchData}
+            className="rounded border border-gray-700 px-3 py-1 text-sm text-gray-300 hover:text-white"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -153,12 +178,13 @@ export default function AdminCollectionsPage() {
       ) : error ? (
         <div className="rounded-xl border border-red-900/50 bg-red-950/30 p-4">
           <p className="text-sm text-red-200">{error}</p>
+          <button onClick={fetchData} className="mt-3 rounded bg-red-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-600">Retry</button>
         </div>
-      ) : collections.length === 0 ? (
-        <p className="text-gray-500">No unverified or suggested collections in queue.</p>
+      ) : filteredCollections.length === 0 ? (
+        <p className="text-gray-500">No collections in this queue state.</p>
       ) : (
         <div className="space-y-3">
-          {collections.map((c) => (
+          {filteredCollections.map((c) => (
             <div key={c.id} className="rounded-xl border border-gray-800 p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -179,7 +205,7 @@ export default function AdminCollectionsPage() {
 
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs text-gray-500">Project ID (for suggest/verify)</label>
+                  <label className="mb-1 block text-xs text-gray-500">Project ID (for suggest/approve)</label>
                   <input
                     value={projectIdInput[c.id] || ''}
                     onChange={(e) => setProjectIdInput((prev) => ({ ...prev, [c.id]: e.target.value }))}
@@ -191,7 +217,7 @@ export default function AdminCollectionsPage() {
                 <div>
                   <label className="mb-1 block text-xs text-gray-500">Notes</label>
                   <input
-                    value={notesInput[c.id] || ''}
+                    value={notesInput[c.id] || c.verificationNotes || ''}
                     onChange={(e) => setNotesInput((prev) => ({ ...prev, [c.id]: e.target.value }))}
                     placeholder="optional moderation note"
                     className="w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 text-sm text-white placeholder-gray-500 outline-none focus:border-purple-500"
@@ -199,12 +225,31 @@ export default function AdminCollectionsPage() {
                 </div>
               </div>
 
+              <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-gray-400 sm:grid-cols-2">
+                <p>Confidence: {c.mappingConfidence ?? 'n/a'}</p>
+                <p>Proposed project: {c.proposedProjectId ?? 'n/a'}</p>
+              </div>
+
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-300">Payload preview</summary>
+                <pre className="mt-2 overflow-x-auto rounded bg-gray-950 p-2 text-[11px] text-gray-300">{JSON.stringify({
+                  id: c.id,
+                  chain: c.chain,
+                  contractAddress: c.contractAddress,
+                  verificationStatus: c.verificationStatus,
+                  mappingStatus: c.mappingStatus,
+                  mappingConfidence: c.mappingConfidence,
+                  verificationNotes: c.verificationNotes,
+                  proposedProjectId: c.proposedProjectId,
+                }, null, 2)}</pre>
+              </details>
+
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   onClick={() => handleVerify(c)}
                   className="rounded bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600"
                 >
-                  Verify
+                  Approve
                 </button>
                 <button
                   onClick={() => handleReject(c)}

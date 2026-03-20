@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import Link from 'next/link';
 import { SearchBar } from '@/components/search/search-bar';
+import { FeaturedProjectsSection } from '@/components/project/featured-projects-section';
 import { apiFetch } from '@/lib/api';
 
 interface ProjectSummary {
@@ -38,7 +39,9 @@ export default async function HomePage() {
           </div>
         </div>
 
-        <div className="mt-20 grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-3">
+        <FeaturedProjectsSection />
+
+        <div className="mt-12 grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-3">
           <section>
             <h2 className="mb-4 text-lg font-semibold text-gray-300">Trending</h2>
             {trending.length === 0 ? (
