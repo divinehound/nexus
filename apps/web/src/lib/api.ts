@@ -70,6 +70,35 @@ export interface CollectionDetails {
   metrics: CollectionMetrics;
 }
 
+export interface CollectionStatsCurrent {
+  floorPrice: number | null;
+  listedCount: number | null;
+  holderCount: number | null;
+  volume1h: number | null;
+  volume24h: number | null;
+  volume7d: number | null;
+  sales24h: number | null;
+  uniqueBuyers24h: number | null;
+}
+
+export interface CollectionStatsResponse {
+  collectionId: string;
+  status: 'ready' | 'indexing' | 'stale';
+  lastUpdatedAt: string | null;
+  current: CollectionStatsCurrent | null;
+  deltas: {
+    floor24hPct?: number;
+    volume24hPct?: number;
+    holders24hDelta?: number;
+  };
+  history7d: Array<{
+    timestamp: string;
+    floorPrice: number | null;
+    volume24h: number | null;
+    holderCount: number | null;
+  }>;
+}
+
 export interface TrackCollectionResponse {
   statusCode: number;
   collectionId: string;
@@ -91,6 +120,10 @@ export function trackCollection(input: TrackCollectionInput) {
 
 export function getCollectionByChainAndContract(chain: string, contractAddress: string) {
   return apiFetch<CollectionDetails>(`/collections/${encodeURIComponent(chain)}/${encodeURIComponent(contractAddress)}`);
+}
+
+export function getCollectionStats(chain: string, contractAddress: string) {
+  return apiFetch<CollectionStatsResponse>(`/collections/${encodeURIComponent(chain)}/${encodeURIComponent(contractAddress)}/stats`);
 }
 
 export interface AdminCollectionActionInput {

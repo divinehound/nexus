@@ -182,4 +182,10 @@ export class AdminController {
   ) {
     return this.adminService.removeProjectOwner(id, userId);
   }
+
+  @Post('metrics/refresh')
+  @ApiOperation({ summary: 'Run one manual refresh cycle for collection metrics' })
+  refreshMetrics() {
+    return this.adminService.refreshCollectionMetrics();
+  }
 }

@@ -13,7 +13,11 @@ export const marketSnapshots = pgTable('market_snapshots', {
     .references(() => collections.id, { onDelete: 'cascade' }),
   timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
   floorPrice: real('floor_price'),
-  volume24h: real('volume_24h'),
-  holderCount: integer('holder_count'),
   listedCount: integer('listed_count'),
+  holderCount: integer('holder_count'),
+  volume1h: real('volume_1h'),
+  volume24h: real('volume_24h'),
+  volume7d: real('volume_7d'),
+  sales24h: integer('sales_24h'),
+  uniqueBuyers24h: integer('unique_buyers_24h'),
 });

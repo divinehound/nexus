@@ -29,6 +29,13 @@
       "when": 1773949200000,
       "tag": "0003_add_projects_is_featured",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1774020000000,
+      "tag": "0004_collection_metrics_pipeline_v1",
+      "breakpoints": true
     }
   ]
 }

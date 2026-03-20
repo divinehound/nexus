@@ -16,10 +16,14 @@ import {
   projectOwners,
   collections,
 } from '@nexus/database';
+import { CollectionMetricsService } from '../collections/collection-metrics.service';
 
 @Injectable()
 export class AdminService {
-  constructor(@Inject(DATABASE_TOKEN) private readonly db: Database) {}
+  constructor(
+    @Inject(DATABASE_TOKEN) private readonly db: Database,
+    private readonly collectionMetricsService: CollectionMetricsService,
+  ) {}
 
   // --- Dashboard Stats ---
 
@@ -375,5 +379,9 @@ export class AdminService {
       .returning();
     if (!deleted) throw new NotFoundException('Ownership record not found');
     return { deleted: true };
+  }
+
+  async refreshCollectionMetrics() {
+    return this.collectionMetricsService.refreshTrackedCollectionsMetrics();
   }
 }
