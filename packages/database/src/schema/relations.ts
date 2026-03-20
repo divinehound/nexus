@@ -4,7 +4,14 @@ import {
   collections,
   collectionIntakeRequests,
 } from './projects';
-import { users, wallets, holders } from './users';
+import {
+  users,
+  wallets,
+  holders,
+  walletLinkChallenges,
+  walletMoveConfirmations,
+  walletOwnershipMoves,
+} from './users';
 import { projectWiki, wikiSuggestions } from './wiki';
 import { events } from './events';
 import { activityFeed, flexReactions } from './activity';
@@ -46,15 +53,72 @@ export const collectionIntakeRequestsRelations = relations(
 
 export const usersRelations = relations(users, ({ many }) => ({
   wallets: many(wallets),
+  walletLinkChallenges: many(walletLinkChallenges),
+  walletMoveConfirmationsAsFrom: many(walletMoveConfirmations, {
+    relationName: 'wallet_move_from_user',
+  }),
+  walletMoveConfirmationsAsTo: many(walletMoveConfirmations, {
+    relationName: 'wallet_move_to_user',
+  }),
+  walletOwnershipMovesAsFrom: many(walletOwnershipMoves, {
+    relationName: 'wallet_ownership_from_user',
+  }),
+  walletOwnershipMovesAsTo: many(walletOwnershipMoves, {
+    relationName: 'wallet_ownership_to_user',
+  }),
   wikiSuggestions: many(wikiSuggestions),
   ownedProjects: many(projectOwners),
   collectionIntakeRequests: many(collectionIntakeRequests),
 }));
 
-export const walletsRelations = relations(wallets, ({ one }) => ({
+export const walletsRelations = relations(wallets, ({ one, many }) => ({
   user: one(users, {
     fields: [wallets.userId],
     references: [users.id],
+  }),
+  linkChallenges: many(walletLinkChallenges),
+  moveConfirmations: many(walletMoveConfirmations),
+  ownershipMoves: many(walletOwnershipMoves),
+}));
+
+export const walletLinkChallengesRelations = relations(walletLinkChallenges, ({ one }) => ({
+  user: one(users, {
+    fields: [walletLinkChallenges.userId],
+    references: [users.id],
+  }),
+}));
+
+export const walletMoveConfirmationsRelations = relations(walletMoveConfirmations, ({ one }) => ({
+  wallet: one(wallets, {
+    fields: [walletMoveConfirmations.walletId],
+    references: [wallets.id],
+  }),
+  fromUser: one(users, {
+    fields: [walletMoveConfirmations.fromUserId],
+    references: [users.id],
+    relationName: 'wallet_move_from_user',
+  }),
+  toUser: one(users, {
+    fields: [walletMoveConfirmations.toUserId],
+    references: [users.id],
+    relationName: 'wallet_move_to_user',
+  }),
+}));
+
+export const walletOwnershipMovesRelations = relations(walletOwnershipMoves, ({ one }) => ({
+  wallet: one(wallets, {
+    fields: [walletOwnershipMoves.walletId],
+    references: [wallets.id],
+  }),
+  fromUser: one(users, {
+    fields: [walletOwnershipMoves.fromUserId],
+    references: [users.id],
+    relationName: 'wallet_ownership_from_user',
+  }),
+  toUser: one(users, {
+    fields: [walletOwnershipMoves.toUserId],
+    references: [users.id],
+    relationName: 'wallet_ownership_to_user',
   }),
 }));
 

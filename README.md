@@ -134,6 +134,77 @@ Returns featured projects only.
 }
 ```
 
+### Identity + Wallet Management (User Identity v1)
+
+All routes require `Authorization: Bearer <jwt>`.
+
+#### `GET /api/me`
+Returns profile + wallets and computed `displayName` fallback order:
+1. stored `display_name`
+2. ENS from linked wallets
+3. abbreviated primary wallet address
+
+#### `PATCH /api/me/profile`
+```json
+{
+  "displayName": "Papa",
+  "avatarUrl": "https://...",
+  "bio": "Collector and builder"
+}
+```
+
+#### `POST /api/me/wallets/challenge`
+```json
+{
+  "chain": "ethereum",
+  "address": "0x1234567890abcdef1234567890abcdef12345678",
+  "purpose": "link_wallet"
+}
+```
+Response:
+```json
+{
+  "nonce": "...",
+  "message": "NEXUS Wallet Verification\nPurpose: link_wallet\n..."
+}
+```
+
+#### `POST /api/me/wallets/verify`
+```json
+{
+  "chain": "ethereum",
+  "address": "0x1234567890abcdef1234567890abcdef12345678",
+  "message": "...",
+  "signature": "0x..."
+}
+```
+Behavior:
+- unowned wallet: linked to current user
+- already owned by current user: idempotent success
+- owned by another user: `409 WALLET_ALREADY_LINKED` with `confirmationToken`
+
+#### `POST /api/me/wallets/move`
+```json
+{
+  "chain": "ethereum",
+  "address": "0x1234567890abcdef1234567890abcdef12345678",
+  "confirmationToken": "...",
+  "message": "... includes Confirmation Token: ...",
+  "signature": "0x..."
+}
+```
+Behavior:
+- validates token expiry + signature
+- atomically reassigns wallet
+- records wallet ownership move audit row
+
+#### Wallet management
+- `GET /api/me/wallets`
+- `PATCH /api/me/wallets/:id/primary`
+- `DELETE /api/me/wallets/:id`
+
+Delete policy: safe by default. API forbids deleting the final linked wallet (`LAST_WALLET_DELETE_FORBIDDEN`).
+
 ---
 
 ## Deployment + migrations

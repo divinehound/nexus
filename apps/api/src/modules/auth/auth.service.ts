@@ -6,7 +6,7 @@ import { createPublicClient, http, hashMessage, encodeAbiParameters, concat, typ
 import { mainnet, base, abstract as abstractChain, polygon } from 'viem/chains';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, users, wallets } from '@nexus/database';
 import { CHAIN_META } from '@nexus/types';
@@ -219,8 +219,10 @@ export class AuthService {
   }
 
   private async findOrCreateUser(address: string, chain: string) {
+    const normalizedAddress = chain === 'solana' ? address.trim() : address.toLowerCase();
+
     const existingWallet = await this.db.query.wallets.findFirst({
-      where: eq(wallets.address, address),
+      where: and(eq(wallets.address, normalizedAddress), eq(wallets.chain, chain as any)),
     });
 
     if (existingWallet?.userId) {
@@ -241,12 +243,21 @@ export class AuthService {
     if (existingWallet) {
       await this.db
         .update(wallets)
-        .set({ userId: newUser.id })
+        .set({ userId: newUser.id, isPrimary: true })
         .where(eq(wallets.id, existingWallet.id));
+      await this.db
+        .update(users)
+        .set({ primaryWalletId: existingWallet.id })
+        .where(eq(users.id, newUser.id));
     } else {
       const [newWallet] = await this.db
         .insert(wallets)
-        .values({ address, chain: chain as any, userId: newUser.id })
+        .values({
+          address: normalizedAddress,
+          chain: chain as any,
+          userId: newUser.id,
+          isPrimary: true,
+        })
         .returning();
       await this.db
         .update(users)

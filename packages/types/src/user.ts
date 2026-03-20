@@ -3,6 +3,9 @@ import { Chain } from './common';
 export interface User {
   id: string;
   primaryWalletId: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+  bio: string | null;
   echoScore: number | null;
   clusterIds: string[];
   createdAt: Date;
@@ -14,6 +17,7 @@ export interface Wallet {
   address: string;
   chain: Chain;
   userId: string | null;
+  isPrimary: boolean;
   ensName: string | null;
   snsName: string | null;
   lastSyncedAt: Date | null;

@@ -16,6 +16,7 @@ import { HealthScoreModule } from './modules/health-score/health-score.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { MeModule } from './modules/me/me.module';
 import configuration from './config/configuration';
 import { validate } from './config/env.validation';
 
@@ -31,6 +32,7 @@ import { validate } from './config/env.validation';
     DatabaseModule,
     AuthModule,
     AdminModule,
+    MeModule,
     ProjectsModule,
     CollectionsModule,
     WikiModule,
