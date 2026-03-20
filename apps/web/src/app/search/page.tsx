@@ -3,7 +3,8 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { SearchBar } from '@/components/search/search-bar';
 import { BlockchainResults } from '@/components/search/blockchain-results';
-import { apiFetch, trackCollection } from '@/lib/api';
+import { apiFetch, trackCollection, type CollectionVerificationStatus } from '@/lib/api';
+import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
 import { truncateAddress, formatPrice, chainCurrency } from '@/lib/utils';
 import type { BlockchainContractInfo } from '@nexus/types';
 
@@ -30,6 +31,7 @@ interface SearchResults {
     holderCount: number | null;
     imageUrl: string | null;
     project: { id: string; name: string; slug: string };
+    verificationStatus: CollectionVerificationStatus;
   }[];
   blockchainResults: BlockchainContractInfo[];
 }
@@ -59,6 +61,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const { q, chain } = await searchParams;
 
   let results: SearchResults | null = null;
+  let searchError = false;
   if (q) {
     try {
       const params = new URLSearchParams({ q });
@@ -66,6 +69,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       results = await apiFetch<SearchResults>(`/search?${params.toString()}`);
     } catch (err) {
       console.error('Search API request failed:', err);
+      searchError = true;
     }
   }
 
@@ -98,7 +102,16 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         <p className="text-gray-500">Search for a project, collection, or contract address.</p>
       )}
 
-      {q && !hasLocalResults && !hasBlockchainResults && (
+      {searchError && (
+        <div className="mb-6 rounded-xl border border-red-900/50 bg-red-950/30 p-4">
+          <p className="text-sm text-red-200">Search failed. Please try again.</p>
+          <Link href={`/search?q=${encodeURIComponent(q || '')}${chain ? `&chain=${encodeURIComponent(chain)}` : ''}`} className="mt-2 inline-block text-sm text-red-200 underline">
+            Retry
+          </Link>
+        </div>
+      )}
+
+      {q && !searchError && !hasLocalResults && !hasBlockchainResults && (
         <p className="text-gray-500">No results found for &ldquo;{q}&rdquo;</p>
       )}
 
@@ -147,10 +160,16 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
                   <img src={c.imageUrl} alt={c.name} className="h-12 w-12 rounded-lg object-cover" />
                 )}
                 <div className="flex-1">
-                  <h3 className="font-medium">{c.name}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-medium">{c.name}</h3>
+                    <TrustBadge status={c.verificationStatus} />
+                  </div>
                   <p className="text-sm text-gray-500">
                     {c.project.name} · {c.chain} · {truncateAddress(c.contractAddress)}
                   </p>
+                  {(c.verificationStatus === 'tracked_unverified' || c.verificationStatus === 'rejected') && (
+                    <TrustDisclaimer status={c.verificationStatus} />
+                  )}
                 </div>
                 <div className="text-right text-sm">
                   {c.floorPrice !== null && (

@@ -2,25 +2,12 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { getCollectionByChainAndContract, type CollectionDetails, type CollectionVerificationStatus } from '@/lib/api';
+import { getCollectionByChainAndContract, type CollectionDetails } from '@/lib/api';
 import { chainCurrency, formatPrice, truncateAddress } from '@/lib/utils';
+import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
 
 interface CollectionPageProps {
   params: { chain: string; contract: string };
-}
-
-const STATUS_STYLES: Record<CollectionVerificationStatus, string> = {
-  tracked_unverified: 'bg-yellow-900/30 text-yellow-300 border border-yellow-600/50',
-  pending_claim: 'bg-blue-900/30 text-blue-300 border border-blue-600/50',
-  verified: 'bg-green-900/30 text-green-300 border border-green-600/50',
-  rejected: 'bg-red-900/30 text-red-300 border border-red-600/50',
-};
-
-function trustCopy(status: CollectionVerificationStatus) {
-  if (status === 'tracked_unverified' || status === 'rejected') {
-    return 'Tracked, not yet verified. Data may be incomplete or unaffiliated.';
-  }
-  return null;
 }
 
 export default function CollectionPage({ params }: CollectionPageProps) {
@@ -98,9 +85,7 @@ export default function CollectionPage({ params }: CollectionPageProps) {
         <section className="rounded-xl border border-gray-800 p-6">
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-semibold">{pageTitle}</h1>
-            <span className={`rounded px-2 py-1 text-xs font-medium uppercase tracking-wide ${STATUS_STYLES[collection.verificationStatus]}`}>
-              {collection.verificationStatus.replace('_', ' ')}
-            </span>
+            <TrustBadge status={collection.verificationStatus} />
             <span className="rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-300">
               Mapping: {collection.mappingStatus}
             </span>
@@ -110,15 +95,7 @@ export default function CollectionPage({ params }: CollectionPageProps) {
             {collection.chain} · {truncateAddress(collection.contractAddress, 6)}
           </p>
 
-          {(() => {
-            const copy = trustCopy(collection.verificationStatus);
-            if (!copy) return null;
-            return (
-              <p className="mt-4 rounded-lg border border-yellow-700/50 bg-yellow-900/20 px-4 py-3 text-sm text-yellow-200">
-                {copy}
-              </p>
-            );
-          })()}
+          <TrustDisclaimer status={collection.verificationStatus} />
 
           <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">

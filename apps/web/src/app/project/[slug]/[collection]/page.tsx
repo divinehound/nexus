@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, type CollectionVerificationStatus } from '@/lib/api';
+import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
 import { formatPrice, truncateAddress, chainCurrency } from '@/lib/utils';
 
 interface CollectionPageProps {
@@ -18,6 +19,7 @@ interface CollectionDetail {
   imageUrl: string | null;
   mintDate: string | null;
   collectionType: string;
+  verificationStatus: CollectionVerificationStatus;
   project: { id: string; name: string; slug: string };
   marketSnapshots: { timestamp: string; floorPrice: number | null; volume24h: number | null; holderCount: number | null }[];
 }
@@ -41,9 +43,14 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
           <span className="text-white">{truncateAddress(contractAddress)}</span>
         </nav>
         <h1 className="mt-4 text-3xl font-bold">Collection not found</h1>
-        <Link href={`/project/${slug}`} className="mt-4 inline-block text-purple-400 hover:text-purple-300">
-          Back to project
-        </Link>
+        <div className="mt-4 flex items-center gap-4">
+          <Link href={`/project/${slug}/${contractAddress}`} className="text-purple-400 hover:text-purple-300">
+            Retry
+          </Link>
+          <Link href={`/project/${slug}`} className="text-purple-400 hover:text-purple-300">
+            Back to project
+          </Link>
+        </div>
       </main>
     );
   }
@@ -65,10 +72,14 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
           <img src={collection.imageUrl} alt={collection.name} className="h-24 w-24 rounded-xl object-cover" />
         )}
         <div>
-          <h1 className="text-3xl font-bold">{collection.name}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl font-bold">{collection.name}</h1>
+            <TrustBadge status={collection.verificationStatus} />
+          </div>
           <p className="mt-1 text-sm text-gray-500">
             {collection.chain} · {collection.collectionType} · {truncateAddress(collection.contractAddress)}
           </p>
+          <TrustDisclaimer status={collection.verificationStatus} />
         </div>
       </div>
 

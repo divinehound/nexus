@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, type CollectionVerificationStatus } from '@/lib/api';
+import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
 import { formatPrice, truncateAddress, chainCurrency } from '@/lib/utils';
 import { ProjectTabs } from '@/components/project/project-tabs';
 
@@ -34,6 +35,7 @@ interface CollectionData {
   holderCount: number | null;
   listedCount: number | null;
   imageUrl: string | null;
+  verificationStatus: CollectionVerificationStatus;
 }
 
 interface EventData {
@@ -62,9 +64,14 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
       <main className="mx-auto max-w-7xl px-4 py-8">
         <h1 className="text-3xl font-bold">Project not found</h1>
         <p className="mt-4 text-gray-400">{error || `No project found with slug "${slug}"`}</p>
-        <Link href="/" className="mt-4 inline-block text-purple-400 hover:text-purple-300">
-          Back to home
-        </Link>
+        <div className="mt-4 flex items-center gap-4">
+          <Link href={`/project/${slug}`} className="text-purple-400 hover:text-purple-300">
+            Retry
+          </Link>
+          <Link href="/" className="text-purple-400 hover:text-purple-300">
+            Back to home
+          </Link>
+        </div>
       </main>
     );
   }
@@ -135,10 +142,16 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
                     <img src={c.imageUrl} alt={c.name} className="h-10 w-10 rounded-lg object-cover" />
                   )}
                   <div>
-                    <h3 className="font-medium">{c.name}</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-medium">{c.name}</h3>
+                      <TrustBadge status={c.verificationStatus} />
+                    </div>
                     <p className="text-xs text-gray-500">{c.chain} · {truncateAddress(c.contractAddress)}</p>
                   </div>
                 </div>
+                {(c.verificationStatus === 'tracked_unverified' || c.verificationStatus === 'rejected') && (
+                  <TrustDisclaimer status={c.verificationStatus} />
+                )}
                 <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
                   {c.floorPrice !== null && (
                     <div>
