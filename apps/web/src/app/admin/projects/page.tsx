@@ -41,6 +41,7 @@ export default function AdminProjectsPage() {
   const [newOwnerRole, setNewOwnerRole] = useState<'owner' | 'editor'>('editor');
   const [featurePending, setFeaturePending] = useState<Record<string, boolean>>({});
   const [featureError, setFeatureError] = useState<Record<string, string | null>>({});
+  const [copiedProjectId, setCopiedProjectId] = useState<string | null>(null);
 
   const fetchProjects = () => {
     if (!accessToken) return;
@@ -112,6 +113,18 @@ export default function AdminProjectsPage() {
     fetchProjects();
   };
 
+  const copyProjectId = async (projectId: string) => {
+    try {
+      await navigator.clipboard.writeText(projectId);
+      setCopiedProjectId(projectId);
+      setTimeout(() => {
+        setCopiedProjectId((current) => (current === projectId ? null : current));
+      }, 1500);
+    } catch {
+      setFeatureError((prev) => ({ ...prev, [projectId]: 'Failed to copy UUID' }));
+    }
+  };
+
   const toggleOwners = async (projectId: string) => {
     if (expandedId === projectId) {
       setExpandedId(null);
@@ -172,6 +185,15 @@ export default function AdminProjectsPage() {
                 <div>
                   <span className="font-medium">{p.name}</span>
                   <span className="ml-2 text-xs text-gray-500">/{p.slug}</span>
+                  <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+                    <span className="font-mono">{p.id.slice(0, 8)}...</span>
+                    <button
+                      onClick={() => copyProjectId(p.id)}
+                      className="text-purple-400 hover:text-purple-300"
+                    >
+                      {copiedProjectId === p.id ? 'Copied' : 'Copy UUID'}
+                    </button>
+                  </div>
                 </div>
                 <span className="text-xs text-gray-500">
                   {p.collections.length} collection{p.collections.length !== 1 ? 's' : ''}
