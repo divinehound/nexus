@@ -245,6 +245,58 @@ export function retryAdminIndexingJob(id: string, token: string) {
   );
 }
 
+export type IndexStatusState = 'queued' | 'running' | 'done' | 'failed' | null;
+
+export interface AdminIndexStatusResponse {
+  entityType: 'wallet' | 'collection' | 'project';
+  entityId: string;
+  lastIndexStartedAt: string | null;
+  lastIndexFinishedAt: string | null;
+  lastIndexStatus: IndexStatusState;
+  lastIndexError: string | null;
+  lastIndexJobId: string | null;
+}
+
+export interface AdminRefreshResponse {
+  queued: boolean;
+  jobId: string;
+  entityType: 'wallet' | 'collection' | 'project';
+  entityId: string;
+}
+
+export function getAdminWalletIndexStatus(walletId: string, token: string) {
+  return apiFetch<AdminIndexStatusResponse>(`/admin/indexing/status/wallet/${encodeURIComponent(walletId)}`, { token });
+}
+
+export function getAdminCollectionIndexStatus(idOrContract: string, token: string) {
+  return apiFetch<AdminIndexStatusResponse>(`/admin/indexing/status/collection/${encodeURIComponent(idOrContract)}`, { token });
+}
+
+export function getAdminProjectIndexStatus(idOrSlug: string, token: string) {
+  return apiFetch<AdminIndexStatusResponse>(`/admin/indexing/status/project/${encodeURIComponent(idOrSlug)}`, { token });
+}
+
+export function refreshAdminWalletIndexing(walletId: string, token: string) {
+  return apiFetch<AdminRefreshResponse>(`/admin/indexing/wallet/${encodeURIComponent(walletId)}/refresh`, {
+    method: 'POST',
+    token,
+  });
+}
+
+export function refreshAdminCollectionIndexing(collectionId: string, token: string) {
+  return apiFetch<AdminRefreshResponse>(`/admin/indexing/collection/${encodeURIComponent(collectionId)}/refresh`, {
+    method: 'POST',
+    token,
+  });
+}
+
+export function refreshAdminProjectIndexing(projectId: string, token: string) {
+  return apiFetch<AdminRefreshResponse>(`/admin/indexing/project/${encodeURIComponent(projectId)}/refresh`, {
+    method: 'POST',
+    token,
+  });
+}
+
 export interface MeProfile {
   id: string;
   displayName: string | null;

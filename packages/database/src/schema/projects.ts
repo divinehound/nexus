@@ -78,6 +78,11 @@ export const projects = pgTable('projects', {
   isVerified: boolean('is_verified').default(false).notNull(),
   isFeatured: boolean('is_featured').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  lastIndexStartedAt: timestamp('last_index_started_at', { withTimezone: true }),
+  lastIndexFinishedAt: timestamp('last_index_finished_at', { withTimezone: true }),
+  lastIndexStatus: varchar('last_index_status', { length: 16 }),
+  lastIndexError: text('last_index_error'),
+  lastIndexJobId: varchar('last_index_job_id', { length: 64 }),
 });
 
 export const collections = pgTable(
@@ -111,6 +116,11 @@ export const collections = pgTable(
     qualityReason: text('quality_reason'),
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    lastIndexStartedAt: timestamp('last_index_started_at', { withTimezone: true }),
+    lastIndexFinishedAt: timestamp('last_index_finished_at', { withTimezone: true }),
+    lastIndexStatus: varchar('last_index_status', { length: 16 }),
+    lastIndexError: text('last_index_error'),
+    lastIndexJobId: varchar('last_index_job_id', { length: 64 }),
   },
   (table) => [
     uniqueIndex('collections_chain_contract_unique').on(

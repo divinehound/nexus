@@ -39,6 +39,11 @@ export const wallets = pgTable(
     ensName: varchar('ens_name', { length: 255 }),
     snsName: varchar('sns_name', { length: 255 }),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    lastIndexStartedAt: timestamp('last_index_started_at', { withTimezone: true }),
+    lastIndexFinishedAt: timestamp('last_index_finished_at', { withTimezone: true }),
+    lastIndexStatus: varchar('last_index_status', { length: 16 }),
+    lastIndexError: text('last_index_error'),
+    lastIndexJobId: varchar('last_index_job_id', { length: 64 }),
   },
   (table) => [
     uniqueIndex('wallets_chain_address_unique').on(table.chain, table.address),

@@ -1,7 +1,8 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { and, asc, desc, eq, gte } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
-import { type Database, collections, marketSnapshots } from '@nexus/database';
+import { type Database, collections, marketSnapshots, projects } from '@nexus/database';
 
 const STALE_THRESHOLD_MS = 6 * 60 * 60 * 1000;
 const HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -9,6 +10,50 @@ const HISTORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 @Injectable()
 export class CollectionMetricsService {
   constructor(@Inject(DATABASE_TOKEN) private readonly db: Database) {}
+
+  private async setCollectionIndexStatus(
+    collectionId: string,
+    input: {
+      startedAt?: Date | null;
+      finishedAt?: Date | null;
+      status?: 'queued' | 'running' | 'done' | 'failed' | null;
+      error?: string | null;
+      jobId?: string | null;
+    },
+  ) {
+    await this.db
+      .update(collections)
+      .set({
+        ...(input.startedAt !== undefined ? { lastIndexStartedAt: input.startedAt } : {}),
+        ...(input.finishedAt !== undefined ? { lastIndexFinishedAt: input.finishedAt } : {}),
+        ...(input.status !== undefined ? { lastIndexStatus: input.status } : {}),
+        ...(input.error !== undefined ? { lastIndexError: input.error } : {}),
+        ...(input.jobId !== undefined ? { lastIndexJobId: input.jobId } : {}),
+      })
+      .where(eq(collections.id, collectionId));
+  }
+
+  private async setProjectIndexStatus(
+    projectId: string,
+    input: {
+      startedAt?: Date | null;
+      finishedAt?: Date | null;
+      status?: 'queued' | 'running' | 'done' | 'failed' | null;
+      error?: string | null;
+      jobId?: string | null;
+    },
+  ) {
+    await this.db
+      .update(projects)
+      .set({
+        ...(input.startedAt !== undefined ? { lastIndexStartedAt: input.startedAt } : {}),
+        ...(input.finishedAt !== undefined ? { lastIndexFinishedAt: input.finishedAt } : {}),
+        ...(input.status !== undefined ? { lastIndexStatus: input.status } : {}),
+        ...(input.error !== undefined ? { lastIndexError: input.error } : {}),
+        ...(input.jobId !== undefined ? { lastIndexJobId: input.jobId } : {}),
+      })
+      .where(eq(projects.id, projectId));
+  }
 
   async getCollectionStats(collectionId: string) {
     const latest = await this.db.query.marketSnapshots.findFirst({
@@ -96,15 +141,43 @@ export class CollectionMetricsService {
 
     let refreshed = 0;
     for (const collection of trackedCollections) {
+      await this.refreshCollectionMetricsNow(collection.id);
+      refreshed += 1;
+    }
+
+    return {
+      refreshed,
+      totalTracked: trackedCollections.length,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  async refreshCollectionMetricsNow(collectionId: string) {
+    const collection = await this.db.query.collections.findFirst({ where: eq(collections.id, collectionId) });
+    if (!collection) throw new NotFoundException('Collection not found');
+
+    const jobId = randomUUID();
+    const startedAt = new Date();
+
+    await this.setCollectionIndexStatus(collectionId, {
+      startedAt,
+      finishedAt: null,
+      status: 'running',
+      error: null,
+      jobId,
+    });
+
+    try {
       const generated = this.generateDeterministicSnapshot(collection.id, {
         floorPrice: collection.floorPrice,
         holderCount: collection.holderCount,
         listedCount: collection.listedCount,
       });
 
+      const now = new Date();
       await this.db.insert(marketSnapshots).values({
         collectionId: collection.id,
-        timestamp: new Date(),
+        timestamp: now,
         floorPrice: generated.floorPrice,
         listedCount: generated.listedCount,
         holderCount: generated.holderCount,
@@ -115,14 +188,68 @@ export class CollectionMetricsService {
         uniqueBuyers24h: generated.uniqueBuyers24h,
       });
 
-      refreshed += 1;
-    }
+      await this.setCollectionIndexStatus(collectionId, {
+        finishedAt: now,
+        status: 'done',
+        error: null,
+        jobId,
+      });
 
-    return {
-      refreshed,
-      totalTracked: trackedCollections.length,
-      timestamp: new Date().toISOString(),
-    };
+      return { queued: true, jobId, entityType: 'collection' as const, entityId: collectionId };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown indexing error';
+      const finishedAt = new Date();
+      await this.setCollectionIndexStatus(collectionId, {
+        finishedAt,
+        status: 'failed',
+        error: message,
+        jobId,
+      });
+      throw error;
+    }
+  }
+
+  async refreshProjectMetricsNow(projectId: string) {
+    const project = await this.db.query.projects.findFirst({ where: eq(projects.id, projectId) });
+    if (!project) throw new NotFoundException('Project not found');
+
+    const projectJobId = randomUUID();
+    const startedAt = new Date();
+    await this.setProjectIndexStatus(projectId, {
+      startedAt,
+      finishedAt: null,
+      status: 'running',
+      error: null,
+      jobId: projectJobId,
+    });
+
+    try {
+      const projectCollections = await this.db.query.collections.findMany({ where: eq(collections.projectId, projectId) });
+
+      for (const collection of projectCollections) {
+        await this.refreshCollectionMetricsNow(collection.id);
+      }
+
+      const finishedAt = new Date();
+      await this.setProjectIndexStatus(projectId, {
+        finishedAt,
+        status: 'done',
+        error: null,
+        jobId: projectJobId,
+      });
+
+      return { queued: true, jobId: projectJobId, entityType: 'project' as const, entityId: projectId };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown indexing error';
+      const finishedAt = new Date();
+      await this.setProjectIndexStatus(projectId, {
+        finishedAt,
+        status: 'failed',
+        error: message,
+        jobId: projectJobId,
+      });
+      throw error;
+    }
   }
 
   private generateDeterministicSnapshot(

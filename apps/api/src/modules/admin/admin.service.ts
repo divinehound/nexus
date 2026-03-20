@@ -4,7 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { eq, and, count, sql, desc } from 'drizzle-orm';
+import { eq, and, count, sql, desc, or } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import {
   type Database,
@@ -478,8 +478,64 @@ export class AdminService {
     };
   }
 
+  private normalizeIndexStatus(entityType: 'wallet' | 'collection' | 'project', entity: any) {
+    return {
+      entityType,
+      entityId: entity.id,
+      lastIndexStartedAt: entity.lastIndexStartedAt ?? null,
+      lastIndexFinishedAt: entity.lastIndexFinishedAt ?? null,
+      lastIndexStatus: entity.lastIndexStatus ?? null,
+      lastIndexError: entity.lastIndexError ?? null,
+      lastIndexJobId: entity.lastIndexJobId ?? null,
+    };
+  }
+
+  async getWalletIndexStatus(walletId: string) {
+    const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, walletId) });
+    if (!wallet) throw new NotFoundException('Wallet not found');
+    return this.normalizeIndexStatus('wallet', wallet);
+  }
+
+  async getCollectionIndexStatus(idOrContract: string) {
+    const collection = await this.db.query.collections.findFirst({
+      where: or(eq(collections.id, idOrContract), eq(collections.contractAddress, idOrContract)),
+    });
+
+    if (!collection) throw new NotFoundException('Collection not found');
+    return this.normalizeIndexStatus('collection', collection);
+  }
+
+  async getProjectIndexStatus(idOrSlug: string) {
+    const project = await this.db.query.projects.findFirst({
+      where: or(eq(projects.id, idOrSlug), eq(projects.slug, idOrSlug)),
+    });
+
+    if (!project) throw new NotFoundException('Project not found');
+    return this.normalizeIndexStatus('project', project);
+  }
+
   async refreshCollectionMetrics() {
     return this.collectionMetricsService.refreshTrackedCollectionsMetrics();
+  }
+
+  async refreshCollectionIndexing(collectionId: string) {
+    const response = await this.collectionMetricsService.refreshCollectionMetricsNow(collectionId);
+    return {
+      queued: response.queued,
+      jobId: response.jobId,
+      entityType: response.entityType,
+      entityId: response.entityId,
+    };
+  }
+
+  async refreshProjectIndexing(projectId: string) {
+    const response = await this.collectionMetricsService.refreshProjectMetricsNow(projectId);
+    return {
+      queued: response.queued,
+      jobId: response.jobId,
+      entityType: response.entityType,
+      entityId: response.entityId,
+    };
   }
 
   async refreshWalletIndexing(walletId: string) {

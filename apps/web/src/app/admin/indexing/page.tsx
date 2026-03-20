@@ -4,9 +4,16 @@ import { useEffect, useState } from 'react';
 import {
   type AdminIndexingJobDetails,
   type AdminIndexingJobListItem,
+  type AdminIndexStatusResponse,
   type IndexingJobStatus,
+  getAdminCollectionIndexStatus,
   getAdminIndexingJob,
   getAdminIndexingJobs,
+  getAdminProjectIndexStatus,
+  getAdminWalletIndexStatus,
+  refreshAdminCollectionIndexing,
+  refreshAdminProjectIndexing,
+  refreshAdminWalletIndexing,
   retryAdminIndexingJob,
 } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
@@ -19,11 +26,17 @@ const statusOptions: Array<{ label: string; value: '' | IndexingJobStatus }> = [
   { label: 'Failed', value: 'failed' },
 ];
 
-function statusClass(status: IndexingJobStatus) {
-  if (status === 'completed') return 'bg-emerald-900/30 text-emerald-400';
+function statusClass(status: string | null) {
+  if (status === 'completed' || status === 'done') return 'bg-emerald-900/30 text-emerald-400';
   if (status === 'failed') return 'bg-red-900/30 text-red-400';
   if (status === 'running') return 'bg-amber-900/30 text-amber-400';
-  return 'bg-slate-800 text-slate-300';
+  if (status === 'queued') return 'bg-slate-800 text-slate-300';
+  return 'bg-gray-900 text-gray-500';
+}
+
+function formatDate(value: string | null) {
+  if (!value) return '-';
+  return new Date(value).toLocaleString();
 }
 
 function formatDuration(durationMs: number | null) {
@@ -41,6 +54,72 @@ function statsSummary(statsJson: Record<string, unknown> | null) {
   return `holdings ${holdings} · active ${active} · light ${lightweight} · suppressed ${suppressed}`;
 }
 
+function StatusPanel({
+  title,
+  placeholder,
+  value,
+  onChange,
+  onLookup,
+  onRefresh,
+  status,
+  loading,
+  error,
+}: {
+  title: string;
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+  onLookup: () => void;
+  onRefresh: () => void;
+  status: AdminIndexStatusResponse | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  return (
+    <div className="rounded border border-gray-800 p-4">
+      <h3 className="mb-3 text-sm font-medium text-white">{title}</h3>
+      <div className="mb-3 flex gap-2">
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="flex-1 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white"
+        />
+        <button onClick={onLookup} className="rounded border border-gray-700 px-3 py-2 text-xs text-gray-200">
+          Lookup
+        </button>
+        <button onClick={onRefresh} className="rounded border border-purple-700 px-3 py-2 text-xs text-purple-300">
+          Reindex
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="text-xs text-gray-400">Loading...</p>
+      ) : error ? (
+        <div className="text-xs text-red-300">
+          <p>{error}</p>
+          <button className="underline" onClick={onLookup}>Retry</button>
+        </div>
+      ) : status ? (
+        <div className="space-y-1 text-xs text-gray-300">
+          <div>
+            <span className={`rounded px-2 py-1 ${statusClass(status.lastIndexStatus)}`}>
+              {status.lastIndexStatus ?? 'unknown'}
+            </span>
+          </div>
+          <div>Last started: {formatDate(status.lastIndexStartedAt)}</div>
+          <div>Last finished: {formatDate(status.lastIndexFinishedAt)}</div>
+          <div>Last indexed at: {formatDate(status.lastIndexFinishedAt)}</div>
+          <div>Last job id: {status.lastIndexJobId ?? '-'}</div>
+          <div className="text-red-300">Last error: {status.lastIndexError ?? '-'}</div>
+        </div>
+      ) : (
+        <p className="text-xs text-gray-500">No status loaded yet.</p>
+      )}
+    </div>
+  );
+}
+
 export default function AdminIndexingPage() {
   const { accessToken } = useAuth();
   const [jobs, setJobs] = useState<AdminIndexingJobListItem[]>([]);
@@ -56,6 +135,22 @@ export default function AdminIndexingPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<AdminIndexingJobDetails | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
+
+  const [walletStatusInput, setWalletStatusInput] = useState('');
+  const [collectionStatusInput, setCollectionStatusInput] = useState('');
+  const [projectStatusInput, setProjectStatusInput] = useState('');
+
+  const [walletStatus, setWalletStatus] = useState<AdminIndexStatusResponse | null>(null);
+  const [collectionStatus, setCollectionStatus] = useState<AdminIndexStatusResponse | null>(null);
+  const [projectStatus, setProjectStatus] = useState<AdminIndexStatusResponse | null>(null);
+
+  const [walletStatusLoading, setWalletStatusLoading] = useState(false);
+  const [collectionStatusLoading, setCollectionStatusLoading] = useState(false);
+  const [projectStatusLoading, setProjectStatusLoading] = useState(false);
+
+  const [walletStatusError, setWalletStatusError] = useState<string | null>(null);
+  const [collectionStatusError, setCollectionStatusError] = useState<string | null>(null);
+  const [projectStatusError, setProjectStatusError] = useState<string | null>(null);
 
   const loadJobs = () => {
     if (!accessToken) {
@@ -115,10 +210,106 @@ export default function AdminIndexingPage() {
     }
   };
 
+  const loadWalletStatus = async () => {
+    if (!accessToken || !walletStatusInput) return;
+    setWalletStatusLoading(true);
+    setWalletStatusError(null);
+    try {
+      setWalletStatus(await getAdminWalletIndexStatus(walletStatusInput.trim(), accessToken));
+    } catch (err) {
+      setWalletStatusError(err instanceof Error ? err.message : 'Failed to fetch wallet status');
+    } finally {
+      setWalletStatusLoading(false);
+    }
+  };
+
+  const loadCollectionStatus = async () => {
+    if (!accessToken || !collectionStatusInput) return;
+    setCollectionStatusLoading(true);
+    setCollectionStatusError(null);
+    try {
+      setCollectionStatus(await getAdminCollectionIndexStatus(collectionStatusInput.trim(), accessToken));
+    } catch (err) {
+      setCollectionStatusError(err instanceof Error ? err.message : 'Failed to fetch collection status');
+    } finally {
+      setCollectionStatusLoading(false);
+    }
+  };
+
+  const loadProjectStatus = async () => {
+    if (!accessToken || !projectStatusInput) return;
+    setProjectStatusLoading(true);
+    setProjectStatusError(null);
+    try {
+      setProjectStatus(await getAdminProjectIndexStatus(projectStatusInput.trim(), accessToken));
+    } catch (err) {
+      setProjectStatusError(err instanceof Error ? err.message : 'Failed to fetch project status');
+    } finally {
+      setProjectStatusLoading(false);
+    }
+  };
+
+  const refreshWallet = async () => {
+    if (!accessToken || !walletStatusInput) return;
+    await refreshAdminWalletIndexing(walletStatusInput.trim(), accessToken);
+    await loadWalletStatus();
+    await loadJobs();
+  };
+
+  const refreshCollection = async () => {
+    if (!accessToken || !collectionStatusInput) return;
+    await refreshAdminCollectionIndexing(collectionStatusInput.trim(), accessToken);
+    await loadCollectionStatus();
+    await loadJobs();
+  };
+
+  const refreshProject = async () => {
+    if (!accessToken || !projectStatusInput) return;
+    await refreshAdminProjectIndexing(projectStatusInput.trim(), accessToken);
+    await loadProjectStatus();
+    await loadJobs();
+  };
+
   const totalPages = Math.max(1, Math.ceil(total / limit));
 
   return (
     <div>
+      <div className="mb-6 grid gap-3 md:grid-cols-3">
+        <StatusPanel
+          title="Wallet Index Status"
+          placeholder="Wallet ID"
+          value={walletStatusInput}
+          onChange={setWalletStatusInput}
+          onLookup={loadWalletStatus}
+          onRefresh={refreshWallet}
+          status={walletStatus}
+          loading={walletStatusLoading}
+          error={walletStatusError}
+        />
+        <StatusPanel
+          title="Collection Index Status"
+          placeholder="Collection ID or Contract"
+          value={collectionStatusInput}
+          onChange={setCollectionStatusInput}
+          onLookup={loadCollectionStatus}
+          onRefresh={refreshCollection}
+          status={collectionStatus}
+          loading={collectionStatusLoading}
+          error={collectionStatusError}
+        />
+        <StatusPanel
+          title="Project Index Status"
+          placeholder="Project ID or Slug"
+          value={projectStatusInput}
+          onChange={setProjectStatusInput}
+          onLookup={loadProjectStatus}
+          onRefresh={refreshProject}
+          status={projectStatus}
+          loading={projectStatusLoading}
+          error={projectStatusError}
+        />
+      </div>
+
       <div className="mb-6 flex items-end gap-3">
         <div>
           <label className="mb-1 block text-xs text-gray-500">Status</label>
@@ -159,9 +350,7 @@ export default function AdminIndexingPage() {
       ) : error ? (
         <div className="rounded border border-red-900 bg-red-950/30 p-4 text-sm text-red-300">
           <p>{error}</p>
-          <button onClick={loadJobs} className="mt-2 text-xs text-red-200 underline">
-            Retry
-          </button>
+          <button onClick={loadJobs} className="mt-2 text-xs text-red-200 underline">Retry</button>
         </div>
       ) : jobs.length === 0 ? (
         <p className="text-gray-500">No indexing jobs found for current filters.</p>
@@ -190,25 +379,16 @@ export default function AdminIndexingPage() {
                       </span>
                     </td>
                     <td className="py-3 pr-4 text-gray-400">{new Date(job.startedAt).toLocaleString()}</td>
-                    <td className="py-3 pr-4 text-gray-400">
-                      {job.finishedAt ? new Date(job.finishedAt).toLocaleString() : '-'}
-                    </td>
+                    <td className="py-3 pr-4 text-gray-400">{job.finishedAt ? new Date(job.finishedAt).toLocaleString() : '-'}</td>
                     <td className="py-3 pr-4 text-gray-400">{formatDuration(job.durationMs)}</td>
-                    <td className="py-3 pr-4 text-xs text-gray-400">
-                      <div>{job.walletId}</div>
-                      <div>{job.userId}</div>
-                    </td>
+                    <td className="py-3 pr-4 text-xs text-gray-400"><div>{job.walletId}</div><div>{job.userId}</div></td>
                     <td className="py-3 pr-4 text-xs text-gray-300">{statsSummary(job.statsJson)}</td>
                     <td className="max-w-xs truncate py-3 pr-4 text-xs text-red-300">{job.error ?? '-'}</td>
                     <td className="py-3">
                       <div className="flex gap-2 text-xs">
-                        <button onClick={() => openDetails(job.id)} className="text-purple-400 hover:text-purple-300">
-                          View
-                        </button>
+                        <button onClick={() => openDetails(job.id)} className="text-purple-400 hover:text-purple-300">View</button>
                         {(job.status === 'failed' || job.status === 'completed') && (
-                          <button onClick={() => retryJob(job)} className="text-amber-300 hover:text-amber-200">
-                            Retry
-                          </button>
+                          <button onClick={() => retryJob(job)} className="text-amber-300 hover:text-amber-200">Retry</button>
                         )}
                       </div>
                     </td>
@@ -219,24 +399,10 @@ export default function AdminIndexingPage() {
           </div>
 
           <div className="mt-4 flex items-center justify-between text-sm text-gray-400">
-            <span>
-              Page {page} of {totalPages}
-            </span>
+            <span>Page {page} of {totalPages}</span>
             <div className="flex gap-2">
-              <button
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page <= 1}
-                className="rounded border border-gray-700 px-2 py-1 disabled:opacity-40"
-              >
-                Prev
-              </button>
-              <button
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page >= totalPages}
-                className="rounded border border-gray-700 px-2 py-1 disabled:opacity-40"
-              >
-                Next
-              </button>
+              <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} className="rounded border border-gray-700 px-2 py-1 disabled:opacity-40">Prev</button>
+              <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="rounded border border-gray-700 px-2 py-1 disabled:opacity-40">Next</button>
             </div>
           </div>
         </>
@@ -244,22 +410,15 @@ export default function AdminIndexingPage() {
 
       {detailsOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 p-4" onClick={() => setDetailsOpen(false)}>
-          <div
-            className="mx-auto mt-10 max-w-2xl rounded-xl border border-gray-800 bg-gray-950 p-4"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="mx-auto mt-10 max-w-2xl rounded-xl border border-gray-800 bg-gray-950 p-4" onClick={(e) => e.stopPropagation()}>
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-semibold">Indexing Job Details</h3>
-              <button onClick={() => setDetailsOpen(false)} className="text-sm text-gray-400">
-                Close
-              </button>
+              <button onClick={() => setDetailsOpen(false)} className="text-sm text-gray-400">Close</button>
             </div>
             {detailsLoading ? (
               <p className="text-gray-400">Loading details...</p>
             ) : selected ? (
-              <pre className="max-h-[60vh] overflow-auto rounded bg-black p-3 text-xs text-gray-200">
-                {JSON.stringify(selected, null, 2)}
-              </pre>
+              <pre className="max-h-[60vh] overflow-auto rounded bg-black p-3 text-xs text-gray-200">{JSON.stringify(selected, null, 2)}</pre>
             ) : (
               <p className="text-gray-500">No details available.</p>
             )}

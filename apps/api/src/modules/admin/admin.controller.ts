@@ -217,6 +217,36 @@ export class AdminController {
     return this.adminService.retryIndexingJob(id);
   }
 
+  @Get('indexing/status/wallet/:walletId')
+  @ApiOperation({ summary: 'Get indexing status for a wallet' })
+  getWalletIndexStatus(@Param('walletId') walletId: string) {
+    return this.adminService.getWalletIndexStatus(walletId);
+  }
+
+  @Get('indexing/status/collection/:idOrContract')
+  @ApiOperation({ summary: 'Get indexing status for a collection by id or contract' })
+  getCollectionIndexStatus(@Param('idOrContract') idOrContract: string) {
+    return this.adminService.getCollectionIndexStatus(idOrContract);
+  }
+
+  @Get('indexing/status/project/:idOrSlug')
+  @ApiOperation({ summary: 'Get indexing status for a project by id or slug' })
+  getProjectIndexStatus(@Param('idOrSlug') idOrSlug: string) {
+    return this.adminService.getProjectIndexStatus(idOrSlug);
+  }
+
+  @Post('indexing/collection/:id/refresh')
+  @ApiOperation({ summary: 'Manually trigger indexing refresh for a collection' })
+  refreshCollectionIndexing(@Param('id') id: string) {
+    return this.adminService.refreshCollectionIndexing(id);
+  }
+
+  @Post('indexing/project/:id/refresh')
+  @ApiOperation({ summary: 'Manually trigger indexing refresh for a project' })
+  refreshProjectIndexing(@Param('id') id: string) {
+    return this.adminService.refreshProjectIndexing(id);
+  }
+
   @Post('indexing/wallet/:walletId/refresh')
   @ApiOperation({ summary: 'Manually trigger holdings indexing refresh for a wallet' })
   refreshWalletIndexing(@Param('walletId') walletId: string) {

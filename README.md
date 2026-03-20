@@ -49,13 +49,24 @@ Trust disclaimer shown for unverified/rejected:
   - `/admin/collections`
 - Supports verify/reject/suggest-project actions.
 
-### 5) Admin indexing queue visibility
+### 5) Admin indexing queue visibility + index status controls
 - Web admin indexing UI:
   - `/admin/indexing`
+  - Includes quick status lookup panels for wallet, collection, and project.
+  - Includes manual reindex triggers for wallet, collection, and project.
 - API endpoints:
-  - `GET /api/admin/indexing/jobs?status=&walletId=&page=&limit=`
-  - `GET /api/admin/indexing/jobs/:id`
-  - `POST /api/admin/indexing/jobs/:id/retry`
+  - Jobs
+    - `GET /api/admin/indexing/jobs?status=&walletId=&page=&limit=`
+    - `GET /api/admin/indexing/jobs/:id`
+    - `POST /api/admin/indexing/jobs/:id/retry`
+  - Status lookups (normalized payload)
+    - `GET /api/admin/indexing/status/wallet/:walletId`
+    - `GET /api/admin/indexing/status/collection/:idOrContract`
+    - `GET /api/admin/indexing/status/project/:idOrSlug`
+  - Manual refresh triggers
+    - `POST /api/admin/indexing/wallet/:walletId/refresh`
+    - `POST /api/admin/indexing/collection/:id/refresh`
+    - `POST /api/admin/indexing/project/:id/refresh`
 
 ---
 

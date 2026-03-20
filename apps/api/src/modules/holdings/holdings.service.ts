@@ -16,6 +16,7 @@ import {
   wallets,
   trackingTierEnum,
 } from '@nexus/database';
+import { randomUUID } from 'crypto';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 
 type Chain = (typeof chainEnum.enumValues)[number];
@@ -39,10 +40,35 @@ export class HoldingsService {
     );
   }
 
+  private async updateWalletIndexStatus(
+    walletId: string,
+    input: {
+      startedAt?: Date | null;
+      finishedAt?: Date | null;
+      status?: 'queued' | 'running' | 'done' | 'failed' | null;
+      error?: string | null;
+      jobId?: string | null;
+    },
+  ) {
+    await this.db
+      .update(wallets)
+      .set({
+        ...(input.startedAt !== undefined ? { lastIndexStartedAt: input.startedAt } : {}),
+        ...(input.finishedAt !== undefined ? { lastIndexFinishedAt: input.finishedAt } : {}),
+        ...(input.status !== undefined ? { lastIndexStatus: input.status } : {}),
+        ...(input.error !== undefined ? { lastIndexError: input.error } : {}),
+        ...(input.jobId !== undefined ? { lastIndexJobId: input.jobId } : {}),
+      })
+      .where(eq(wallets.id, walletId));
+  }
+
   private async createIndexingJob(userId: string, walletId: string, retryOfJobId?: string) {
+    const jobId = randomUUID();
+
     const [job] = await this.db
       .insert(walletIndexingJobs)
       .values({
+        id: jobId,
         userId,
         walletId,
         type: 'holdings_refresh',
@@ -50,6 +76,14 @@ export class HoldingsService {
         status: 'queued',
       })
       .returning();
+
+    await this.updateWalletIndexStatus(walletId, {
+      startedAt: null,
+      finishedAt: null,
+      status: 'queued',
+      error: null,
+      jobId,
+    });
 
     return job;
   }
@@ -82,8 +116,13 @@ export class HoldingsService {
 
     const job = await this.createIndexingJob(wallet.userId, wallet.id);
 
-    await this.runIndexingJob(job.id);
-    return this.db.query.walletIndexingJobs.findFirst({ where: eq(walletIndexingJobs.id, job.id) });
+    setTimeout(() => {
+      void this.runIndexingJob(job.id).catch(() => {
+        // intentionally swallowed for fire-and-forget execution
+      });
+    }, 0);
+
+    return { queued: true, jobId: job.id, entityType: 'wallet' as const, entityId: walletId };
   }
 
   async retryIndexingJob(jobId: string) {
@@ -193,10 +232,19 @@ export class HoldingsService {
     });
     if (!job) throw new NotFoundException('Indexing job not found');
 
+    const startedAt = new Date();
     await this.db
       .update(walletIndexingJobs)
-      .set({ status: 'running', startedAt: new Date(), error: null })
+      .set({ status: 'running', startedAt, error: null })
       .where(eq(walletIndexingJobs.id, jobId));
+
+    await this.updateWalletIndexStatus(job.walletId, {
+      startedAt,
+      finishedAt: null,
+      status: 'running',
+      error: null,
+      jobId,
+    });
 
     try {
       const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, job.walletId) });
@@ -274,15 +322,32 @@ export class HoldingsService {
           error: null,
         })
         .where(eq(walletIndexingJobs.id, jobId));
+
+      await this.updateWalletIndexStatus(job.walletId, {
+        finishedAt: now,
+        status: 'done',
+        error: null,
+        jobId,
+      });
     } catch (error) {
+      const finishedAt = new Date();
+      const message = error instanceof Error ? error.message : 'Unknown indexing error';
+
       await this.db
         .update(walletIndexingJobs)
         .set({
           status: 'failed',
-          finishedAt: new Date(),
-          error: error instanceof Error ? error.message : 'Unknown indexing error',
+          finishedAt,
+          error: message,
         })
         .where(eq(walletIndexingJobs.id, jobId));
+
+      await this.updateWalletIndexStatus(job.walletId, {
+        finishedAt,
+        status: 'failed',
+        error: message,
+        jobId,
+      });
       throw error;
     }
   }
