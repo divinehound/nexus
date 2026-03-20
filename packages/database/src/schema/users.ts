@@ -146,6 +146,8 @@ export const walletIndexingJobs = pgTable(
     walletId: uuid('wallet_id')
       .notNull()
       .references(() => wallets.id, { onDelete: 'cascade' }),
+    type: varchar('type', { length: 64 }).default('holdings_refresh').notNull(),
+    retryOfJobId: uuid('retry_of_job_id'),
     status: walletIndexingStatusEnum('status').default('queued').notNull(),
     startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
@@ -156,6 +158,7 @@ export const walletIndexingJobs = pgTable(
     index('wallet_indexing_jobs_user_wallet_idx').on(table.userId, table.walletId),
     index('wallet_indexing_jobs_wallet_status_idx').on(table.walletId, table.status),
     index('wallet_indexing_jobs_started_idx').on(table.startedAt),
+    index('wallet_indexing_jobs_retry_of_idx').on(table.retryOfJobId),
   ],
 );
 

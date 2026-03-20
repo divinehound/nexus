@@ -11,6 +11,7 @@ const navItems = [
   { href: '/admin/projects', label: 'Projects' },
   { href: '/admin/wiki', label: 'Wiki Suggestions' },
   { href: '/admin/events', label: 'Events' },
+  { href: '/admin/indexing', label: 'Indexing Queue' },
   { href: '/admin/users', label: 'Users' },
 ];
 

@@ -189,6 +189,34 @@ export class AdminController {
     return this.adminService.refreshCollectionMetrics();
   }
 
+  @Get('indexing/jobs')
+  @ApiOperation({ summary: 'List indexing jobs (paginated)' })
+  listIndexingJobs(
+    @Query('status') status?: 'queued' | 'running' | 'completed' | 'failed',
+    @Query('walletId') walletId?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.adminService.listIndexingJobs({
+      status,
+      walletId,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 20,
+    });
+  }
+
+  @Get('indexing/jobs/:id')
+  @ApiOperation({ summary: 'Get indexing job details' })
+  getIndexingJob(@Param('id') id: string) {
+    return this.adminService.getIndexingJob(id);
+  }
+
+  @Post('indexing/jobs/:id/retry')
+  @ApiOperation({ summary: 'Retry an indexing job' })
+  retryIndexingJob(@Param('id') id: string) {
+    return this.adminService.retryIndexingJob(id);
+  }
+
   @Post('indexing/wallet/:walletId/refresh')
   @ApiOperation({ summary: 'Manually trigger holdings indexing refresh for a wallet' })
   refreshWalletIndexing(@Param('walletId') walletId: string) {

@@ -39,6 +39,21 @@ export class HoldingsService {
     );
   }
 
+  private async createIndexingJob(userId: string, walletId: string, retryOfJobId?: string) {
+    const [job] = await this.db
+      .insert(walletIndexingJobs)
+      .values({
+        userId,
+        walletId,
+        type: 'holdings_refresh',
+        retryOfJobId: retryOfJobId ?? null,
+        status: 'queued',
+      })
+      .returning();
+
+    return job;
+  }
+
   async queueWalletIndexing(userId: string, walletId: string) {
     const wallet = await this.db.query.wallets.findFirst({
       where: and(eq(wallets.id, walletId), eq(wallets.userId, userId)),
@@ -48,10 +63,7 @@ export class HoldingsService {
       throw new NotFoundException('Wallet not found');
     }
 
-    const [job] = await this.db
-      .insert(walletIndexingJobs)
-      .values({ userId, walletId, status: 'queued' })
-      .returning();
+    const job = await this.createIndexingJob(userId, walletId);
 
     setTimeout(() => {
       void this.runIndexingJob(job.id).catch(() => {
@@ -68,13 +80,34 @@ export class HoldingsService {
       throw new NotFoundException('Wallet not found or not linked to a user');
     }
 
-    const [job] = await this.db
-      .insert(walletIndexingJobs)
-      .values({ userId: wallet.userId, walletId: wallet.id, status: 'queued' })
-      .returning();
+    const job = await this.createIndexingJob(wallet.userId, wallet.id);
 
     await this.runIndexingJob(job.id);
     return this.db.query.walletIndexingJobs.findFirst({ where: eq(walletIndexingJobs.id, job.id) });
+  }
+
+  async retryIndexingJob(jobId: string) {
+    const originalJob = await this.db.query.walletIndexingJobs.findFirst({
+      where: eq(walletIndexingJobs.id, jobId),
+    });
+
+    if (!originalJob) {
+      throw new NotFoundException('Indexing job not found');
+    }
+
+    const retryJob = await this.createIndexingJob(
+      originalJob.userId,
+      originalJob.walletId,
+      originalJob.id,
+    );
+
+    setTimeout(() => {
+      void this.runIndexingJob(retryJob.id).catch(() => {
+        // intentionally swallowed for fire-and-forget execution
+      });
+    }, 0);
+
+    return retryJob;
   }
 
   private scoreHolding(holding: Holding): { score: number; tier: TrackingTier; reason: string } {

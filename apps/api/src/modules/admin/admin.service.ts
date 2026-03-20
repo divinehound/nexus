@@ -15,6 +15,8 @@ import {
   events,
   projectOwners,
   collections,
+  walletIndexingJobs,
+  wallets,
 } from '@nexus/database';
 import { CollectionMetricsService } from '../collections/collection-metrics.service';
 import { HoldingsService } from '../holdings/holdings.service';
@@ -381,6 +383,99 @@ export class AdminService {
       .returning();
     if (!deleted) throw new NotFoundException('Ownership record not found');
     return { deleted: true };
+  }
+
+  async listIndexingJobs(input: {
+    status?: 'queued' | 'running' | 'completed' | 'failed';
+    walletId?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, input.page ?? 1);
+    const limit = Math.min(100, Math.max(1, input.limit ?? 20));
+    const offset = (page - 1) * limit;
+
+    const conditions = [] as Array<any>;
+    if (input.status) conditions.push(eq(walletIndexingJobs.status, input.status));
+    if (input.walletId) conditions.push(eq(walletIndexingJobs.walletId, input.walletId));
+
+    const whereClause =
+      conditions.length === 0
+        ? undefined
+        : conditions.length === 1
+          ? conditions[0]
+          : and(...conditions);
+
+    const items = await this.db.query.walletIndexingJobs.findMany({
+      where: whereClause,
+      limit,
+      offset,
+      orderBy: [desc(walletIndexingJobs.startedAt)],
+    });
+
+    const [totalRow] = await this.db
+      .select({ value: count() })
+      .from(walletIndexingJobs)
+      .where(whereClause as any);
+
+    return {
+      items: items.map((job) => ({
+        id: job.id,
+        type: job.type,
+        status: job.status,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+        durationMs:
+          job.startedAt && job.finishedAt
+            ? new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()
+            : null,
+        userId: job.userId,
+        walletId: job.walletId,
+        statsJson: job.statsJson,
+        error: job.error,
+      })),
+      total: totalRow?.value ?? 0,
+      page,
+      limit,
+    };
+  }
+
+  async getIndexingJob(jobId: string) {
+    const job = await this.db.query.walletIndexingJobs.findFirst({
+      where: eq(walletIndexingJobs.id, jobId),
+    });
+
+    if (!job) {
+      throw new NotFoundException('Indexing job not found');
+    }
+
+    const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, job.walletId) });
+
+    return {
+      ...job,
+      wallet,
+      durationMs:
+        job.startedAt && job.finishedAt
+          ? new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()
+          : null,
+    };
+  }
+
+  async retryIndexingJob(jobId: string) {
+    const original = await this.db.query.walletIndexingJobs.findFirst({
+      where: eq(walletIndexingJobs.id, jobId),
+    });
+
+    if (!original) {
+      throw new NotFoundException('Indexing job not found');
+    }
+
+    const retryJob = await this.holdingsService.retryIndexingJob(jobId);
+    return {
+      queued: true,
+      originalJobId: original.id,
+      retryJobId: retryJob.id,
+    };
   }
 
   async refreshCollectionMetrics() {

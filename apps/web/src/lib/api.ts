@@ -183,6 +183,68 @@ export function adminSuggestProject(
   });
 }
 
+export type IndexingJobStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export interface AdminIndexingJobListItem {
+  id: string;
+  type: string;
+  status: IndexingJobStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  userId: string;
+  walletId: string;
+  statsJson: Record<string, unknown> | null;
+  error: string | null;
+}
+
+export interface AdminIndexingJobListResponse {
+  items: AdminIndexingJobListItem[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface AdminIndexingJobDetails extends AdminIndexingJobListItem {
+  retryOfJobId: string | null;
+  wallet: {
+    id: string;
+    address: string;
+    chain: string;
+    userId: string | null;
+    isPrimary: boolean;
+    ensName: string | null;
+    snsName: string | null;
+    lastSyncedAt: string | null;
+  } | null;
+}
+
+export function getAdminIndexingJobs(
+  token: string,
+  input: { status?: IndexingJobStatus; walletId?: string; page?: number; limit?: number } = {},
+) {
+  const params = new URLSearchParams();
+  if (input.status) params.set('status', input.status);
+  if (input.walletId) params.set('walletId', input.walletId);
+  if (input.page) params.set('page', String(input.page));
+  if (input.limit) params.set('limit', String(input.limit));
+  return apiFetch<AdminIndexingJobListResponse>(`/admin/indexing/jobs?${params.toString()}`, { token });
+}
+
+export function getAdminIndexingJob(id: string, token: string) {
+  return apiFetch<AdminIndexingJobDetails>(`/admin/indexing/jobs/${id}`, { token });
+}
+
+export function retryAdminIndexingJob(id: string, token: string) {
+  return apiFetch<{ queued: boolean; originalJobId: string; retryJobId: string }>(
+    `/admin/indexing/jobs/${id}/retry`,
+    {
+      method: 'POST',
+      token,
+    },
+  );
+}
+
 export interface MeProfile {
   id: string;
   displayName: string | null;

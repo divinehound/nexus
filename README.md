@@ -49,6 +49,14 @@ Trust disclaimer shown for unverified/rejected:
   - `/admin/collections`
 - Supports verify/reject/suggest-project actions.
 
+### 5) Admin indexing queue visibility
+- Web admin indexing UI:
+  - `/admin/indexing`
+- API endpoints:
+  - `GET /api/admin/indexing/jobs?status=&walletId=&page=&limit=`
+  - `GET /api/admin/indexing/jobs/:id`
+  - `POST /api/admin/indexing/jobs/:id/retry`
+
 ---
 
 ## Admin auth + gating
