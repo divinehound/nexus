@@ -648,8 +648,8 @@ export class AdminService {
     };
   }
 
-  async refreshWalletIndexing(walletId: string) {
-    return this.holdingsService.refreshWalletIndexing(walletId);
+  async refreshWalletIndexing(walletIdOrAddress: string) {
+    return this.holdingsService.refreshWalletIndexing(walletIdOrAddress);
   }
 
   async enrichCollection(collectionId: string) {

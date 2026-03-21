@@ -114,10 +114,22 @@ export class HoldingsService {
     return { queued: true, jobId: job.id };
   }
 
-  async refreshWalletIndexing(walletId: string) {
-    const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, walletId) });
+  async refreshWalletIndexing(walletIdOrAddress: string) {
+    // Try to find by ID first, then by address
+    let wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, walletIdOrAddress) });
+    
+    if (!wallet) {
+      // Try finding by address (case-insensitive for EVM, exact for Solana)
+      const normalized = walletIdOrAddress.toLowerCase();
+      wallet = await this.db.query.wallets.findFirst({
+        where: sql`lower(${wallets.address}) = ${normalized}`,
+      });
+    }
+
     if (!wallet?.userId) {
-      throw new NotFoundException('Wallet not found or not linked to a user');
+      throw new NotFoundException(
+        `Wallet not found or not linked to a user. Tried ID and address: ${walletIdOrAddress}`,
+      );
     }
 
     const job = await this.createIndexingJob(wallet.userId, wallet.id);
@@ -128,7 +140,13 @@ export class HoldingsService {
       });
     }, 0);
 
-    return { queued: true, jobId: job.id, entityType: 'wallet' as const, entityId: walletId };
+    return { 
+      queued: true, 
+      jobId: job.id, 
+      entityType: 'wallet' as const, 
+      entityId: wallet.id,
+      walletAddress: wallet.address,
+    };
   }
 
   async retryIndexingJob(jobId: string) {

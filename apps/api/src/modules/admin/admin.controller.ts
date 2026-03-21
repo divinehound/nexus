@@ -247,10 +247,10 @@ export class AdminController {
     return this.adminService.refreshProjectIndexing(id);
   }
 
-  @Post('indexing/wallet/:walletId/refresh')
-  @ApiOperation({ summary: 'Manually trigger holdings indexing refresh for a wallet' })
-  refreshWalletIndexing(@Param('walletId') walletId: string) {
-    return this.adminService.refreshWalletIndexing(walletId);
+  @Post('indexing/wallet/:walletIdOrAddress/refresh')
+  @ApiOperation({ summary: 'Manually trigger holdings indexing refresh for a wallet (by ID or address)' })
+  refreshWalletIndexing(@Param('walletIdOrAddress') walletIdOrAddress: string) {
+    return this.adminService.refreshWalletIndexing(walletIdOrAddress);
   }
 
   @Post('collections/:id/enrich')
