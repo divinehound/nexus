@@ -600,9 +600,22 @@ export class AdminService {
     };
   }
 
-  async getWalletIndexStatus(walletId: string) {
-    const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, walletId) });
-    if (!wallet) throw new NotFoundException('Wallet not found');
+  async getWalletIndexStatus(walletIdOrAddress: string) {
+    // Try to find by ID first, then by address
+    let wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, walletIdOrAddress) });
+    
+    if (!wallet) {
+      // Try finding by address (case-insensitive)
+      const normalized = walletIdOrAddress.toLowerCase();
+      wallet = await this.db.query.wallets.findFirst({
+        where: sql`lower(${wallets.address}) = ${normalized}`,
+      });
+    }
+
+    if (!wallet) {
+      throw new NotFoundException(`Wallet not found. Tried ID and address: ${walletIdOrAddress}`);
+    }
+    
     return this.normalizeIndexStatus('wallet', wallet);
   }
 

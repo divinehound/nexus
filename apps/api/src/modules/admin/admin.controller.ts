@@ -217,10 +217,10 @@ export class AdminController {
     return this.adminService.retryIndexingJob(id);
   }
 
-  @Get('indexing/status/wallet/:walletId')
-  @ApiOperation({ summary: 'Get indexing status for a wallet' })
-  getWalletIndexStatus(@Param('walletId') walletId: string) {
-    return this.adminService.getWalletIndexStatus(walletId);
+  @Get('indexing/status/wallet/:walletIdOrAddress')
+  @ApiOperation({ summary: 'Get indexing status for a wallet (by ID or address)' })
+  getWalletIndexStatus(@Param('walletIdOrAddress') walletIdOrAddress: string) {
+    return this.adminService.getWalletIndexStatus(walletIdOrAddress);
   }
 
   @Get('indexing/status/collection/:idOrContract')
