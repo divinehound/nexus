@@ -661,6 +661,14 @@ export class AdminService {
 
     this.logger.log(`Enriching collection ${collectionId} (${collection.contractAddress} on ${collection.chain})`);
 
+    // Validate contract address format before lookup
+    const addr = collection.contractAddress.toLowerCase();
+    if (collection.chain !== 'solana' && (!/^0x[a-f0-9]{40}$/.test(addr) || addr.length !== 42)) {
+      const message = `Invalid EVM contract address format: ${collection.contractAddress} (length: ${addr.length})`;
+      this.logger.error(message);
+      return { success: false, message, invalidAddress: true };
+    }
+
     const results = await this.blockchainLookup.lookup(collection.contractAddress, collection.chain);
     const metadata = results[0];
 

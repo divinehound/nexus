@@ -150,10 +150,15 @@ export default function AdminCollectionsPage() {
     setEnriching((prev) => ({ ...prev, [collection.id]: true }));
     
     try {
-      await adminEnrichCollection(collection.id, accessToken);
-      await fetchData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Enrichment failed');
+      const result = await adminEnrichCollection(collection.id, accessToken);
+      if (!result.success) {
+        setError(result.message || 'Enrichment failed');
+      } else {
+        await fetchData();
+      }
+    } catch (err: any) {
+      const message = err?.data?.message || err?.message || 'Enrichment failed';
+      setError(message);
     } finally {
       setEnriching((prev) => ({ ...prev, [collection.id]: false }));
     }
@@ -223,20 +228,25 @@ export default function AdminCollectionsPage() {
                     <h3 className="font-medium">{c.name}</h3>
                     <p className="text-sm text-gray-500">
                       {c.chain} · {truncateAddress(c.contractAddress)}
+                      {isInvalidAddress(c.chain, c.contractAddress) && (
+                        <span className="ml-2 rounded bg-red-900/50 px-1.5 py-0.5 text-[10px] text-red-300">
+                          Invalid Address
+                        </span>
+                      )}
                     </p>
                     <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-400">
                       {c.supply && <span>Supply: {c.supply.toLocaleString()}</span>}
                       {c.holderCount && <span>· Holders: {c.holderCount.toLocaleString()}</span>}
                       {c.floorPrice && <span>· Floor: {c.floorPrice} ETH</span>}
                     </div>
-                    {getMarketplaceLink(c.chain, c.contractAddress) && (
+                    {getExplorerLink(c.chain, c.contractAddress) && (
                       <a
-                        href={getMarketplaceLink(c.chain, c.contractAddress)}
+                        href={getExplorerLink(c.chain, c.contractAddress)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="mt-1 inline-block text-xs text-purple-400 hover:text-purple-300"
                       >
-                        View on OpenSea →
+                        View on Explorer →
                       </a>
                     )}
                   </div>
@@ -345,23 +355,36 @@ function StatCard({ label, value }: { label: string; value: number }) {
   );
 }
 
-function getMarketplaceLink(chain: string, contractAddress: string): string | null {
+function isInvalidAddress(chain: string, address: string): boolean {
+  const addr = address.toLowerCase();
+  if (chain.toLowerCase() === 'solana') {
+    // Solana addresses are base58, typically 32-44 chars
+    return !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address);
+  }
+  // EVM chains need exactly 0x + 40 hex chars
+  return !/^0x[a-f0-9]{40}$/.test(addr) || addr.length !== 42;
+}
+
+function getExplorerLink(chain: string, contractAddress: string): string | null {
   const chainLower = chain.toLowerCase();
   
   if (chainLower === 'ethereum') {
-    return `https://opensea.io/assets/ethereum/${contractAddress}`;
+    return `https://etherscan.io/address/${contractAddress}`;
   }
   if (chainLower === 'base') {
-    return `https://opensea.io/assets/base/${contractAddress}`;
+    return `https://basescan.org/address/${contractAddress}`;
   }
   if (chainLower === 'polygon') {
-    return `https://opensea.io/assets/matic/${contractAddress}`;
+    return `https://polygonscan.com/address/${contractAddress}`;
   }
   if (chainLower === 'abstract') {
-    return `https://opensea.io/assets/abstract/${contractAddress}`;
+    return `https://explorer.abs.xyz/address/${contractAddress}`;
+  }
+  if (chainLower === 'apechain') {
+    return `https://apescan.io/address/${contractAddress}`;
   }
   if (chainLower === 'solana') {
-    return `https://magiceden.io/item-details/${contractAddress}`;
+    return `https://solscan.io/account/${contractAddress}`;
   }
   
   return null;
