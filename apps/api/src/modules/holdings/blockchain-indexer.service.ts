@@ -51,18 +51,39 @@ export class BlockchainIndexerService {
 
       const res = await fetch(`${url}?${params}`);
       if (!res.ok) {
+        const errorText = await res.text();
         this.logger.error(
-          `Alchemy getNFTsForOwner error for ${address} on ${chain}: ${res.status}`,
+          `Alchemy getNFTsForOwner error for ${address} on ${chain}: ${res.status} - ${errorText.slice(0, 200)}`,
         );
         return [];
       }
 
       const body = (await res.json()) as AlchemyNFTsResponse;
+      
+      // Debug log the first NFT to understand response structure
+      if (body.ownedNfts && body.ownedNfts.length > 0) {
+        this.logger.debug(
+          `Alchemy response sample for ${address}: ${JSON.stringify(body.ownedNfts[0])}`,
+        );
+      }
+
+      if (!body.ownedNfts || !Array.isArray(body.ownedNfts)) {
+        this.logger.warn(
+          `Unexpected Alchemy response format for ${address} on ${chain}: ${JSON.stringify(body).slice(0, 200)}`,
+        );
+        return [];
+      }
 
       // Group by contract address and count tokens
       const holdings = new Map<string, number>();
       for (const nft of body.ownedNfts) {
-        const contract = nft.contract.address.toLowerCase();
+        // Handle both v2 and v3 response formats
+        const contractAddress = nft.contract?.address || nft.contractAddress;
+        if (!contractAddress) {
+          this.logger.debug(`Skipping NFT with missing contract address: ${JSON.stringify(nft).slice(0, 100)}`);
+          continue;
+        }
+        const contract = contractAddress.toLowerCase();
         holdings.set(contract, (holdings.get(contract) || 0) + 1);
       }
 
@@ -78,6 +99,9 @@ export class BlockchainIndexerService {
       return result;
     } catch (err) {
       this.logger.error(`Failed to fetch EVM holdings for ${address} on ${chain}: ${err}`);
+      if (err instanceof Error && err.stack) {
+        this.logger.error(err.stack);
+      }
       return [];
     }
   }
@@ -146,11 +170,12 @@ export class BlockchainIndexerService {
 }
 
 interface AlchemyNFTsResponse {
-  ownedNfts: {
-    contract: { address: string };
-    tokenId: string;
-  }[];
-  totalCount: number;
+  ownedNfts: Array<{
+    contract?: { address: string };
+    contractAddress?: string;
+    tokenId?: string;
+  }>;
+  totalCount?: number;
   pageKey?: string;
 }
 
