@@ -71,6 +71,13 @@
       "when": 1774050600000,
       "tag": "0009_unified_indexing_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1774069200000,
+      "tag": "0010_wallet_case_insensitive_uniqueness",
+      "breakpoints": true
     }
   ]
 }
