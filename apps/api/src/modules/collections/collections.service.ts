@@ -12,6 +12,7 @@ import {
   collectionIntakeRequests,
   projects,
 } from '@nexus/database';
+import { CollectionMetricsService } from './collection-metrics.service';
 
 const SUPPORTED_CHAINS = [
   'ethereum',
@@ -26,7 +27,10 @@ type SupportedChain = (typeof SUPPORTED_CHAINS)[number];
 
 @Injectable()
 export class CollectionsService {
-  constructor(@Inject(DATABASE_TOKEN) private readonly db: Database) {}
+  constructor(
+    @Inject(DATABASE_TOKEN) private readonly db: Database,
+    private readonly collectionMetricsService: CollectionMetricsService,
+  ) {}
 
   async findById(id: string) {
     return this.db.query.collections.findFirst({
@@ -80,10 +84,19 @@ export class CollectionsService {
       status: 'queued',
     });
 
+    const indexing = await this.collectionMetricsService.refreshCollectionMetricsNow(
+      trackedCollection.id,
+    );
+
     return {
       collectionId: trackedCollection.id,
       status: trackedCollection.verificationStatus,
       routeHint: `/api/collections/${chain}/${normalizedAddress}`,
+      indexing: {
+        queued: indexing.queued,
+        deduped: indexing.deduped,
+        jobId: indexing.jobId,
+      },
     };
   }
 

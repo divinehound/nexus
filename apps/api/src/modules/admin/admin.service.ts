@@ -75,7 +75,22 @@ export class AdminService {
       .where(eq(projects.id, projectId))
       .returning();
     if (!updated) throw new NotFoundException('Project not found');
-    return updated;
+
+    if (!isVerified) {
+      return { ...updated, indexing: null };
+    }
+
+    const indexing = await this.collectionMetricsService.refreshProjectMetricsNow(projectId);
+
+    return {
+      ...updated,
+      indexing: {
+        queued: indexing.queued,
+        deduped: indexing.deduped,
+        jobId: indexing.jobId,
+        childCollectionsQueued: indexing.childCollectionJobs.length,
+      },
+    };
   }
 
   async setProjectFeatured(projectId: string, isFeatured: boolean) {
@@ -218,12 +233,15 @@ export class AdminService {
       if (!project) throw new NotFoundException('Project not found');
     }
 
+    const previousProjectId = existing.projectId;
+    const nextProjectId = input.projectId ?? existing.projectId;
+
     const [updated] = await this.db
       .update(collections)
       .set({
         verificationStatus: 'verified',
         mappingStatus: input.projectId ? 'mapped' : existing.mappingStatus,
-        projectId: input.projectId ?? existing.projectId,
+        projectId: nextProjectId,
         proposedProjectId: input.projectId ?? existing.proposedProjectId,
         verificationNotes: input.notes ?? existing.verificationNotes,
         lastSeenAt: new Date(),
@@ -231,7 +249,39 @@ export class AdminService {
       .where(eq(collections.id, collectionId))
       .returning();
 
-    return updated;
+    const collectionIndexing = await this.collectionMetricsService.refreshCollectionMetricsNow(
+      collectionId,
+    );
+
+    const projectIdsToRefresh = new Set<string>();
+    if (previousProjectId) projectIdsToRefresh.add(previousProjectId);
+    if (nextProjectId) projectIdsToRefresh.add(nextProjectId);
+
+    const projectIndexing = [] as Array<{
+      projectId: string;
+      jobId: string;
+      deduped: boolean;
+    }>;
+
+    for (const projectId of projectIdsToRefresh) {
+      const refresh = await this.collectionMetricsService.refreshProjectMetricsNow(projectId);
+      projectIndexing.push({
+        projectId,
+        jobId: refresh.jobId,
+        deduped: refresh.deduped,
+      });
+    }
+
+    return {
+      ...updated,
+      indexing: {
+        collection: {
+          jobId: collectionIndexing.jobId,
+          deduped: collectionIndexing.deduped,
+        },
+        projects: projectIndexing,
+      },
+    };
   }
 
   async rejectCollection(collectionId: string, notes?: string) {

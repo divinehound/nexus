@@ -68,6 +68,16 @@ Trust disclaimer shown for unverified/rejected:
     - `POST /api/admin/indexing/collection/:id/refresh`
     - `POST /api/admin/indexing/project/:id/refresh`
 
+### 6) Auto-index trigger workflow
+- `POST /api/collections/track` now triggers an immediate initial collection metrics refresh.
+  - This guarantees at least one snapshot attempt without requiring manual admin refresh.
+- `POST /api/admin/collections/:id/verify` now auto-refreshes:
+  - the verified/mapped collection
+  - the destination project
+  - and, when mapping moves between projects, the previous project as well.
+- `PATCH /api/admin/projects/:id/verify` with `{ "isVerified": true }` now auto-refreshes the project and its child collections.
+- All auto-triggered collection/project refresh jobs use a short idempotency window (3 minutes) to dedupe repeated actions and return the existing recent job id instead of queue-spamming.
+
 ---
 
 ## Admin auth + gating
@@ -102,7 +112,12 @@ Response (202):
   "statusCode": 202,
   "collectionId": "uuid",
   "status": "tracked_unverified",
-  "routeHint": "/api/collections/ethereum/0x1234567890abcdef1234567890abcdef12345678"
+  "routeHint": "/api/collections/ethereum/0x1234567890abcdef1234567890abcdef12345678",
+  "indexing": {
+    "queued": true,
+    "deduped": false,
+    "jobId": "uuid"
+  }
 }
 ```
 
