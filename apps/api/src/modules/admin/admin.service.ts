@@ -601,8 +601,14 @@ export class AdminService {
   }
 
   async getWalletIndexStatus(walletIdOrAddress: string) {
-    // Try to find by ID first, then by address
-    let wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, walletIdOrAddress) });
+    let wallet = null;
+
+    // Check if it looks like a UUID (8-4-4-4-12 format)
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(walletIdOrAddress);
+    
+    if (isUuid) {
+      wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, walletIdOrAddress) });
+    }
     
     if (!wallet) {
       // Try finding by address (case-insensitive)
@@ -613,7 +619,7 @@ export class AdminService {
     }
 
     if (!wallet) {
-      throw new NotFoundException(`Wallet not found. Tried ID and address: ${walletIdOrAddress}`);
+      throw new NotFoundException(`Wallet not found. Tried ${isUuid ? 'ID and ' : ''}address: ${walletIdOrAddress}`);
     }
     
     return this.normalizeIndexStatus('wallet', wallet);
