@@ -20,6 +20,7 @@ import {
 import { randomUUID } from 'crypto';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { BlockchainLookupService } from '../search/blockchain-lookup.service';
+import { BlockchainIndexerService } from './blockchain-indexer.service';
 
 type Chain = (typeof chainEnum.enumValues)[number];
 type TrackingTier = (typeof trackingTierEnum.enumValues)[number];
@@ -38,6 +39,7 @@ export class HoldingsService {
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly configService: ConfigService,
     private readonly blockchainLookup: BlockchainLookupService,
+    private readonly blockchainIndexer: BlockchainIndexerService,
   ) {
     this.maxCollectionsPerRun = Number(
       this.configService.get('holdings.maxCollectionsPerRun') ?? 50,
@@ -167,17 +169,6 @@ export class HoldingsService {
     return { score, tier: 'suppressed', reason: 'low_signal_or_spam_like' };
   }
 
-  private async mockWalletHoldings(wallet: { address: string; chain: Chain }): Promise<Holding[]> {
-    const seed = wallet.address.toLowerCase().replace('0x', '').padEnd(40, '0');
-    const total = 8 + (seed.charCodeAt(0) % 8);
-
-    return Array.from({ length: total }).map((_, idx) => {
-      const contractAddress = `0x${(seed.slice(idx, idx + 38) + String(idx).padStart(2, '0')).slice(0, 40)}`;
-      const tokenCount = ((seed.charCodeAt((idx * 3) % seed.length) + idx) % 6) + 1;
-      return { contractAddress, tokenCount };
-    });
-  }
-
   private async ensureCollection(
     chain: Chain,
     contractAddress: string,
@@ -270,7 +261,7 @@ export class HoldingsService {
       const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, job.walletId) });
       if (!wallet?.userId) throw new BadRequestException('Wallet not linked');
 
-      const holdings = await this.mockWalletHoldings({ address: wallet.address, chain: wallet.chain as Chain });
+      const holdings = await this.blockchainIndexer.fetchWalletHoldings(wallet.address, wallet.chain);
       const sorted = holdings.sort((a, b) => b.tokenCount - a.tokenCount);
       const inScope = sorted.slice(0, this.maxCollectionsPerRun);
       const overflow = sorted.slice(this.maxCollectionsPerRun);
