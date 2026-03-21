@@ -3,6 +3,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, desc, eq, sql } from 'drizzle-orm';
@@ -18,6 +19,7 @@ import {
 } from '@nexus/database';
 import { randomUUID } from 'crypto';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
+import { BlockchainLookupService } from '../search/blockchain-lookup.service';
 
 type Chain = (typeof chainEnum.enumValues)[number];
 type TrackingTier = (typeof trackingTierEnum.enumValues)[number];
@@ -29,11 +31,13 @@ type Holding = {
 
 @Injectable()
 export class HoldingsService {
+  private readonly logger = new Logger(HoldingsService.name);
   private readonly maxCollectionsPerRun: number;
 
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly configService: ConfigService,
+    private readonly blockchainLookup: BlockchainLookupService,
   ) {
     this.maxCollectionsPerRun = Number(
       this.configService.get('holdings.maxCollectionsPerRun') ?? 50,
@@ -197,14 +201,28 @@ export class HoldingsService {
       return updated;
     }
 
+    // Fetch blockchain metadata for real collection name/image/supply
     const short = contractAddress.slice(2, 8);
+    let metadata: Awaited<ReturnType<typeof this.blockchainLookup.lookup>>[0] | null = null;
+    
+    try {
+      const results = await this.blockchainLookup.lookup(contractAddress, chain);
+      metadata = results[0] || null;
+      if (metadata) {
+        this.logger.log(`Enriched ${contractAddress} on ${chain}: ${metadata.name}`);
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to enrich ${contractAddress} on ${chain}: ${err}`);
+    }
+
     const baseSlug = `auto-${chain}-${short}`;
 
     const [project] = await this.db
       .insert(projects)
       .values({
-        name: `Auto ${chain.toUpperCase()} ${short}`,
+        name: metadata?.name || `Auto ${chain.toUpperCase()} ${short}`,
         slug: `${baseSlug}-${Date.now()}`,
+        imageUrl: metadata?.imageUrl,
         isVerified: false,
       })
       .returning();
@@ -215,8 +233,10 @@ export class HoldingsService {
         projectId: project.id,
         contractAddress,
         chain,
-        name: `Collection ${short}`,
-        collectionType: chain === 'solana' ? 'spl' : 'erc721',
+        name: metadata?.name || `Collection ${short}`,
+        imageUrl: metadata?.imageUrl,
+        supply: metadata?.totalSupply,
+        collectionType: metadata?.tokenType || (chain === 'solana' ? 'spl' : 'erc721'),
         trackingTier: data.tier,
         qualityScore: data.score.toFixed(2),
         qualityReason: data.reason,

@@ -7,6 +7,6 @@ import { CollectionImportService } from './collection-import.service';
 @Module({
   controllers: [SearchController],
   providers: [SearchService, BlockchainLookupService, CollectionImportService],
-  exports: [SearchService],
+  exports: [SearchService, BlockchainLookupService, CollectionImportService],
 })
 export class SearchModule {}

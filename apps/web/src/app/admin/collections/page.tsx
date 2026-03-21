@@ -24,6 +24,10 @@ interface AdminCollection {
   name: string;
   chain: string;
   contractAddress: string;
+  imageUrl: string | null;
+  supply: number | null;
+  floorPrice: number | null;
+  holderCount: number | null;
   verificationStatus: CollectionVerificationStatus;
   mappingStatus: CollectionMappingStatus;
   proposedProjectId: string | null;
@@ -186,12 +190,40 @@ export default function AdminCollectionsPage() {
         <div className="space-y-3">
           {filteredCollections.map((c) => (
             <div key={c.id} className="rounded-xl border border-gray-800 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h3 className="font-medium">{c.name}</h3>
-                  <p className="text-sm text-gray-500">
-                    {c.chain} · {truncateAddress(c.contractAddress)}
-                  </p>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  {c.imageUrl ? (
+                    <img
+                      src={c.imageUrl}
+                      alt={c.name}
+                      className="h-16 w-16 rounded-lg border border-gray-700 object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-16 w-16 items-center justify-center rounded-lg border border-gray-700 bg-gray-900 text-xs text-gray-500">
+                      No Image
+                    </div>
+                  )}
+                  <div>
+                    <h3 className="font-medium">{c.name}</h3>
+                    <p className="text-sm text-gray-500">
+                      {c.chain} · {truncateAddress(c.contractAddress)}
+                    </p>
+                    <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-400">
+                      {c.supply && <span>Supply: {c.supply.toLocaleString()}</span>}
+                      {c.holderCount && <span>· Holders: {c.holderCount.toLocaleString()}</span>}
+                      {c.floorPrice && <span>· Floor: {c.floorPrice} ETH</span>}
+                    </div>
+                    {getMarketplaceLink(c.chain, c.contractAddress) && (
+                      <a
+                        href={getMarketplaceLink(c.chain, c.contractAddress)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-block text-xs text-purple-400 hover:text-purple-300"
+                      >
+                        View on OpenSea →
+                      </a>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <span className="rounded bg-gray-800 px-2 py-1 text-gray-300">
@@ -288,4 +320,26 @@ function StatCard({ label, value }: { label: string; value: number }) {
       <p className="mt-1 text-2xl font-semibold text-gray-100">{value.toLocaleString()}</p>
     </div>
   );
+}
+
+function getMarketplaceLink(chain: string, contractAddress: string): string | null {
+  const chainLower = chain.toLowerCase();
+  
+  if (chainLower === 'ethereum') {
+    return `https://opensea.io/assets/ethereum/${contractAddress}`;
+  }
+  if (chainLower === 'base') {
+    return `https://opensea.io/assets/base/${contractAddress}`;
+  }
+  if (chainLower === 'polygon') {
+    return `https://opensea.io/assets/matic/${contractAddress}`;
+  }
+  if (chainLower === 'abstract') {
+    return `https://opensea.io/assets/abstract/${contractAddress}`;
+  }
+  if (chainLower === 'solana') {
+    return `https://magiceden.io/item-details/${contractAddress}`;
+  }
+  
+  return null;
 }
