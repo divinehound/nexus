@@ -5,6 +5,7 @@ import {
   adminRejectCollection,
   adminSuggestProject,
   adminVerifyCollection,
+  adminEnrichCollection,
   apiFetch,
   type CollectionMappingStatus,
   type CollectionVerificationStatus,
@@ -53,6 +54,7 @@ export default function AdminCollectionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [projectIdInput, setProjectIdInput] = useState<Record<string, string>>({});
   const [notesInput, setNotesInput] = useState<Record<string, string>>({});
+  const [enriching, setEnriching] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'all'>('pending');
 
   const fetchData = async () => {
@@ -141,6 +143,20 @@ export default function AdminCollectionsPage() {
       accessToken,
     );
     await fetchData();
+  };
+
+  const handleEnrich = async (collection: AdminCollection) => {
+    if (!accessToken) return;
+    setEnriching((prev) => ({ ...prev, [collection.id]: true }));
+    
+    try {
+      await adminEnrichCollection(collection.id, accessToken);
+      await fetchData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Enrichment failed');
+    } finally {
+      setEnriching((prev) => ({ ...prev, [collection.id]: false }));
+    }
   };
 
   return (
@@ -295,6 +311,13 @@ export default function AdminCollectionsPage() {
                   className="rounded bg-blue-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Suggest Project
+                </button>
+                <button
+                  onClick={() => handleEnrich(c)}
+                  disabled={enriching[c.id]}
+                  className="rounded border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-300 hover:border-purple-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {enriching[c.id] ? 'Re-enriching...' : 'Re-enrich Metadata'}
                 </button>
               </div>
             </div>

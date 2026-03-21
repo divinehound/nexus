@@ -252,4 +252,10 @@ export class AdminController {
   refreshWalletIndexing(@Param('walletId') walletId: string) {
     return this.adminService.refreshWalletIndexing(walletId);
   }
+
+  @Post('collections/:id/enrich')
+  @ApiOperation({ summary: 'Re-fetch blockchain metadata for a collection' })
+  enrichCollection(@Param('id') id: string) {
+    return this.adminService.enrichCollection(id);
+  }
 }

@@ -3,6 +3,7 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { eq, and, count, sql, desc, or } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
@@ -21,13 +22,17 @@ import {
 } from '@nexus/database';
 import { CollectionMetricsService } from '../collections/collection-metrics.service';
 import { HoldingsService } from '../holdings/holdings.service';
+import { BlockchainLookupService } from '../search/blockchain-lookup.service';
 
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
+
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly collectionMetricsService: CollectionMetricsService,
     private readonly holdingsService: HoldingsService,
+    private readonly blockchainLookup: BlockchainLookupService,
   ) {}
 
   // --- Dashboard Stats ---
@@ -645,5 +650,55 @@ export class AdminService {
 
   async refreshWalletIndexing(walletId: string) {
     return this.holdingsService.refreshWalletIndexing(walletId);
+  }
+
+  async enrichCollection(collectionId: string) {
+    const collection = await this.db.query.collections.findFirst({
+      where: eq(collections.id, collectionId),
+    });
+
+    if (!collection) throw new NotFoundException('Collection not found');
+
+    this.logger.log(`Enriching collection ${collectionId} (${collection.contractAddress} on ${collection.chain})`);
+
+    const results = await this.blockchainLookup.lookup(collection.contractAddress, collection.chain);
+    const metadata = results[0];
+
+    if (!metadata) {
+      this.logger.warn(`No metadata found for ${collection.contractAddress} on ${collection.chain}`);
+      return { success: false, message: 'No metadata available from blockchain lookup' };
+    }
+
+    const [updated] = await this.db
+      .update(collections)
+      .set({
+        name: metadata.name,
+        imageUrl: metadata.imageUrl,
+        supply: metadata.totalSupply,
+        collectionType: metadata.tokenType as any,
+      })
+      .where(eq(collections.id, collectionId))
+      .returning();
+
+    // Also update parent project if it's an auto-generated one
+    if (updated.projectId) {
+      const project = await this.db.query.projects.findFirst({
+        where: eq(projects.id, updated.projectId),
+      });
+
+      if (project && project.name.startsWith('Auto ')) {
+        await this.db
+          .update(projects)
+          .set({
+            name: metadata.name,
+            imageUrl: metadata.imageUrl,
+          })
+          .where(eq(projects.id, project.id));
+      }
+    }
+
+    this.logger.log(`Enriched collection ${collectionId}: ${metadata.name}`);
+
+    return { success: true, collection: updated, metadata };
   }
 }

@@ -183,6 +183,13 @@ export function adminSuggestProject(
   });
 }
 
+export function adminEnrichCollection(collectionId: string, token: string) {
+  return apiFetch<{ success: boolean; collection?: any; metadata?: any; message?: string }>(
+    `/admin/collections/${collectionId}/enrich`,
+    { method: 'POST', token },
+  );
+}
+
 export type IndexingJobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface AdminIndexingJobListItem {
