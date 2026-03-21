@@ -285,8 +285,22 @@ export class HoldingsService {
       const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, job.walletId) });
       if (!wallet?.userId) throw new BadRequestException('Wallet not linked');
 
-      const holdings = await this.blockchainIndexer.fetchWalletHoldings(wallet.address, wallet.chain);
-      const sorted = holdings.sort((a, b) => b.tokenCount - a.tokenCount);
+      // For EVM wallets, index all supported EVM chains (same address across all)
+      // For Solana, only index Solana chain
+      const chainsToIndex = wallet.chain === 'solana' 
+        ? ['solana']
+        : ['ethereum', 'base', 'polygon', 'abstract', 'apechain'];
+
+      this.logger.log(`Indexing wallet ${wallet.address} across chains: ${chainsToIndex.join(', ')}`);
+
+      const allHoldings: { contractAddress: string; tokenCount: number; chain: string }[] = [];
+      
+      for (const chain of chainsToIndex) {
+        const chainHoldings = await this.blockchainIndexer.fetchWalletHoldings(wallet.address, chain);
+        allHoldings.push(...chainHoldings.map(h => ({ ...h, chain })));
+      }
+
+      const sorted = allHoldings.sort((a, b) => b.tokenCount - a.tokenCount);
       const inScope = sorted.slice(0, this.maxCollectionsPerRun);
       const overflow = sorted.slice(this.maxCollectionsPerRun);
 
@@ -297,7 +311,7 @@ export class HoldingsService {
           .values({
             userId: wallet.userId,
             walletId: wallet.id,
-            chain: wallet.chain,
+            chain: holding.chain as any,
             contractAddress: holding.contractAddress,
             tokenCount: holding.tokenCount,
             firstSeenAt: now,
@@ -319,7 +333,7 @@ export class HoldingsService {
 
       for (const holding of inScope) {
         const scored = this.scoreHolding(holding);
-        await this.ensureCollection(wallet.chain as Chain, holding.contractAddress, scored);
+        await this.ensureCollection(holding.chain as Chain, holding.contractAddress, scored);
         if (scored.tier === 'active') active++;
         if (scored.tier === 'lightweight') lightweight++;
         if (scored.tier === 'suppressed') suppressed++;
@@ -327,7 +341,7 @@ export class HoldingsService {
 
       for (const holding of overflow) {
         const tier: TrackingTier = holding.tokenCount > 1 ? 'lightweight' : 'suppressed';
-        await this.ensureCollection(wallet.chain as Chain, holding.contractAddress, {
+        await this.ensureCollection(holding.chain as Chain, holding.contractAddress, {
           score: Math.max(5, holding.tokenCount * 8),
           tier,
           reason: 'overflow_limit_applied',
@@ -347,7 +361,8 @@ export class HoldingsService {
           status: 'completed',
           finishedAt: now,
           statsJson: {
-            holdingsDiscovered: holdings.length,
+            holdingsDiscovered: allHoldings.length,
+            chainsIndexed: chainsToIndex,
             active,
             lightweight,
             suppressed,
