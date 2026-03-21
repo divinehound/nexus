@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { ConnectButton as RainbowConnectButton } from '@rainbow-me/rainbowkit';
-import { useAccount, useSignMessage, useChainId } from 'wagmi';
+import { useAccount, useSignMessage, useChainId, useDisconnect } from 'wagmi';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { SiweMessage } from 'siwe';
@@ -14,6 +14,22 @@ type WalletTab = 'evm' | 'solana';
 
 export function ConnectButton() {
   const { user, isLoading, logout } = useAuth();
+  const { disconnect: disconnectEvm } = useDisconnect();
+  const { disconnect: disconnectSolana, connected: solanaConnected } = useWallet();
+
+  const handleDisconnect = async () => {
+    try {
+      disconnectEvm();
+    } catch {}
+
+    if (solanaConnected && disconnectSolana) {
+      try {
+        await disconnectSolana();
+      } catch {}
+    }
+
+    logout();
+  };
 
   if (isLoading) {
     return (
@@ -29,7 +45,7 @@ export function ConnectButton() {
           {primaryWallet?.ensName || primaryWallet?.snsName || truncateAddress(primaryWallet?.address || '')}
         </span>
         <button
-          onClick={logout}
+          onClick={handleDisconnect}
           className="rounded-lg border border-gray-700 px-3 py-1.5 text-sm text-gray-400 transition-colors hover:border-gray-500 hover:text-white"
         >
           Disconnect
