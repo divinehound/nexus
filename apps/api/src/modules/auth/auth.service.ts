@@ -10,6 +10,7 @@ import { and, eq } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, users, wallets } from '@nexus/database';
 import { CHAIN_META } from '@nexus/types';
+import { HoldingsService } from '../holdings/holdings.service';
 
 // Compiled bytecode of the ERC-6492 ValidateSigOffchain contract.
 // Deploys a UniversalSigValidator in-memory via eth_call to verify any
@@ -31,6 +32,7 @@ export class AuthService {
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
+    private readonly holdingsService: HoldingsService,
   ) {}
 
   generateNonce(address: string): { nonce: string } {
@@ -240,6 +242,8 @@ export class AuthService {
 
     const [newUser] = await this.db.insert(users).values({}).returning();
 
+    let walletId: string;
+
     if (existingWallet) {
       await this.db
         .update(wallets)
@@ -249,6 +253,7 @@ export class AuthService {
         .update(users)
         .set({ primaryWalletId: existingWallet.id })
         .where(eq(users.id, newUser.id));
+      walletId = existingWallet.id;
     } else {
       const [newWallet] = await this.db
         .insert(wallets)
@@ -263,7 +268,13 @@ export class AuthService {
         .update(users)
         .set({ primaryWalletId: newWallet.id })
         .where(eq(users.id, newUser.id));
+      walletId = newWallet.id;
     }
+
+    // Trigger wallet holdings indexing in background
+    void this.holdingsService.queueWalletIndexing(newUser.id, walletId).catch((err) => {
+      this.logger.warn(`Failed to queue wallet indexing for new user ${newUser.id}: ${err}`);
+    });
 
     return newUser;
   }

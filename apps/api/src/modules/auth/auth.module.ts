@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
+import { HoldingsModule } from '../holdings/holdings.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { JwtStrategy } from './jwt.strategy';
         signOptions: { expiresIn: '7d' },
       }),
     }),
+    HoldingsModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
