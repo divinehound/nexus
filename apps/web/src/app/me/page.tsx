@@ -1,8 +1,9 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { useSignMessage } from 'wagmi';
-import { useWallet } from '@solana/wallet-adapter-react';
+import { useAppKitProvider } from '@reown/appkit/react';
+import type { Provider as SolanaProvider } from '@reown/appkit-adapter-solana';
+import type { Provider as EvmProvider } from '@reown/appkit-adapter-wagmi';
 import bs58 from 'bs58';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
@@ -51,8 +52,8 @@ export default function MePage() {
 
 function MePageContent() {
   const { accessToken } = useAuth();
-  const { signMessageAsync } = useSignMessage();
-  const { signMessage: signSolanaMessage } = useWallet();
+  const { walletProvider: solanaProvider } = useAppKitProvider('solana');
+  const { walletProvider: evmProvider } = useAppKitProvider('eip155');
 
   const [me, setMe] = useState<MeResponse | null>(null);
   const [wallets, setWallets] = useState<LinkedWallet[]>([]);
@@ -173,16 +174,26 @@ function MePageContent() {
     }
   };
 
-  const signWalletChallenge = async (chain: string, message: string) => {
+  const signWalletChallenge = async (chain: string, message: string, address: string) => {
     if (chain === 'solana') {
-      if (!signSolanaMessage) {
-        throw new Error('Connected Solana wallet cannot sign messages. Use a wallet that supports signMessage.');
+      if (!solanaProvider) {
+        throw new Error('Solana wallet provider not available');
       }
-      const signatureBytes = await signSolanaMessage(new TextEncoder().encode(message));
+      const provider = solanaProvider as SolanaProvider;
+      const encodedMessage = new TextEncoder().encode(message);
+      const signatureBytes = await provider.signMessage(encodedMessage);
       return bs58.encode(signatureBytes);
     }
 
-    return signMessageAsync({ message });
+    if (!evmProvider) {
+      throw new Error('EVM wallet provider not available');
+    }
+    const provider = evmProvider as EvmProvider;
+    const signature = await provider.request({
+      method: 'personal_sign',
+      params: [message, address],
+    });
+    return signature as string;
   };
 
   const onAddWallet = async (e: FormEvent) => {
@@ -192,11 +203,6 @@ function MePageContent() {
     const normalizedAddress = addChain === 'solana' ? addAddress.trim() : addAddress.trim().toLowerCase();
     if (!normalizedAddress) {
       setAddWalletError('Wallet address is required');
-      return;
-    }
-
-    if (addChain === 'solana' && !signSolanaMessage) {
-      setAddWalletError('To link a Solana wallet, please connect with a Solana wallet (Phantom, Solflare, etc) using the Connect button above, then try again.');
       return;
     }
 
@@ -215,7 +221,7 @@ function MePageContent() {
         accessToken,
       );
 
-      const signature = await signWalletChallenge(addChain, challenge.message);
+      const signature = await signWalletChallenge(addChain, challenge.message, normalizedAddress);
       const verifyResult = await verifyWalletLink(
         {
           chain: addChain,
@@ -255,10 +261,6 @@ function MePageContent() {
     setMoveError(null);
 
     try {
-      if (moveConfirmation.chain === 'solana' && !signSolanaMessage) {
-        throw new Error('Connected Solana wallet cannot sign messages. Use a wallet that supports signMessage.');
-      }
-
       const challenge = await createWalletChallenge(
         {
           chain: moveConfirmation.chain,
@@ -268,7 +270,7 @@ function MePageContent() {
         },
         accessToken,
       );
-      const signature = await signWalletChallenge(moveConfirmation.chain, challenge.message);
+      const signature = await signWalletChallenge(moveConfirmation.chain, challenge.message, moveConfirmation.address);
 
       await moveWalletLink(
         {
