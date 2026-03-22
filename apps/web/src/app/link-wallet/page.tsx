@@ -69,19 +69,18 @@ function LinkWalletContent() {
       }, 3000);
     } catch (err: any) {
       console.error('Link error:', err);
-      console.log('Error structure:', JSON.stringify(err, null, 2));
       
-      // Check if wallet is already linked (requires confirmation)
-      // Try multiple possible error structures
-      const token = err.error?.confirmationToken || err.confirmationToken;
-      const errorCode = err.error?.error || err.error?.code || err.code;
+      // ApiError stores response body in err.data
+      const errorData = err.data || {};
+      const errorCode = errorData.error;
+      const token = errorData.confirmationToken;
       
       if (errorCode === 'WALLET_ALREADY_LINKED' && token) {
         setConfirmationToken(token);
         setError(null);
       } else {
         // Show detailed error message
-        const errorMsg = err.error?.message || err.message || 'Wallet linking failed';
+        const errorMsg = errorData.message || err.message || 'Wallet linking failed';
         setError(errorMsg);
       }
     } finally {
