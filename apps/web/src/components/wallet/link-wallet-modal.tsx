@@ -27,6 +27,15 @@ export function LinkWalletModal({ isOpen, onClose, accessToken, onSuccess, onMov
   const [linking, setLinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Lock body scroll when modal is open
+  if (typeof document !== 'undefined') {
+    if (isOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+  }
+
   const handleLinkEvm = async () => {
     if (!evmAddress || !signMessageAsync) return;
 
@@ -169,7 +178,7 @@ export function LinkWalletModal({ isOpen, onClose, accessToken, onSuccess, onMov
                     </button>
                   </div>
                 ) : (
-                  <div className="[&_button]:!w-full [&_button]:!h-10 [&_button]:!text-sm">
+                  <div className="[&_button]:!w-full [&_button]:!h-10 [&_button]:!text-sm [&_button]:!font-medium [&_button]:!bg-purple-600 [&_button]:hover:!bg-purple-500">
                     <RainbowConnectButton />
                   </div>
                 )}
@@ -199,7 +208,7 @@ export function LinkWalletModal({ isOpen, onClose, accessToken, onSuccess, onMov
                     )}
                   </div>
                 ) : (
-                  <div className="[&_button]:!w-full [&_button]:!h-10 [&_button]:!text-sm [&_button]:!bg-purple-600 [&_button]:hover:!bg-purple-500">
+                  <div className="[&_button]:!w-full [&_button]:!h-10 [&_button]:!text-sm [&_button]:!font-medium [&_button]:!bg-purple-600 [&_button]:hover:!bg-purple-500 [&_button]:!rounded-lg">
                     <WalletMultiButton />
                   </div>
                 )}

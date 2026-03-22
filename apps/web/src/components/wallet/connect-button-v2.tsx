@@ -90,6 +90,15 @@ function SignInModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
   const [signing, setSigning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Lock body scroll when modal is open
+  if (typeof document !== 'undefined') {
+    if (isOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+  }
+
   const handleSignEvm = async () => {
     if (!evmAddress || !signMessageAsync) return;
 
@@ -198,7 +207,7 @@ function SignInModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
                     </button>
                   </div>
                 ) : (
-                  <div className="[&_button]:!w-full [&_button]:!h-10 [&_button]:!text-sm">
+                  <div className="[&_button]:!w-full [&_button]:!h-10 [&_button]:!text-sm [&_button]:!font-medium [&_button]:!bg-purple-600 [&_button]:hover:!bg-purple-500">
                     <RainbowConnectButton />
                   </div>
                 )}
@@ -228,7 +237,7 @@ function SignInModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
                     )}
                   </div>
                 ) : (
-                  <div className="[&_button]:!w-full [&_button]:!h-10 [&_button]:!text-sm [&_button]:!bg-purple-600 [&_button]:hover:!bg-purple-500">
+                  <div className="[&_button]:!w-full [&_button]:!h-10 [&_button]:!text-sm [&_button]:!font-medium [&_button]:!bg-purple-600 [&_button]:hover:!bg-purple-500 [&_button]:!rounded-lg">
                     <WalletMultiButton />
                   </div>
                 )}
