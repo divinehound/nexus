@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useAppKit, useAppKitAccount, useDisconnect, useAppKitProvider } from '@reown/appkit/react';
 import type { Provider } from '@reown/appkit-adapter-solana';
 import type { Provider as EvmProvider } from '@reown/appkit-adapter-wagmi';
@@ -23,12 +23,14 @@ export function LinkWalletButton({ accessToken, onSuccess, onMove }: LinkWalletB
 
   const [linking, setLinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const processedAddress = useRef<string | null>(null);
 
   // Auto-link when wallet connects
   useEffect(() => {
-    if (!isConnected || !address || linking) return;
+    if (!isConnected || !address || linking || processedAddress.current === address) return;
 
     const handleLink = async () => {
+      processedAddress.current = address;
       setLinking(true);
       setError(null);
 
@@ -75,10 +77,11 @@ export function LinkWalletButton({ accessToken, onSuccess, onMove }: LinkWalletB
           onSuccess();
         }
 
-        disconnect();
+        // Don't disconnect - user is already logged in, wallet can stay connected
       } catch (err: any) {
         console.error('Link error:', err);
         setError(err.message || 'Wallet linking failed');
+        // Disconnect on error
         try {
           disconnect();
         } catch {}
@@ -102,7 +105,11 @@ export function LinkWalletButton({ accessToken, onSuccess, onMove }: LinkWalletB
   return (
     <div>
       <button
-        onClick={() => open()}
+        onClick={() => {
+          processedAddress.current = null;
+          setError(null);
+          open();
+        }}
         className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-500"
       >
         Link New Wallet
