@@ -1,13 +1,12 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { useAccount, useSignMessage } from 'wagmi';
+import { useSignMessage } from 'wagmi';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { ConnectButton as RainbowConnectButton } from '@rainbow-me/rainbowkit';
 import bs58 from 'bs58';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
+import { LinkWalletModal } from '@/components/wallet/link-wallet-modal';
 import {
   ApiError,
   LinkedWallet,
@@ -49,9 +48,8 @@ export default function MePage() {
 
 function MePageContent() {
   const { accessToken } = useAuth();
-  const { address: connectedAddress } = useAccount();
   const { signMessageAsync } = useSignMessage();
-  const { publicKey: solanaPublicKey, signMessage: signSolanaMessage } = useWallet();
+  const { signMessage: signSolanaMessage } = useWallet();
 
   const [me, setMe] = useState<MeResponse | null>(null);
   const [wallets, setWallets] = useState<LinkedWallet[]>([]);
@@ -69,11 +67,8 @@ function MePageContent() {
   const [walletActionId, setWalletActionId] = useState<string | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
 
-  const [addChain, setAddChain] = useState('ethereum');
-  const [addAddress, setAddAddress] = useState('');
-  const [addWalletLoading, setAddWalletLoading] = useState(false);
-  const [addWalletSuccess, setAddWalletSuccess] = useState<string | null>(null);
-  const [addWalletError, setAddWalletError] = useState<string | null>(null);
+  const [linkModalOpen, setLinkModalOpen] = useState(false);
+  const [linkSuccess, setLinkSuccess] = useState<string | null>(null);
 
   const [moveConfirmation, setMoveConfirmation] = useState<MoveConfirmationState | null>(null);
   const [moveLoading, setMoveLoading] = useState(false);
@@ -482,170 +477,36 @@ function MePageContent() {
       <section className="rounded-xl border border-gray-800 p-6">
         <h2 className="text-xl font-semibold">Link Additional Wallet</h2>
         <p className="mt-1 text-sm text-gray-400">
-          Connect your wallet, then click "Link" to verify ownership and add it to your account.
+          Connect any wallet (EVM or Solana) to link it to your account. Supports MetaMask, Phantom, Coinbase Wallet, and more.
         </p>
 
-        <div className="mt-4 space-y-4">
-          {/* EVM Wallets */}
-          <div className="rounded-lg border border-gray-800 p-4">
-            <h3 className="text-sm font-semibold text-gray-300">EVM Wallets (Ethereum, Base, Polygon, etc)</h3>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              {connectedAddress ? (
-                <>
-                  <div className="flex-1">
-                    <p className="text-sm text-gray-400">Connected: {truncateAddress(connectedAddress)}</p>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      setAddChain('ethereum');
-                      setAddAddress(connectedAddress);
-                      setAddWalletLoading(true);
-                      setAddWalletError(null);
-                      setAddWalletSuccess(null);
+        <button
+          onClick={() => {
+            setLinkSuccess(null);
+            setLinkModalOpen(true);
+          }}
+          className="mt-4 rounded-lg bg-purple-600 px-6 py-3 text-sm font-medium text-white hover:bg-purple-500"
+        >
+          Link New Wallet
+        </button>
 
-                      try {
-                        const challenge = await createWalletChallenge(
-                          { chain: 'ethereum', address: connectedAddress.toLowerCase(), purpose: 'link_wallet' },
-                          accessToken!,
-                        );
-                        const signature = await signMessageAsync({ message: challenge.message });
-                        const verifyResult = await verifyWalletLink(
-                          {
-                            chain: 'ethereum',
-                            address: connectedAddress.toLowerCase(),
-                            message: challenge.message,
-                            signature,
-                          },
-                          accessToken!,
-                        );
-
-                        await fetchMe();
-                        setAddWalletSuccess(
-                          verifyResult.idempotent
-                            ? 'Wallet already linked to your account'
-                            : 'Wallet linked successfully',
-                        );
-                        setAddAddress('');
-                      } catch (err) {
-                        if (err instanceof ApiError && err.status === 409 && err.data?.error === 'WALLET_ALREADY_LINKED' && err.data?.confirmationToken) {
-                          setMoveConfirmation({
-                            chain: 'ethereum',
-                            address: connectedAddress.toLowerCase(),
-                            confirmationToken: err.data.confirmationToken,
-                          });
-                        } else {
-                          setAddWalletError(err instanceof Error ? err.message : 'Failed to link wallet');
-                        }
-                      } finally {
-                        setAddWalletLoading(false);
-                      }
-                    }}
-                    disabled={addWalletLoading}
-                    className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-500 disabled:opacity-60"
-                  >
-                    {addWalletLoading ? 'Linking...' : 'Link EVM Wallet'}
-                  </button>
-                </>
-              ) : (
-                <div className="flex w-full items-center justify-between gap-3">
-                  <p className="text-sm text-gray-500">No EVM wallet connected</p>
-                  <div className="[&_button]:!h-10 [&_button]:!px-4 [&_button]:!text-sm">
-                    <RainbowConnectButton />
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Solana Wallets */}
-          <div className="rounded-lg border border-gray-800 p-4">
-            <h3 className="text-sm font-semibold text-gray-300">Solana Wallets (Phantom, Solflare, etc)</h3>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              {solanaPublicKey ? (
-                <>
-                  <div className="flex-1">
-                    <p className="text-sm text-gray-400">Connected: {truncateAddress(solanaPublicKey.toBase58())}</p>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      if (!signSolanaMessage) {
-                        setAddWalletError('Connected Solana wallet does not support signing messages');
-                        return;
-                      }
-
-                      setAddChain('solana');
-                      setAddAddress(solanaPublicKey.toBase58());
-                      setAddWalletLoading(true);
-                      setAddWalletError(null);
-                      setAddWalletSuccess(null);
-
-                      try {
-                        const challenge = await createWalletChallenge(
-                          { chain: 'solana', address: solanaPublicKey.toBase58(), purpose: 'link_wallet' },
-                          accessToken!,
-                        );
-                        const signatureBytes = await signSolanaMessage(new TextEncoder().encode(challenge.message));
-                        const signature = bs58.encode(signatureBytes);
-                        const verifyResult = await verifyWalletLink(
-                          {
-                            chain: 'solana',
-                            address: solanaPublicKey.toBase58(),
-                            message: challenge.message,
-                            signature,
-                          },
-                          accessToken!,
-                        );
-
-                        await fetchMe();
-                        setAddWalletSuccess(
-                          verifyResult.idempotent
-                            ? 'Wallet already linked to your account'
-                            : 'Wallet linked successfully',
-                        );
-                        setAddAddress('');
-                      } catch (err) {
-                        if (err instanceof ApiError && err.status === 409 && err.data?.error === 'WALLET_ALREADY_LINKED' && err.data?.confirmationToken) {
-                          setMoveConfirmation({
-                            chain: 'solana',
-                            address: solanaPublicKey.toBase58(),
-                            confirmationToken: err.data.confirmationToken,
-                          });
-                        } else {
-                          setAddWalletError(err instanceof Error ? err.message : 'Failed to link wallet');
-                        }
-                      } finally {
-                        setAddWalletLoading(false);
-                      }
-                    }}
-                    disabled={addWalletLoading}
-                    className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-500 disabled:opacity-60"
-                  >
-                    {addWalletLoading ? 'Linking...' : 'Link Solana Wallet'}
-                  </button>
-                </>
-              ) : (
-                <div className="flex w-full items-center justify-between gap-3">
-                  <p className="text-sm text-gray-500">No Solana wallet connected</p>
-                  <div className="[&_button]:!h-10 [&_button]:!px-4 [&_button]:!text-sm [&_button]:!bg-purple-600 [&_button]:hover:!bg-purple-500">
-                    <WalletMultiButton />
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {addWalletSuccess && (
+        {linkSuccess && (
           <div className="mt-4 rounded-lg border border-green-900/50 bg-green-950/30 p-3">
-            <p className="text-sm text-green-200">{addWalletSuccess}</p>
-          </div>
-        )}
-        {addWalletError && (
-          <div className="mt-4 rounded-lg border border-red-900/50 bg-red-950/30 p-3">
-            <p className="text-sm text-red-200">{addWalletError}</p>
+            <p className="text-sm text-green-200">{linkSuccess}</p>
           </div>
         )}
       </section>
+
+      <LinkWalletModal
+        isOpen={linkModalOpen}
+        onClose={() => setLinkModalOpen(false)}
+        accessToken={accessToken!}
+        onSuccess={async () => {
+          await fetchMe();
+          setLinkSuccess('Wallet linked successfully!');
+        }}
+        onMove={(data) => setMoveConfirmation(data)}
+      />
 
       {moveConfirmation && (
         <>
