@@ -27,6 +27,7 @@ import {
 import { truncateAddress } from '@/lib/utils';
 
 interface ProfileFormState {
+  email: string;
   displayName: string;
   avatarUrl: string;
   bio: string;
@@ -96,6 +97,7 @@ function MePageContent() {
     setHoldingsSummary(summary);
     setTopActiveCollections(activeCollections.items || []);
     setProfileForm({
+      email: meData.email || '',
       displayName: meData.displayName || '',
       avatarUrl: meData.avatarUrl || '',
       bio: meData.bio || '',
@@ -126,6 +128,7 @@ function MePageContent() {
     try {
       const updated = await patchMyProfile(
         {
+          email: profileForm.email.trim() || undefined,
           displayName: profileForm.displayName.trim() || undefined,
           avatarUrl: profileForm.avatarUrl.trim() || undefined,
           bio: profileForm.bio.trim() || undefined,
@@ -318,6 +321,22 @@ function MePageContent() {
         <p className="mt-1 text-sm text-gray-400">Current display name: {profileDisplayName}</p>
 
         <form className="mt-6 space-y-4" onSubmit={onSaveProfile}>
+          <label className="block space-y-1">
+            <span className="text-sm text-gray-300">Email (optional)</span>
+            <input
+              type="email"
+              value={profileForm.email}
+              onChange={(e) => {
+                setProfileForm((prev) => ({ ...prev, email: e.target.value }));
+                setProfileStatus(null);
+                setProfileError(null);
+              }}
+              className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
+              placeholder="your@email.com"
+            />
+            <p className="text-xs text-gray-500">For future email authentication and notifications</p>
+          </label>
+
           <label className="block space-y-1">
             <span className="text-sm text-gray-300">Display name</span>
             <input

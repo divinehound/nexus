@@ -308,6 +308,7 @@ export function refreshAdminProjectIndexing(projectId: string, token: string) {
 
 export interface MeProfile {
   id: string;
+  email: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   bio: string | null;
@@ -385,7 +386,7 @@ export function getMe(token: string) {
 }
 
 export function patchMyProfile(
-  input: { displayName?: string; avatarUrl?: string; bio?: string },
+  input: { email?: string; displayName?: string; avatarUrl?: string; bio?: string },
   token: string,
 ) {
   return apiFetch<MeResponse>('/me/profile', {
