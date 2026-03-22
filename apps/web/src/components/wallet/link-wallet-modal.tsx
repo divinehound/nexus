@@ -127,8 +127,8 @@ export function LinkWalletModal({ isOpen, onClose, accessToken, onSuccess, onMov
   return (
     <>
       <div className="fixed inset-0 z-50 bg-black/70" onClick={onClose} />
-      <div className="fixed inset-0 z-[51] flex items-center justify-center px-4">
-        <div className="w-full max-w-lg rounded-xl border border-gray-700 bg-gray-900 p-6">
+      <div className="fixed inset-0 z-[51] flex items-center justify-center px-4 py-8 overflow-y-auto">
+        <div className="my-auto w-full max-w-lg rounded-xl border border-gray-700 bg-gray-900 p-6 shadow-xl">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold">Link Wallet</h3>
             <button
