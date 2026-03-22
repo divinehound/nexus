@@ -44,9 +44,23 @@ export function ConnectButton() {
           await loginSolana(address, signature);
           disconnect();
         } else {
-          // EVM flow
+          // EVM flow - use proper SIWE format
           const nonce = await getNonce(address);
-          const message = `NEXUS Authentication\n\nWallet: ${address}\nNonce: ${nonce}\n\nSign this message to prove you own this wallet.`;
+          const domain = typeof window !== 'undefined' ? window.location.host : 'nexus.dev.intentionworks.xyz';
+          const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexus.dev.intentionworks.xyz';
+          const issuedAt = new Date().toISOString();
+          
+          // SIWE message format
+          const message = `${domain} wants you to sign in with your Ethereum account:
+${address}
+
+Sign in to NEXUS
+
+URI: ${origin}
+Version: 1
+Chain ID: 1
+Nonce: ${nonce}
+Issued At: ${issuedAt}`;
           
           const signature = await signMessageAsync({ message });
           await loginEvm(message, signature);
