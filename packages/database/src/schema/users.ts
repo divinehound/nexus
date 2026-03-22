@@ -19,6 +19,7 @@ export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
   primaryWalletId: uuid('primary_wallet_id'),
   role: userRoleEnum('role').default('user').notNull(),
+  email: varchar('email', { length: 255 }),
   displayName: varchar('display_name', { length: 255 }),
   avatarUrl: text('avatar_url'),
   bio: text('bio'),
