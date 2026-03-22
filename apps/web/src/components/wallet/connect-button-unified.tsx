@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useAppKit, useAppKitAccount, useDisconnect, useAppKitProvider } from '@reown/appkit/react';
-import { useSignMessage } from 'wagmi';
 import type { Provider } from '@reown/appkit-adapter-solana';
+import type { Provider as EvmProvider } from '@reown/appkit-adapter-wagmi';
 import { useAuth } from '@/context/auth-context';
 import { truncateAddress } from '@/lib/utils';
 import bs58 from 'bs58';
@@ -13,8 +13,8 @@ export function ConnectButton() {
   const { open } = useAppKit();
   const { isConnected, address, caipAddress } = useAppKitAccount();
   const { disconnect } = useDisconnect();
-  const { signMessageAsync } = useSignMessage();
-  const { walletProvider } = useAppKitProvider('solana');
+  const { walletProvider: solanaProvider } = useAppKitProvider('solana');
+  const { walletProvider: evmProvider } = useAppKitProvider('eip155');
 
   const [signing, setSigning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,19 +31,19 @@ export function ConnectButton() {
         // Determine if EVM or Solana based on CAIP address
         const isSolana = caipAddress?.startsWith('solana:');
         
-        if (isSolana && walletProvider) {
+        if (isSolana && solanaProvider) {
           // Solana flow
           const nonce = await getNonce(address);
           const message = `NEXUS Authentication\n\nWallet: ${address}\nNonce: ${nonce}\n\nSign this message to prove you own this wallet.`;
           const encodedMessage = new TextEncoder().encode(message);
           
-          const provider = walletProvider as Provider;
+          const provider = solanaProvider as Provider;
           const signedMessage = await provider.signMessage(encodedMessage);
           const signature = bs58.encode(signedMessage);
 
           await loginSolana(address, signature);
           disconnect();
-        } else {
+        } else if (evmProvider) {
           // EVM flow - use proper SIWE format
           const nonce = await getNonce(address);
           const domain = typeof window !== 'undefined' ? window.location.host : 'nexus.dev.intentionworks.xyz';
@@ -62,9 +62,16 @@ Chain ID: 1
 Nonce: ${nonce}
 Issued At: ${issuedAt}`;
           
-          const signature = await signMessageAsync({ message });
+          const provider = evmProvider as EvmProvider;
+          const signature = await provider.request({
+            method: 'personal_sign',
+            params: [message, address],
+          }) as string;
+          
           await loginEvm(message, signature);
           disconnect();
+        } else {
+          throw new Error('Wallet provider not available');
         }
       } catch (err: any) {
         console.error('Auth error:', err);
@@ -76,7 +83,7 @@ Issued At: ${issuedAt}`;
     };
 
     handleAuth();
-  }, [isConnected, address, user, signing, caipAddress, walletProvider, signMessageAsync, getNonce, loginEvm, loginSolana, disconnect]);
+  }, [isConnected, address, user, signing, caipAddress, solanaProvider, evmProvider, getNonce, loginEvm, loginSolana, disconnect]);
 
   const handleDisconnect = async () => {
     try {

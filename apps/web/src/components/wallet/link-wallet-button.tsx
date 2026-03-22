@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { useAppKit, useAppKitAccount, useDisconnect, useAppKitProvider } from '@reown/appkit/react';
-import { useSignMessage } from 'wagmi';
 import type { Provider } from '@reown/appkit-adapter-solana';
+import type { Provider as EvmProvider } from '@reown/appkit-adapter-wagmi';
 import bs58 from 'bs58';
 import { createWalletChallenge, verifyWalletLink } from '@/lib/api';
+import { hashMessage, recoverMessageAddress } from 'viem';
 
 interface LinkWalletButtonProps {
   accessToken: string;
@@ -17,8 +18,8 @@ export function LinkWalletButton({ accessToken, onSuccess, onMove }: LinkWalletB
   const { open } = useAppKit();
   const { isConnected, address, caipAddress } = useAppKitAccount();
   const { disconnect } = useDisconnect();
-  const { signMessageAsync } = useSignMessage();
-  const { walletProvider } = useAppKitProvider('solana');
+  const { walletProvider: solanaProvider } = useAppKitProvider('solana');
+  const { walletProvider: evmProvider } = useAppKitProvider('eip155');
 
   const [linking, setLinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,18 +45,22 @@ export function LinkWalletButton({ accessToken, onSuccess, onMove }: LinkWalletB
 
         let signature: string;
 
-        if (isSolana && walletProvider) {
+        if (isSolana && solanaProvider) {
           // Solana signing
           const encodedMessage = new TextEncoder().encode(challenge.message);
-          const provider = walletProvider as Provider;
+          const provider = solanaProvider as Provider;
           const signedMessage = await provider.signMessage(encodedMessage);
           signature = bs58.encode(signedMessage);
+        } else if (evmProvider) {
+          // EVM signing via Reown provider
+          const provider = evmProvider as EvmProvider;
+          const signedMessage = await provider.request({
+            method: 'personal_sign',
+            params: [challenge.message, address],
+          });
+          signature = signedMessage as string;
         } else {
-          // EVM signing
-          if (!signMessageAsync) {
-            throw new Error('EVM wallet provider not available');
-          }
-          signature = await signMessageAsync({ message: challenge.message });
+          throw new Error('Wallet provider not available');
         }
 
         // Verify
@@ -83,7 +88,7 @@ export function LinkWalletButton({ accessToken, onSuccess, onMove }: LinkWalletB
     };
 
     handleLink();
-  }, [isConnected, address, linking, caipAddress, walletProvider, signMessageAsync, accessToken, onSuccess, onMove, disconnect]);
+  }, [isConnected, address, linking, caipAddress, solanaProvider, evmProvider, accessToken, onSuccess, onMove, disconnect]);
 
   if (linking) {
     return (
