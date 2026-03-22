@@ -157,13 +157,18 @@ function SignInModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
   return (
     <>
       <div className="fixed inset-0 z-50 bg-black/70" onClick={onClose} />
-      <div className="fixed inset-0 z-[51] flex items-center justify-center px-4 py-8 overflow-y-auto">
-        <div className="my-auto w-full max-w-lg rounded-xl border border-gray-700 bg-gray-900 p-6 shadow-xl">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">Sign In</h3>
+      <div className="fixed inset-0 z-[51] flex items-center justify-center px-4 py-4 sm:py-8">
+        <div className="my-auto w-full max-w-lg max-h-[90vh] flex flex-col rounded-xl border border-gray-700 bg-gray-900 shadow-xl">
+          <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-gray-800">
+            <div>
+              <h3 className="text-lg font-semibold">Sign In</h3>
+              <p className="mt-1 text-sm text-gray-400">
+                Connect your wallet to sign in. Works with any EVM or Solana wallet.
+              </p>
+            </div>
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-white"
+              className="text-gray-400 hover:text-white flex-shrink-0 ml-4"
               aria-label="Close"
             >
               <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -172,11 +177,7 @@ function SignInModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
             </button>
           </div>
 
-          <p className="mt-2 text-sm text-gray-400">
-            Connect your wallet to sign in. Works with any EVM or Solana wallet.
-          </p>
-
-          <div className="mt-6 space-y-4">
+          <div className="overflow-y-auto px-6 py-4 space-y-4">
             {/* EVM Wallets */}
             <div className="rounded-lg border border-gray-800 p-4">
               <h4 className="text-sm font-semibold text-gray-300">EVM Wallets</h4>
@@ -235,9 +236,13 @@ function SignInModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
             </div>
           </div>
 
+          </div>
+
           {error && (
-            <div className="mt-4 rounded-lg border border-red-900/50 bg-red-950/30 p-3">
-              <p className="text-sm text-red-200">{error}</p>
+            <div className="px-6 pb-4 pt-2">
+              <div className="rounded-lg border border-red-900/50 bg-red-950/30 p-3">
+                <p className="text-sm text-red-200">{error}</p>
+              </div>
             </div>
           )}
         </div>
