@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useAppKit, useAppKitAccount, useDisconnect, useAppKitProvider } from '@reown/appkit/react';
 import type { Provider } from '@reown/appkit-adapter-solana';
 import type { Provider as EvmProvider } from '@reown/appkit-adapter-wagmi';
@@ -18,12 +18,23 @@ export function ConnectButton() {
 
   const [signing, setSigning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const processedAddress = useRef<string | null>(null);
 
-  // Auto-sign when wallet connects
+  // Reset processed address when disconnected
   useEffect(() => {
-    if (!isConnected || !address || user || signing) return;
+    if (!isConnected) {
+      processedAddress.current = null;
+    }
+  }, [isConnected]);
+
+  // Auto-sign when wallet connects (only if not already logged in)
+  useEffect(() => {
+    // Don't auto-sign if user is already authenticated, already processed this address, or still loading
+    if (!isConnected || !address || user || signing || isLoading || processedAddress.current === address) return;
 
     const handleAuth = async () => {
+      // Mark this address as processed
+      processedAddress.current = address;
       setSigning(true);
       setError(null);
 
