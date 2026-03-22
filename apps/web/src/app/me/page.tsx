@@ -6,7 +6,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import bs58 from 'bs58';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
-import { LinkWalletModal } from '@/components/wallet/link-wallet-modal';
+import { LinkWalletButton } from '@/components/wallet/link-wallet-button';
 import {
   ApiError,
   LinkedWallet,
@@ -67,7 +67,7 @@ function MePageContent() {
   const [walletActionId, setWalletActionId] = useState<string | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
 
-  const [linkModalOpen, setLinkModalOpen] = useState(false);
+
   const [linkSuccess, setLinkSuccess] = useState<string | null>(null);
 
   const [moveConfirmation, setMoveConfirmation] = useState<MoveConfirmationState | null>(null);
@@ -480,15 +480,18 @@ function MePageContent() {
           Connect any wallet (EVM or Solana) to link it to your account. Supports MetaMask, Phantom, Coinbase Wallet, and more.
         </p>
 
-        <button
-          onClick={() => {
-            setLinkSuccess(null);
-            setLinkModalOpen(true);
-          }}
-          className="mt-4 rounded-lg bg-purple-600 px-6 py-3 text-sm font-medium text-white hover:bg-purple-500"
-        >
-          Link New Wallet
-        </button>
+        <div className="mt-4">
+          <LinkWalletButton
+            accessToken={accessToken!}
+            onSuccess={async () => {
+              await fetchMe();
+              setLinkSuccess('Wallet linked successfully!');
+            }}
+            onMove={(chain, address, confirmationToken) => 
+              setMoveConfirmation({ chain, address, confirmationToken })
+            }
+          />
+        </div>
 
         {linkSuccess && (
           <div className="mt-4 rounded-lg border border-green-900/50 bg-green-950/30 p-3">
@@ -496,17 +499,6 @@ function MePageContent() {
           </div>
         )}
       </section>
-
-      <LinkWalletModal
-        isOpen={linkModalOpen}
-        onClose={() => setLinkModalOpen(false)}
-        accessToken={accessToken!}
-        onSuccess={async () => {
-          await fetchMe();
-          setLinkSuccess('Wallet linked successfully!');
-        }}
-        onMove={(data) => setMoveConfirmation(data)}
-      />
 
       {moveConfirmation && (
         <>
