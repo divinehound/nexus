@@ -237,8 +237,8 @@ function SignInModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
                     )}
                   </div>
                 ) : (
-                  <div className="[&_button]:!w-full [&_button]:!h-10 [&_button]:!text-sm [&_button]:!font-medium [&_button]:!bg-purple-600 [&_button]:hover:!bg-purple-500 [&_button]:!rounded-lg">
-                    <WalletMultiButton />
+                  <div className="w-full [&_button]:!w-full [&_button]:!h-10 [&_button]:!text-sm [&_button]:!font-medium [&_button]:!bg-purple-600 [&_button]:hover:!bg-purple-500 [&_button]:!rounded-lg [&_button]:!border-none">
+                    <WalletMultiButton style={{}} />
                   </div>
                 )}
               </div>
