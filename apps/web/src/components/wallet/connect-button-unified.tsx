@@ -11,7 +11,7 @@ import bs58 from 'bs58';
 export function ConnectButton() {
   const { user, isLoading, logout, loginEvm, loginSolana, getNonce } = useAuth();
   const { open } = useAppKit();
-  const { isConnected, address, caipAddress } = useAppKitAccount();
+  const { isConnected, address, caipAddress, caipNetworkId } = useAppKitAccount();
   const { disconnect } = useDisconnect();
   const { walletProvider: solanaProvider } = useAppKitProvider('solana');
   const { walletProvider: evmProvider } = useAppKitProvider('eip155');
@@ -61,6 +61,9 @@ export function ConnectButton() {
           const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexus.dev.intentionworks.xyz';
           const issuedAt = new Date().toISOString();
           
+          // Extract chain ID from CAIP network ID (format: eip155:8453)
+          const chainId = caipNetworkId ? parseInt(caipNetworkId.split(':')[1]) : 1;
+          
           // SIWE message format
           const message = `${domain} wants you to sign in with your Ethereum account:
 ${address}
@@ -69,7 +72,7 @@ Sign in to NEXUS
 
 URI: ${origin}
 Version: 1
-Chain ID: 1
+Chain ID: ${chainId}
 Nonce: ${nonce}
 Issued At: ${issuedAt}`;
           
