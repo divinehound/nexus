@@ -56,7 +56,7 @@ function LinkWalletContent() {
       }
 
       await verifyWalletLink(
-        { chain, address, signature, nonce: challenge.nonce },
+        { chain, address, signature, message: challenge.message },
         token
       );
 
@@ -68,7 +68,9 @@ function LinkWalletContent() {
       }, 3000);
     } catch (err: any) {
       console.error('Link error:', err);
-      setError(err.message || 'Wallet linking failed');
+      // Show detailed error message
+      const errorMsg = err.error?.message || err.message || 'Wallet linking failed';
+      setError(errorMsg);
     } finally {
       setLinking(false);
     }
