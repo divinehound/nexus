@@ -156,10 +156,11 @@ export class MeService {
     };
   }
 
-  async updateProfile(userId: string, body: { displayName?: string; avatarUrl?: string; bio?: string }) {
+  async updateProfile(userId: string, body: { email?: string; displayName?: string; avatarUrl?: string; bio?: string }) {
     const [updated] = await this.db
       .update(users)
       .set({
+        email: body.email,
         displayName: body.displayName,
         avatarUrl: body.avatarUrl,
         bio: body.bio,
