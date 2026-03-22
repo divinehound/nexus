@@ -193,7 +193,12 @@ function MePageContent() {
     }
 
     if (addChain === 'solana' && !signSolanaMessage) {
-      setAddWalletError('Connected Solana wallet cannot sign messages. Use a wallet that supports signMessage.');
+      setAddWalletError('To link a Solana wallet, please connect with a Solana wallet (Phantom, Solflare, etc) using the Connect button above, then try again.');
+      return;
+    }
+
+    if (addChain !== 'solana' && !connectedAddress) {
+      setAddWalletError('To link an EVM wallet, please connect with an EVM wallet (MetaMask, Coinbase Wallet, etc) using the Connect button above, then try again.');
       return;
     }
 
@@ -455,7 +460,25 @@ function MePageContent() {
 
       <section className="rounded-xl border border-gray-800 p-6">
         <h2 className="text-xl font-semibold">Add Wallet</h2>
-        <p className="mt-1 text-sm text-gray-400">EVM flow: challenge to signature to verify</p>
+        <p className="mt-1 text-sm text-gray-400">
+          To link a wallet, connect with that wallet provider first (use Connect button in nav), then enter the address below to verify ownership.
+        </p>
+        
+        {addChain === 'solana' && !solanaPublicKey && (
+          <div className="mt-3 rounded-lg border border-yellow-900/50 bg-yellow-950/30 p-3">
+            <p className="text-sm text-yellow-200">
+              <strong>Note:</strong> Connect with a Solana wallet (Phantom, Solflare, etc) to link Solana addresses.
+            </p>
+          </div>
+        )}
+        
+        {addChain !== 'solana' && !connectedAddress && (
+          <div className="mt-3 rounded-lg border border-yellow-900/50 bg-yellow-950/30 p-3">
+            <p className="text-sm text-yellow-200">
+              <strong>Note:</strong> Connect with an EVM wallet (MetaMask, Coinbase Wallet, etc) to link EVM addresses.
+            </p>
+          </div>
+        )}
 
         <form className="mt-4 space-y-3" onSubmit={onAddWallet}>
           <label className="block space-y-1">
