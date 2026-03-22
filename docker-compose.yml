@@ -27,5 +27,6 @@ services:
     environment:
       NODE_ENV: production
       API_URL: http://api:4000/api
+      NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID:-697e0d756cf3d408f188870e14793c1c}
     depends_on:
       - api
