@@ -61,8 +61,16 @@ export function ConnectButton() {
           const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexus.dev.intentionworks.xyz';
           const issuedAt = new Date().toISOString();
           
-          // Extract chain ID from CAIP network ID (format: eip155:8453)
-          const chainId = caipNetworkId ? parseInt(caipNetworkId.split(':')[1]) : 1;
+          // Get chain ID from provider
+          const provider = evmProvider as EvmProvider;
+          let chainId = 1; // default to mainnet
+          try {
+            const chainIdHex = await provider.request({ method: 'eth_chainId' }) as string;
+            chainId = parseInt(chainIdHex, 16);
+            console.log('Connected chain ID:', chainId, 'from hex:', chainIdHex);
+          } catch (e) {
+            console.error('Failed to get chain ID:', e);
+          }
           
           // SIWE message format
           const message = `${domain} wants you to sign in with your Ethereum account:
@@ -76,7 +84,6 @@ Chain ID: ${chainId}
 Nonce: ${nonce}
 Issued At: ${issuedAt}`;
           
-          const provider = evmProvider as EvmProvider;
           const signature = await provider.request({
             method: 'personal_sign',
             params: [message, address],
