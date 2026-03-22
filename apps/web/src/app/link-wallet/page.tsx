@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useState, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAppKit, useAppKitAccount, useAppKitProvider } from '@reown/appkit/react';
 import type { Provider as SolanaProvider } from '@reown/appkit-adapter-solana';
@@ -20,6 +20,7 @@ function LinkWalletContent() {
 
   const [status, setStatus] = useState<'idle' | 'connecting' | 'linking' | 'success' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const processedRef = useRef(false);
 
   // Open modal on mount if not connected
   useEffect(() => {
@@ -34,11 +35,13 @@ function LinkWalletContent() {
     }
   }, [token, isConnected, status, open]);
 
-  // Auto-link when wallet connects
+  // Auto-link when wallet connects (only once)
   useEffect(() => {
-    if (!isConnected || !address || !token || status === 'linking' || status === 'success') return;
+    // Don't run if no connection, no address, no token, or already processed
+    if (!isConnected || !address || !token || processedRef.current) return;
 
     const handleLink = async () => {
+      processedRef.current = true; // Mark as processed immediately
       setStatus('linking');
       setError(null);
 
