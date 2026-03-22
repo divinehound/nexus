@@ -207,8 +207,6 @@ export function LinkWalletModal({ isOpen, onClose, accessToken, onSuccess, onMov
             </div>
           </div>
 
-          </div>
-
           {error && (
             <div className="px-6 pb-4 pt-2">
               <div className="rounded-lg border border-red-900/50 bg-red-950/30 p-3">
