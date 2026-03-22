@@ -1,7 +1,7 @@
 'use client';
 
 import { useAuth } from '@/context/auth-context';
-import { ConnectButton } from './connect-button';
+import { ConnectButton } from './connect-button-unified';
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
