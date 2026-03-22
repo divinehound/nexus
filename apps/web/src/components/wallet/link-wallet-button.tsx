@@ -52,6 +52,9 @@ export function LinkWalletButton({ accessToken, onSuccess, onMove }: LinkWalletB
           signature = bs58.encode(signedMessage);
         } else {
           // EVM signing
+          if (!signMessageAsync) {
+            throw new Error('EVM wallet provider not available');
+          }
           signature = await signMessageAsync({ message: challenge.message });
         }
 
@@ -71,7 +74,9 @@ export function LinkWalletButton({ accessToken, onSuccess, onMove }: LinkWalletB
       } catch (err: any) {
         console.error('Link error:', err);
         setError(err.message || 'Wallet linking failed');
-        disconnect();
+        try {
+          disconnect();
+        } catch {}
       } finally {
         setLinking(false);
       }

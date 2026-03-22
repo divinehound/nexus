@@ -7,6 +7,7 @@ import bs58 from 'bs58';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
 import { LinkWalletButton } from '@/components/wallet/link-wallet-button';
+import { ErrorBoundary } from '@/components/error-boundary';
 import {
   ApiError,
   LinkedWallet,
@@ -40,9 +41,11 @@ interface MoveConfirmationState {
 
 export default function MePage() {
   return (
-    <AuthGate>
-      <MePageContent />
-    </AuthGate>
+    <ErrorBoundary>
+      <AuthGate>
+        <MePageContent />
+      </AuthGate>
+    </ErrorBoundary>
   );
 }
 
