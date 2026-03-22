@@ -6,7 +6,7 @@ import { useAppKit, useAppKitAccount, useAppKitProvider } from '@reown/appkit/re
 import type { Provider as SolanaProvider } from '@reown/appkit-adapter-solana';
 import type { Provider as EvmProvider } from '@reown/appkit-adapter-wagmi';
 import bs58 from 'bs58';
-import { createWalletChallenge, verifyWalletLink } from '@/lib/api';
+import { createWalletChallenge, verifyWalletLink, moveWalletLink } from '@/lib/api';
 
 function LinkWalletContent() {
   const searchParams = useSearchParams();
@@ -21,6 +21,7 @@ function LinkWalletContent() {
   const [linking, setLinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [confirmationToken, setConfirmationToken] = useState<string | null>(null);
 
   const handleLink = async () => {
     if (!token || !address) return;
@@ -68,8 +69,69 @@ function LinkWalletContent() {
       }, 3000);
     } catch (err: any) {
       console.error('Link error:', err);
-      // Show detailed error message
-      const errorMsg = err.error?.message || err.message || 'Wallet linking failed';
+      
+      // Check if wallet is already linked (requires confirmation)
+      if (err.error?.error === 'WALLET_ALREADY_LINKED' && err.error?.confirmationToken) {
+        setConfirmationToken(err.error.confirmationToken);
+        setError(null);
+      } else {
+        // Show detailed error message
+        const errorMsg = err.error?.message || err.message || 'Wallet linking failed';
+        setError(errorMsg);
+      }
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  const handleConfirmMove = async () => {
+    if (!token || !address || !confirmationToken) return;
+    
+    setLinking(true);
+    setError(null);
+
+    try {
+      const isSolana = caipAddress?.startsWith('solana:');
+      const chain = isSolana ? 'solana' : 'ethereum';
+
+      const challenge = await createWalletChallenge(
+        { chain, address, purpose: 'move_wallet', confirmationToken },
+        token
+      );
+
+      let signature: string;
+
+      if (isSolana && solanaProvider) {
+        const encodedMessage = new TextEncoder().encode(challenge.message);
+        const provider = solanaProvider as SolanaProvider;
+        const signedMessage = await provider.signMessage(encodedMessage);
+        signature = bs58.encode(signedMessage);
+      } else if (evmProvider) {
+        const provider = evmProvider as EvmProvider;
+        const signedMessage = await provider.request({
+          method: 'personal_sign',
+          params: [challenge.message, address],
+        });
+        signature = signedMessage as string;
+      } else {
+        throw new Error('Wallet provider not available');
+      }
+
+      await moveWalletLink(
+        { chain, address, confirmationToken, signature, message: challenge.message },
+        token
+      );
+
+      setSuccess(true);
+      setConfirmationToken(null);
+      
+      // Auto-close after 3 seconds
+      setTimeout(() => {
+        window.close();
+      }, 3000);
+    } catch (err: any) {
+      console.error('Move error:', err);
+      const errorMsg = err.error?.message || err.message || 'Wallet transfer failed';
       setError(errorMsg);
     } finally {
       setLinking(false);
@@ -156,6 +218,22 @@ function LinkWalletContent() {
                 {linking ? 'Signing...' : 'Sign & Link Wallet'}
               </button>
             </div>
+
+            {confirmationToken && (
+              <div className="mt-6 rounded-lg border border-yellow-900/50 bg-yellow-950/30 p-4">
+                <h3 className="font-semibold text-yellow-200">Confirm Wallet Transfer</h3>
+                <p className="mt-2 text-sm text-yellow-300">
+                  This wallet is currently linked to another account. Click below to transfer it to your current account.
+                </p>
+                <button
+                  onClick={handleConfirmMove}
+                  disabled={linking}
+                  className="mt-4 w-full rounded-lg bg-yellow-600 px-6 py-3 font-medium text-white hover:bg-yellow-500 disabled:opacity-50"
+                >
+                  {linking ? 'Confirming...' : 'Confirm Transfer'}
+                </button>
+              </div>
+            )}
 
             {error && (
               <div className="mt-4 rounded-lg border border-red-900/50 bg-red-950/30 p-3">
