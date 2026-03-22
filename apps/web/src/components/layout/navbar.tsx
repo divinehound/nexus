@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ConnectButton } from '@/components/wallet/connect-button-v2';
+import { ConnectButton } from '@/components/wallet/connect-button-unified';
 import { useAuth } from '@/context/auth-context';
 
 export function Navbar() {
