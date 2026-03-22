@@ -485,24 +485,18 @@ function MePageContent() {
           Connect any wallet (EVM or Solana) to link it to your account. Supports MetaMask, Phantom, Coinbase Wallet, and more.
         </p>
 
-        <div className="mt-4">
-          <LinkWalletButton
-            accessToken={accessToken!}
-            onSuccess={async () => {
-              await fetchMe();
-              setLinkSuccess('Wallet linked successfully!');
-            }}
-            onMove={(chain, address, confirmationToken) => 
-              setMoveConfirmation({ chain, address, confirmationToken })
-            }
-          />
+        <div className="mt-4 flex items-center gap-3">
+          <LinkWalletButton accessToken={accessToken!} />
+          <button
+            onClick={() => fetchMe()}
+            className="rounded-lg border border-gray-700 px-4 py-2 text-sm text-gray-400 hover:border-gray-500 hover:text-white"
+          >
+            Refresh
+          </button>
         </div>
-
-        {linkSuccess && (
-          <div className="mt-4 rounded-lg border border-green-900/50 bg-green-950/30 p-3">
-            <p className="text-sm text-green-200">{linkSuccess}</p>
-          </div>
-        )}
+        <p className="mt-2 text-xs text-gray-500">
+          Opens in a new window. Click "Refresh" after linking to update your wallet list.
+        </p>
       </section>
 
       {moveConfirmation && (
