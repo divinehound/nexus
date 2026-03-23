@@ -48,11 +48,17 @@ export class HolderIndexerService {
       }
 
       // Fetch all holders based on chain
-      const holders = collection.chain === 'solana'
+      const holderResult = collection.chain === 'solana'
         ? await this.fetchSolanaHolders(collection.contractAddress)
         : await this.fetchEvmHolders(collection.chain, collection.contractAddress);
       
+      const holders = holderResult.holders;
       this.logger.log(`Fetched ${holders.length} unique holders for ${collection.name}`);
+
+      // Check spam flags from API
+      if (holderResult.spamInfo) {
+        await this.handleSpamDetection(collectionId, holderResult.spamInfo);
+      }
 
       // Upsert holders
       let indexed = 0;
@@ -106,7 +112,10 @@ export class HolderIndexerService {
   private async fetchEvmHolders(
     chain: string,
     contractAddress: string,
-  ): Promise<Array<{ ownerAddress: string; balance: number }>> {
+  ): Promise<{
+    holders: Array<{ ownerAddress: string; balance: number }>;
+    spamInfo?: { isSpam: boolean; score: number; reason?: string };
+  }> {
     const apiKey = this.config.get<string>('alchemy.apiKey');
     if (!apiKey) {
       throw new Error('Alchemy API key not configured');
@@ -117,6 +126,7 @@ export class HolderIndexerService {
     
     const holders = new Map<string, number>(); // address -> total balance
     let pageKey: string | undefined;
+    let spamClassifications: any = null;
 
     do {
       const url = new URL(`${baseUrl}/getOwnersForContract`);
@@ -138,6 +148,11 @@ export class HolderIndexerService {
 
       const data: AlchemyOwnersResponse = await response.json();
 
+      // Capture spam info from first response
+      if (!spamClassifications && (data as any).spamClassifications) {
+        spamClassifications = (data as any).spamClassifications;
+      }
+
       // Aggregate balances per owner
       for (const owner of data.owners) {
         const address = owner.ownerAddress.toLowerCase();
@@ -151,10 +166,24 @@ export class HolderIndexerService {
       pageKey = data.pageKey;
     } while (pageKey);
 
-    return Array.from(holders.entries()).map(([ownerAddress, balance]) => ({
+    const holderList = Array.from(holders.entries()).map(([ownerAddress, balance]) => ({
       ownerAddress,
       balance,
     }));
+
+    // Extract spam info if available
+    let spamInfo: { isSpam: boolean; score: number; reason?: string } | undefined;
+    if (spamClassifications) {
+      const isSpam = spamClassifications.isSpam === true;
+      const classifications = spamClassifications.classifications || [];
+      spamInfo = {
+        isSpam,
+        score: isSpam ? 90 : 10, // High confidence if Alchemy flags it
+        reason: classifications.length > 0 ? classifications.join(', ') : undefined,
+      };
+    }
+
+    return { holders: holderList, spamInfo };
   }
 
   /**
@@ -162,7 +191,10 @@ export class HolderIndexerService {
    */
   private async fetchSolanaHolders(
     collectionMint: string,
-  ): Promise<Array<{ ownerAddress: string; balance: number }>> {
+  ): Promise<{
+    holders: Array<{ ownerAddress: string; balance: number }>;
+    spamInfo?: { isSpam: boolean; score: number; reason?: string };
+  }> {
     const apiKey = this.config.get<string>('helius.apiKey');
     if (!apiKey) {
       throw new Error('Helius API key not configured');
@@ -215,10 +247,54 @@ export class HolderIndexerService {
       page++;
     }
 
-    return Array.from(holders.entries()).map(([ownerAddress, balance]) => ({
+    const holderList = Array.from(holders.entries()).map(([ownerAddress, balance]) => ({
       ownerAddress,
       balance,
     }));
+
+    // Helius doesn't provide spam detection in getAssetsByGroup
+    // Would need separate API call to check collection metadata
+    return { holders: holderList, spamInfo: undefined };
+  }
+
+  /**
+   * Handle spam detection from API response
+   */
+  private async handleSpamDetection(
+    collectionId: string,
+    spamInfo: { isSpam: boolean; score: number; reason?: string },
+  ) {
+    // Only auto-flag high-confidence spam
+    if (spamInfo.isSpam && spamInfo.score >= 80) {
+      this.logger.warn(
+        `Collection ${collectionId} flagged as spam by Alchemy: ${spamInfo.reason || 'no reason provided'}`,
+      );
+
+      await this.db
+        .update(collections)
+        .set({
+          isSpam: true,
+          spamScore: spamInfo.score,
+          spamReason: spamInfo.reason || 'auto-detected',
+          spamDetectedAt: new Date(),
+          spamDetectedBy: 'alchemy' as any,
+        })
+        .where(eq(collections.id, collectionId));
+    } else if (spamInfo.score > 0) {
+      // Log suspicious but not definitive
+      this.logger.log(
+        `Collection ${collectionId} has spam score ${spamInfo.score} (not auto-flagging)`,
+      );
+
+      // Update score but don't mark as spam
+      await this.db
+        .update(collections)
+        .set({
+          spamScore: spamInfo.score,
+          spamReason: spamInfo.reason,
+        })
+        .where(eq(collections.id, collectionId));
+    }
   }
 
   /**
