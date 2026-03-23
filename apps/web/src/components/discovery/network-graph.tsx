@@ -193,10 +193,17 @@ export function NetworkGraphVisualization({
 
     // Render
     const g = svg.querySelector('g');
-    if (!g) return;
+    const defs = svg.querySelector('defs');
+    if (!g || !defs) return;
 
-    // Clear previous
+    // Clear previous (including old defs content)
     g.innerHTML = '';
+    // Clear old gradients/clips but keep the style element
+    Array.from(defs.children).forEach((child) => {
+      if (child.tagName !== 'style') {
+        child.remove();
+      }
+    });
 
     // Draw edges
     edges.forEach((edge) => {
