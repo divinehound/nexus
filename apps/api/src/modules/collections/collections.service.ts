@@ -302,20 +302,21 @@ export class CollectionsService {
     const maxNodes = options?.maxNodes || 50;
     const chains = options?.chains || [];
 
-    // Get collections with indexed holders
-    const collectionsResult = await this.db.execute(
-      sql.raw(`
-        SELECT DISTINCT c.id, c.name, c.chain, c.image_url, COUNT(ch.address) as holder_count
-        FROM collections c
-        INNER JOIN collection_holders ch ON ch.collection_id = c.id
-        WHERE c.is_spam = false
-        ${chains.length > 0 ? `AND c.chain = ANY(ARRAY[${chains.map((c) => `'${c}'`).join(',')}])` : ''}
-        GROUP BY c.id
-        HAVING COUNT(ch.address) > 0
-        ORDER BY holder_count DESC
-        LIMIT ${maxNodes}
-      `),
-    );
+    try {
+      // Get collections with indexed holders
+      const collectionsResult = await this.db.execute(
+        sql.raw(`
+          SELECT DISTINCT c.id, c.name, c.chain, c.image_url, COUNT(ch.address) as holder_count
+          FROM collections c
+          INNER JOIN collection_holders ch ON ch.collection_id = c.id
+          WHERE c.is_spam = false
+          ${chains.length > 0 ? `AND c.chain = ANY(ARRAY[${chains.map((c) => `'${c}'`).join(',')}])` : ''}
+          GROUP BY c.id
+          HAVING COUNT(ch.address) > 0
+          ORDER BY holder_count DESC
+          LIMIT ${maxNodes}
+        `),
+      );
 
     const nodes = collectionsResult.map((row: any) => ({
       id: row.id,
@@ -371,7 +372,12 @@ export class CollectionsService {
       };
     });
 
-    return { nodes, edges };
+      return { nodes, edges };
+    } catch (error) {
+      console.error('Error generating network graph:', error);
+      // Return empty graph on error rather than crashing
+      return { nodes: [], edges: [] };
+    }
   }
 
   /**
@@ -381,26 +387,27 @@ export class CollectionsService {
     limit?: number;
     minOverlap?: number;
   }) {
-    const limit = options?.limit || 10;
-    const minOverlap = options?.minOverlap || 3;
+    try {
+      const limit = options?.limit || 10;
+      const minOverlap = options?.minOverlap || 3;
 
-    // Get collections user already holds
-    const userCollections = await this.db.execute(
-      sql.raw(`
-        SELECT DISTINCT ch.collection_id, c.name
-        FROM collection_holders ch
-        INNER JOIN collections c ON c.id = ch.collection_id
-        WHERE ch.address = '${userAddress.toLowerCase()}' 
-          AND ch.chain = '${chain}' 
-          AND c.is_spam = false
-      `),
-    );
+      // Get collections user already holds
+      const userCollections = await this.db.execute(
+        sql.raw(`
+          SELECT DISTINCT ch.collection_id, c.name
+          FROM collection_holders ch
+          INNER JOIN collections c ON c.id = ch.collection_id
+          WHERE ch.address = '${userAddress.toLowerCase()}' 
+            AND ch.chain = '${chain}' 
+            AND c.is_spam = false
+        `),
+      );
 
-    const userCollectionIds = userCollections.map((row: any) => row.collection_id);
+      const userCollectionIds = userCollections.map((row: any) => row.collection_id);
 
-    if (userCollectionIds.length === 0) {
-      return []; // User doesn't hold any indexed collections
-    }
+      if (userCollectionIds.length === 0) {
+        return []; // User doesn't hold any indexed collections
+      }
 
     // Find collections with high holder overlap (simplified)
     const recommendations = await this.db.execute(
@@ -430,34 +437,38 @@ export class CollectionsService {
       `),
     );
 
-    return recommendations.map((row: any) => {
-      const sharedHolders = parseInt(row.shared_holders);
-      const holderCount = parseInt(row.holder_count) || 1;
-      const score = Math.min(sharedHolders / holderCount, 1);
+      return recommendations.map((row: any) => {
+        const sharedHolders = parseInt(row.shared_holders);
+        const holderCount = parseInt(row.holder_count) || 1;
+        const score = Math.min(sharedHolders / holderCount, 1);
 
-      const basedOnCollections = userCollections
-        .filter((uc: any) => userCollectionIds.includes(uc.collection_id))
-        .map((uc: any) => ({
-          id: uc.collection_id,
-          name: uc.name,
-          overlap: Math.floor(sharedHolders / userCollectionIds.length),
-        }));
+        const basedOnCollections = userCollections
+          .filter((uc: any) => userCollectionIds.includes(uc.collection_id))
+          .map((uc: any) => ({
+            id: uc.collection_id,
+            name: uc.name,
+            overlap: Math.floor(sharedHolders / userCollectionIds.length),
+          }));
 
-      return {
-        collection: {
-          id: row.id,
-          name: row.name,
-          chain: row.chain,
-          contractAddress: row.contract_address,
-          imageUrl: row.image_url,
-          holderCount,
-          floorPrice: row.floor_price ? parseFloat(row.floor_price) : null,
-        },
-        score,
-        sharedHolders,
-        basedOn: basedOnCollections,
-        reason: `${sharedHolders} collectors from your communities also hold this`,
-      };
-    });
+        return {
+          collection: {
+            id: row.id,
+            name: row.name,
+            chain: row.chain,
+            contractAddress: row.contract_address,
+            imageUrl: row.image_url,
+            holderCount,
+            floorPrice: row.floor_price ? parseFloat(row.floor_price) : null,
+          },
+          score,
+          sharedHolders,
+          basedOn: basedOnCollections,
+          reason: `${sharedHolders} collectors from your communities also hold this`,
+        };
+      });
+    } catch (error) {
+      console.error('Error generating recommendations:', error);
+      return [];
+    }
   }
 }
