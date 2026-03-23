@@ -74,6 +74,9 @@ export default function AdminCollectionsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkActionInProgress, setBulkActionInProgress] = useState(false);
   const [showSpam, setShowSpam] = useState(false);
+  const [directLookup, setDirectLookup] = useState({ chain: 'solana', address: '' });
+  const [lookupResult, setLookupResult] = useState<AdminCollection | null>(null);
+  const [lookupError, setLookupError] = useState<string | null>(null);
 
   const fetchData = async () => {
     if (!accessToken) return;
@@ -97,6 +100,22 @@ export default function AdminCollectionsPage() {
       setCollections([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDirectLookup = async () => {
+    if (!accessToken || !directLookup.address.trim()) return;
+    setLookupError(null);
+    setLookupResult(null);
+
+    try {
+      const result = await apiFetch<AdminCollection>(
+        `/collections/${directLookup.chain}/${directLookup.address}`,
+        { token: accessToken }
+      );
+      setLookupResult(result);
+    } catch (err) {
+      setLookupError(err instanceof Error ? err.message : 'Collection not found');
     }
   };
 
@@ -457,6 +476,63 @@ export default function AdminCollectionsPage() {
           >
             {bulkChecking ? '⏳ Checking...' : '🔍 Bulk Check Spam'}
           </button>
+        </div>
+
+        {/* Direct Collection Lookup */}
+        <div className="rounded-xl border border-blue-900/50 bg-blue-950/30 p-4">
+          <h3 className="mb-2 text-sm font-medium text-blue-200">Direct Collection Lookup</h3>
+          <p className="mb-3 text-xs text-gray-400">
+            Find collections not yet mapped to projects (e.g., Solana Deads)
+          </p>
+          <div className="flex gap-2">
+            <select
+              value={directLookup.chain}
+              onChange={(e) => setDirectLookup({ ...directLookup, chain: e.target.value })}
+              className="rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white"
+            >
+              <option value="solana">Solana</option>
+              <option value="ethereum">Ethereum</option>
+              <option value="base">Base</option>
+              <option value="polygon">Polygon</option>
+            </select>
+            <input
+              type="text"
+              value={directLookup.address}
+              onChange={(e) => setDirectLookup({ ...directLookup, address: e.target.value })}
+              placeholder="Contract address"
+              className="flex-1 rounded border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-white placeholder-gray-500"
+            />
+            <button
+              onClick={handleDirectLookup}
+              disabled={!directLookup.address.trim()}
+              className="rounded bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+            >
+              Lookup
+            </button>
+          </div>
+          {lookupError && (
+            <div className="mt-2 text-sm text-red-400">{lookupError}</div>
+          )}
+          {lookupResult && (
+            <div className="mt-3 rounded border border-gray-800 bg-gray-900 p-3">
+              <div className="mb-2 flex items-start justify-between">
+                <div>
+                  <h4 className="font-medium text-white">{lookupResult.name}</h4>
+                  <p className="text-xs text-gray-500">{lookupResult.chain} · {truncateAddress(lookupResult.contractAddress)}</p>
+                </div>
+                {lookupResult.imageUrl && (
+                  <img src={lookupResult.imageUrl} alt={lookupResult.name} className="h-12 w-12 rounded border border-gray-700 object-cover" />
+                )}
+              </div>
+              <button
+                onClick={() => handleIndexHolders(lookupResult.id)}
+                disabled={indexing[lookupResult.id]}
+                className="mt-2 rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600 disabled:opacity-50"
+              >
+                {indexing[lookupResult.id] ? '⏳ Indexing...' : '🔄 Index Holders'}
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Bulk Actions Bar */}
