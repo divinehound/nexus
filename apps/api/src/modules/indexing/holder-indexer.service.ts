@@ -47,13 +47,10 @@ export class HolderIndexerService {
         return { success: false, holdersIndexed: 0, error: 'Collection not found' };
       }
 
-      // Only support EVM chains for now
-      if (collection.chain === 'solana') {
-        return { success: false, holdersIndexed: 0, error: 'Solana indexing not yet supported' };
-      }
-
-      // Fetch all holders from Alchemy
-      const holders = await this.fetchAllHolders(collection.chain, collection.contractAddress);
+      // Fetch all holders based on chain
+      const holders = collection.chain === 'solana'
+        ? await this.fetchSolanaHolders(collection.contractAddress)
+        : await this.fetchEvmHolders(collection.chain, collection.contractAddress);
       
       this.logger.log(`Fetched ${holders.length} unique holders for ${collection.name}`);
 
@@ -104,9 +101,9 @@ export class HolderIndexerService {
   }
 
   /**
-   * Fetch all holders for a contract using Alchemy API
+   * Fetch all holders for an EVM contract using Alchemy API
    */
-  private async fetchAllHolders(
+  private async fetchEvmHolders(
     chain: string,
     contractAddress: string,
   ): Promise<Array<{ ownerAddress: string; balance: number }>> {
@@ -148,6 +145,70 @@ export class HolderIndexerService {
 
       pageKey = data.pageKey;
     } while (pageKey);
+
+    return Array.from(holders.entries()).map(([ownerAddress, balance]) => ({
+      ownerAddress,
+      balance,
+    }));
+  }
+
+  /**
+   * Fetch all holders for a Solana collection using Helius API
+   */
+  private async fetchSolanaHolders(
+    collectionMint: string,
+  ): Promise<Array<{ ownerAddress: string; balance: number }>> {
+    const apiKey = this.config.get<string>('helius.apiKey');
+    if (!apiKey) {
+      throw new Error('Helius API key not configured');
+    }
+
+    const url = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
+    const holders = new Map<string, number>(); // address -> token count
+    let page = 1;
+    const limit = 1000;
+
+    // Helius DAS API: getAssetsByGroup
+    while (true) {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: `fetch-holders-${page}`,
+          method: 'getAssetsByGroup',
+          params: {
+            groupKey: 'collection',
+            groupValue: collectionMint,
+            page,
+            limit,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Helius API error: ${response.status} ${response.statusText}`);
+      }
+
+      const data: any = await response.json();
+      const items = data.result?.items || [];
+
+      if (items.length === 0) break;
+
+      // Aggregate by owner
+      for (const item of items) {
+        const owner = item.ownership?.owner;
+        if (owner) {
+          holders.set(owner, (holders.get(owner) || 0) + 1);
+        }
+      }
+
+      this.logger.log(`Fetched page ${page}: ${items.length} NFTs, ${holders.size} unique holders so far`);
+
+      // If we got less than limit, we're done
+      if (items.length < limit) break;
+      page++;
+    }
 
     return Array.from(holders.entries()).map(([ownerAddress, balance]) => ({
       ownerAddress,

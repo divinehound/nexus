@@ -190,14 +190,10 @@ export default function AdminCollectionsPage() {
 
   const handleIndexHolders = async (collection: AdminCollection) => {
     if (!accessToken) return;
-    
-    if (collection.chain === 'solana') {
-      setError('Solana indexing not yet supported. Only EVM chains (Ethereum, Base, Polygon, Abstract) are supported.');
-      return;
-    }
 
+    const apiSource = collection.chain === 'solana' ? 'Helius' : 'Alchemy';
     const confirmed = window.confirm(
-      `Index all holders for ${collection.name}?\n\nThis will fetch data from Alchemy and may take several minutes for large collections.\n\nChain: ${collection.chain}\nContract: ${collection.contractAddress}`
+      `Index all holders for ${collection.name}?\n\nThis will fetch data from ${apiSource} and may take several minutes for large collections.\n\nChain: ${collection.chain}\n${collection.chain === 'solana' ? 'Collection' : 'Contract'}: ${collection.contractAddress}`
     );
     
     if (!confirmed) return;
@@ -412,9 +408,9 @@ export default function AdminCollectionsPage() {
                 </button>
                 <button
                   onClick={() => handleIndexHolders(c)}
-                  disabled={indexing[c.id] || c.chain === 'solana'}
+                  disabled={indexing[c.id]}
                   className="rounded border border-orange-700 px-3 py-1.5 text-xs font-medium text-orange-300 hover:border-orange-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  title={c.chain === 'solana' ? 'Solana indexing not yet supported' : 'Index all holders from blockchain'}
+                  title="Index all holders from blockchain"
                 >
                   {indexing[c.id] ? 'Indexing...' : '🔍 Index Holders'}
                 </button>
