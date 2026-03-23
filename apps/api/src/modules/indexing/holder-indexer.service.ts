@@ -128,7 +128,12 @@ export class HolderIndexerService {
 
       const response = await fetch(url.toString());
       if (!response.ok) {
-        throw new Error(`Alchemy API error: ${response.status} ${response.statusText}`);
+        const errorBody = await response.text();
+        this.logger.error(
+          `Alchemy API error for ${chain}/${contractAddress}: ${response.status} ${response.statusText}`,
+        );
+        this.logger.error(`Response body: ${errorBody}`);
+        throw new Error(`Alchemy API error: ${response.status} ${response.statusText} - ${errorBody}`);
       }
 
       const data: AlchemyOwnersResponse = await response.json();
