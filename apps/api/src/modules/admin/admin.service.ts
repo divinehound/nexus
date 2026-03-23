@@ -631,8 +631,13 @@ export class AdminService {
   }
 
   async getCollectionIndexStatus(idOrContract: string) {
+    // Check if input is a valid UUID
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrContract);
+    
     const collection = await this.db.query.collections.findFirst({
-      where: or(eq(collections.id, idOrContract), eq(collections.contractAddress, idOrContract)),
+      where: isUUID 
+        ? or(eq(collections.id, idOrContract), eq(collections.contractAddress, idOrContract))
+        : eq(collections.contractAddress, idOrContract),
     });
 
     if (!collection) throw new NotFoundException('Collection not found');
