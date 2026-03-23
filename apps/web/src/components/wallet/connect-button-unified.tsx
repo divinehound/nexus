@@ -56,7 +56,10 @@ export function ConnectButton() {
           disconnect();
         } else if (evmProvider) {
           // EVM flow - use proper SIWE format
+          console.log('Starting EVM auth for address:', address);
           const nonce = await getNonce(address);
+          console.log('Got nonce:', nonce, 'for address:', address);
+          
           const domain = typeof window !== 'undefined' ? window.location.host : 'nexus.dev.intentionworks.xyz';
           const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexus.dev.intentionworks.xyz';
           const issuedAt = new Date().toISOString();
@@ -87,12 +90,15 @@ export function ConnectButton() {
             `Issued At: ${issuedAt}`,
           ].join('\n');
           
+          console.log('Requesting signature for message:', message);
           const signature = await provider.request({
             method: 'personal_sign',
             params: [message, address],
           }) as string;
+          console.log('Got signature, logging in...');
           
           await loginEvm(message, signature);
+          console.log('Login successful!');
           disconnect();
         } else {
           throw new Error('Wallet provider not available');
