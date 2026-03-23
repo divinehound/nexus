@@ -155,6 +155,12 @@ export class AdminController {
     return this.adminService.markCollectionAsNotSpam(id, body.reason || 'verified_legitimate');
   }
 
+  @Post('collections/bulk-check-spam')
+  @ApiOperation({ summary: 'Check all existing collections for spam via Alchemy API' })
+  bulkCheckSpam() {
+    return this.adminService.bulkCheckSpam();
+  }
+
   // --- Users ---
 
   @Get('users')

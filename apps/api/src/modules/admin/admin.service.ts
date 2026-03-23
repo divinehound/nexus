@@ -25,6 +25,7 @@ import { CollectionMetricsService } from '../collections/collection-metrics.serv
 import { HoldingsService } from '../holdings/holdings.service';
 import { BlockchainLookupService } from '../search/blockchain-lookup.service';
 import { HolderIndexerService } from '../indexing/holder-indexer.service';
+import { SpamCheckerService } from '../indexing/spam-checker.service';
 
 @Injectable()
 export class AdminService {
@@ -36,6 +37,7 @@ export class AdminService {
     private readonly holdingsService: HoldingsService,
     private readonly blockchainLookup: BlockchainLookupService,
     private readonly holderIndexerService: HolderIndexerService,
+    private readonly spamCheckerService: SpamCheckerService,
   ) {}
 
   // --- Dashboard Stats ---
@@ -820,5 +822,10 @@ export class AdminService {
     this.logger.log(`Collection ${collectionId} (${collection.name}) marked as NOT spam and added to allowlist`);
 
     return { success: true, collection: collection.name };
+  }
+
+  async bulkCheckSpam() {
+    this.logger.log('Starting bulk spam check for all collections');
+    return this.spamCheckerService.checkAllCollections();
   }
 }

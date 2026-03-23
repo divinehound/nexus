@@ -9,6 +9,7 @@ import {
   adminIndexCollectionHolders,
   adminMarkCollectionAsSpam,
   adminMarkCollectionAsNotSpam,
+  adminBulkCheckSpam,
   apiFetch,
   type CollectionMappingStatus,
   type CollectionVerificationStatus,
@@ -66,6 +67,7 @@ export default function AdminCollectionsPage() {
   const [notesInput, setNotesInput] = useState<Record<string, string>>({});
   const [enriching, setEnriching] = useState<Record<string, boolean>>({});
   const [indexing, setIndexing] = useState<Record<string, boolean>>({});
+  const [bulkChecking, setBulkChecking] = useState(false);
   const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'verified' | 'spam' | 'all'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSpam, setShowSpam] = useState(false);
@@ -267,6 +269,33 @@ export default function AdminCollectionsPage() {
     }
   };
 
+  const handleBulkCheckSpam = async () => {
+    if (!accessToken) return;
+
+    const confirmed = window.confirm(
+      'Check ALL collections for spam via Alchemy API?\n\nThis may take several minutes and will auto-flag high-confidence spam.\n\nContinue?'
+    );
+    if (!confirmed) return;
+
+    setBulkChecking(true);
+    setError(null);
+
+    try {
+      const result = await adminBulkCheckSpam(accessToken);
+      alert(
+        `✅ Bulk spam check complete!\n\n` +
+        `Checked: ${result.checked} collections\n` +
+        `Flagged as spam: ${result.flagged}\n` +
+        `Errors: ${result.errors}`
+      );
+      await fetchData();
+    } catch (err: any) {
+      setError(err?.data?.message || err?.message || 'Bulk spam check failed');
+    } finally {
+      setBulkChecking(false);
+    }
+  };
+
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -306,6 +335,14 @@ export default function AdminCollectionsPage() {
             className="rounded border border-gray-700 px-3 py-1 text-sm text-gray-300 hover:text-white"
           >
             Refresh
+          </button>
+          <button
+            onClick={handleBulkCheckSpam}
+            disabled={bulkChecking}
+            className="rounded bg-red-700 px-3 py-1 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Check all collections via Alchemy API and auto-flag spam"
+          >
+            {bulkChecking ? '⏳ Checking...' : '🔍 Bulk Check Spam'}
           </button>
         </div>
       </div>
