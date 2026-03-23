@@ -357,22 +357,16 @@ export class CollectionsService {
 
     // Get overlap edges (cross-chain + multi-wallet aware)
     // Same address OR addresses linked to same user = same holder
-    // Build SQL array literal manually with proper escaping
-    const idsArray = collectionIds.map(id => sql`${id}::uuid`);
-    const idsList = sql.join(idsArray, sql`, `);
-    
+    // Use IN clause with individual parameters
     const edgesResult = await this.db.execute(
       sql`
-        WITH collection_filter AS (
-          SELECT id FROM (VALUES ${sql.join(collectionIds.map(id => sql`(${id}::uuid)`), sql`, `)}) AS t(id)
-        ),
-        holder_groups AS (
+        WITH holder_groups AS (
           SELECT 
             ch.collection_id,
             COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
           FROM collection_holders ch
           LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
-          INNER JOIN collection_filter cf ON cf.id = ch.collection_id
+          WHERE ch.collection_id IN (${sql.join(collectionIds.map(id => sql`${id}`), sql`, `)})
         )
         SELECT 
           a.collection_id as source_id,
@@ -462,15 +456,12 @@ export class CollectionsService {
     // Addresses linked to same user = same holder
     const recommendations = await this.db.execute(
       sql`
-        WITH user_collections_filter AS (
-          SELECT id FROM (VALUES ${sql.join(userCollectionIds.map(id => sql`(${id}::uuid)`), sql`, `)}) AS t(id)
-        ),
-        user_holder_groups AS (
+        WITH user_holder_groups AS (
           SELECT DISTINCT
             COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
           FROM collection_holders ch
           LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
-          INNER JOIN user_collections_filter ucf ON ucf.id = ch.collection_id
+          WHERE ch.collection_id IN (${sql.join(userCollectionIds.map(id => sql`${id}`), sql`, `)})
         ),
         all_holder_groups AS (
           SELECT 
@@ -491,9 +482,8 @@ export class CollectionsService {
         FROM collections c
         INNER JOIN all_holder_groups ahg ON ahg.collection_id = c.id
         LEFT JOIN user_holder_groups uhg ON uhg.holder_id = ahg.holder_id
-        LEFT JOIN user_collections_filter ucf ON ucf.id = c.id
         WHERE c.is_spam = false
-          AND ucf.id IS NULL
+          AND c.id NOT IN (${sql.join(userCollectionIds.map(id => sql`${id}`), sql`, `)})
         GROUP BY c.id
         HAVING COUNT(DISTINCT CASE WHEN uhg.holder_id IS NOT NULL THEN ahg.holder_id END) >= ${minOverlap}
         ORDER BY shared_holders DESC, holder_count DESC
