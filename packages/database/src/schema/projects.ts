@@ -66,6 +66,13 @@ export const indexStatusEnum = pgEnum('index_status', [
   'full',
 ]);
 
+export const holderEventTypeEnum = pgEnum('holder_event_type', [
+  'join',
+  'increase',
+  'decrease',
+  'exit',
+]);
+
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 255 }).notNull(),
@@ -152,6 +159,48 @@ export const collectionHolders = pgTable(
   },
   (table) => [
     uniqueIndex('collection_holders_unique').on(table.collectionId, table.address),
+  ],
+);
+
+export const collectionHolderHistory = pgTable(
+  'collection_holder_history',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    collectionId: uuid('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    address: text('address').notNull(),
+    tokenCount: integer('token_count').notNull(),
+    snapshotDate: timestamp('snapshot_date', { withTimezone: false, mode: 'date' }).notNull(),
+    eventType: holderEventTypeEnum('event_type'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('collection_holder_history_unique').on(
+      table.collectionId,
+      table.address,
+      table.snapshotDate,
+    ),
+  ],
+);
+
+export const collectionDailyMetrics = pgTable(
+  'collection_daily_metrics',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    collectionId: uuid('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    metricDate: timestamp('metric_date', { withTimezone: false, mode: 'date' }).notNull(),
+    holderCount: integer('holder_count').default(0).notNull(),
+    newHolders: integer('new_holders').default(0).notNull(),
+    exitedHolders: integer('exited_holders').default(0).notNull(),
+    totalTokensHeld: integer('total_tokens_held').default(0).notNull(),
+    avgTokensPerHolder: numeric('avg_tokens_per_holder', { precision: 10, scale: 2 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('collection_daily_metrics_unique').on(table.collectionId, table.metricDate),
   ],
 );
 
