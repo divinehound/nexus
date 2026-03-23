@@ -512,3 +512,72 @@ export function removeWallet(walletId: string, token: string) {
     token,
   });
 }
+
+// --- Collections: Discovery & Recommendations ---
+
+export interface NetworkGraphNode {
+  id: string;
+  name: string;
+  chain: string;
+  imageUrl: string | null;
+  holderCount: number;
+}
+
+export interface NetworkGraphEdge {
+  source: string;
+  target: string;
+  sharedHolders: number;
+  weight: number;
+}
+
+export interface NetworkGraph {
+  nodes: NetworkGraphNode[];
+  edges: NetworkGraphEdge[];
+}
+
+export function getNetworkGraph(options?: {
+  minSharedHolders?: number;
+  maxNodes?: number;
+  chains?: string[];
+}): Promise<NetworkGraph> {
+  const params = new URLSearchParams();
+  if (options?.minSharedHolders) params.set('minSharedHolders', options.minSharedHolders.toString());
+  if (options?.maxNodes) params.set('maxNodes', options.maxNodes.toString());
+  if (options?.chains?.length) params.set('chains', options.chains.join(','));
+  
+  return apiFetch<NetworkGraph>(`/collections/network/graph?${params.toString()}`);
+}
+
+export interface Recommendation {
+  collection: {
+    id: string;
+    name: string;
+    chain: string;
+    contractAddress: string;
+    imageUrl: string | null;
+    holderCount: number;
+    floorPrice: number | null;
+  };
+  score: number;
+  sharedHolders: number;
+  basedOn: Array<{
+    id: string;
+    name: string;
+    overlap: number;
+  }>;
+  reason: string;
+}
+
+export function getRecommendations(
+  chain: string,
+  address: string,
+  options?: { limit?: number; minOverlap?: number },
+): Promise<Recommendation[]> {
+  const params = new URLSearchParams();
+  if (options?.limit) params.set('limit', options.limit.toString());
+  if (options?.minOverlap) params.set('minOverlap', options.minOverlap.toString());
+  
+  return apiFetch<Recommendation[]>(
+    `/collections/recommendations/${chain}/${address}?${params.toString()}`,
+  );
+}

@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
 import { apiFetch } from '@/lib/api';
+import { NetworkGraphVisualization } from '@/components/discovery/network-graph';
+import { PersonalizedRecommendations } from '@/components/discovery/recommendations';
 
 interface Recommendation {
   project: {
@@ -69,9 +71,24 @@ function DiscoverContent() {
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
       <h1 className="text-3xl font-bold">Discover</h1>
-      <p className="mt-2 text-gray-400">Personalized recommendations based on your holdings.</p>
+      <p className="mt-2 text-gray-400">Explore community overlaps and find collections you'll love.</p>
 
-      <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-3">
+      {/* Network Visualization */}
+      <section className="mt-8">
+        <h2 className="mb-4 text-xl font-semibold text-gray-200">Community Network</h2>
+        <p className="mb-4 text-sm text-gray-400">
+          Explore how NFT communities are connected through shared collectors
+        </p>
+        <NetworkGraphVisualization maxNodes={40} minSharedHolders={5} />
+      </section>
+
+      {/* Personalized Recommendations */}
+      <section className="mt-12">
+        <PersonalizedRecommendations limit={12} minOverlap={3} />
+      </section>
+
+      {/* Original Recommendations */}
+      <div className="mt-12 grid grid-cols-1 gap-8 lg:grid-cols-3">
         {/* Echo Score Card */}
         <section className="lg:col-span-1">
           <h2 className="mb-4 text-lg font-semibold text-gray-300">Echo Chamber Score</h2>
