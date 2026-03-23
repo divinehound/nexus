@@ -105,6 +105,7 @@ export class SpamCheckerService {
 
   /**
    * Check a single collection for spam via Alchemy
+   * Uses getOwnersForContract (same as holder indexing) which includes spam data
    */
   private async checkCollectionSpam(
     chain: string,
@@ -112,10 +113,13 @@ export class SpamCheckerService {
     apiKey: string,
   ): Promise<{ isSpam: boolean; score: number; reason?: string } | null> {
     const network = this.getAlchemyNetwork(chain);
-    const url = `https://${network}.g.alchemy.com/nft/v3/${apiKey}/getContractMetadata?contractAddress=${contractAddress}`;
+    const url = new URL(`https://${network}.g.alchemy.com/nft/v3/${apiKey}/getOwnersForContract`);
+    url.searchParams.set('contractAddress', contractAddress);
+    url.searchParams.set('withTokenBalances', 'false'); // We don't need token data
+    url.searchParams.set('pageSize', '1'); // Minimal data
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(url.toString());
       if (!response.ok) {
         this.logger.warn(`Alchemy API error for ${chain}/${contractAddress}: ${response.status}`);
         return null;
@@ -123,17 +127,16 @@ export class SpamCheckerService {
 
       const data: any = await response.json();
 
-      // Check for spam classifications
-      if (data.contractMetadata?.openSeaMetadata?.safelistRequestStatus === 'not_requested') {
-        // Not on OpenSea safelist - potential spam indicator
-      }
-
-      // Alchemy's spam detection
+      // Check for spam classifications (same structure as holder indexing)
       const spamClassifications = data.spamClassifications;
       if (spamClassifications) {
         const isSpam = spamClassifications.isSpam === true;
         const classifications = spamClassifications.classifications || [];
         
+        this.logger.debug(
+          `Spam check for ${chain}/${contractAddress}: isSpam=${isSpam}, classifications=${classifications.join(', ')}`,
+        );
+
         return {
           isSpam,
           score: isSpam ? 90 : 10,
@@ -141,6 +144,7 @@ export class SpamCheckerService {
         };
       }
 
+      // No spam data in response
       return null;
     } catch (err: any) {
       this.logger.error(`Error checking spam for ${chain}/${contractAddress}: ${err.message}`);
