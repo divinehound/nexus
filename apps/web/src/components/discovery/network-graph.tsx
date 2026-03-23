@@ -9,6 +9,7 @@ interface NetworkGraphProps {
   minSharedHolders?: number;
   chains?: string[];
   height?: number;
+  initialFocusedNodeId?: string;
 }
 
 // Chain color mapping
@@ -34,12 +35,13 @@ export function NetworkGraphVisualization({
   minSharedHolders = 5,
   chains,
   height = 600,
+  initialFocusedNodeId,
 }: NetworkGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [data, setData] = useState<NetworkGraph | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [focusedNode, setFocusedNode] = useState<string | null>(null);
+  const [focusedNode, setFocusedNode] = useState<string | null>(initialFocusedNodeId || null);
   const [navigationStack, setNavigationStack] = useState<string[]>([]);
 
   useEffect(() => {

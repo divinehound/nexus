@@ -12,6 +12,7 @@ import {
 import { chainCurrency, formatPrice, truncateAddress } from '@/lib/utils';
 import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
 import { RelatedCollections } from '@/components/collections/related-collections';
+import { NetworkGraphVisualization } from '@/components/discovery/network-graph';
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -37,6 +38,7 @@ export default function CollectionPage() {
   const [stats, setStats] = useState<CollectionStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'overview' | 'overlap'>('overview');
 
   const loadCollection = useCallback(async () => {
     if (!chain || !contract) {
@@ -210,7 +212,47 @@ export default function CollectionPage() {
         </section>
       )}
 
-      {collection && <RelatedCollections collectionId={collection.id} />}
+      {collection && (
+        <div className="mt-8">
+          {/* Tabs */}
+          <div className="border-b border-gray-800">
+            <div className="flex gap-4">
+              <button
+                onClick={() => setActiveTab('overview')}
+                className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+                  activeTab === 'overview'
+                    ? 'border-purple-500 text-purple-400'
+                    : 'border-transparent text-gray-400 hover:text-gray-300'
+                }`}
+              >
+                Related Collections
+              </button>
+              <button
+                onClick={() => setActiveTab('overlap')}
+                className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+                  activeTab === 'overlap'
+                    ? 'border-purple-500 text-purple-400'
+                    : 'border-transparent text-gray-400 hover:text-gray-300'
+                }`}
+              >
+                Community Overlap
+              </button>
+            </div>
+          </div>
+
+          {/* Tab Content */}
+          <div className="mt-6">
+            {activeTab === 'overview' && <RelatedCollections collectionId={collection.id} />}
+            {activeTab === 'overlap' && (
+              <NetworkGraphVisualization
+                maxNodes={30}
+                minSharedHolders={3}
+                initialFocusedNodeId={collection.id}
+              />
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
