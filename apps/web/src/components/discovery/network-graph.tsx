@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { getNetworkGraph, type NetworkGraph } from '@/lib/api';
+import { getNetworkGraph, type NetworkGraph, type NetworkGraphNode } from '@/lib/api';
 import Link from 'next/link';
 
 interface NetworkGraphProps {
@@ -9,6 +9,24 @@ interface NetworkGraphProps {
   minSharedHolders?: number;
   chains?: string[];
   height?: number;
+}
+
+// Chain color mapping
+const CHAIN_COLORS: Record<string, string> = {
+  ethereum: '#627eea',
+  base: '#0052ff',
+  polygon: '#8247e5',
+  arbitrum: '#28a0f0',
+  optimism: '#ff0420',
+  avalanche: '#e84142',
+  bsc: '#f3ba2f',
+  solana: '#14f195',
+  abstract: '#a78bfa',
+  apechain: '#fbbf24',
+};
+
+function getChainColor(chain: string): string {
+  return CHAIN_COLORS[chain.toLowerCase()] || '#8b5cf6';
 }
 
 export function NetworkGraphVisualization({
@@ -22,7 +40,8 @@ export function NetworkGraphVisualization({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
-  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [focusedNode, setFocusedNode] = useState<string | null>(null);
+  const [navigationStack, setNavigationStack] = useState<string[]>([]);
 
   useEffect(() => {
     loadData();
@@ -41,6 +60,34 @@ export function NetworkGraphVisualization({
     }
   };
 
+  const handleNodeClick = (nodeId: string) => {
+    if (focusedNode === nodeId) {
+      // Double-click behavior: go back
+      handleGoBack();
+    } else {
+      // First click: zoom to node
+      if (focusedNode) {
+        setNavigationStack([...navigationStack, focusedNode]);
+      }
+      setFocusedNode(nodeId);
+    }
+  };
+
+  const handleGoBack = () => {
+    if (navigationStack.length > 0) {
+      const previous = navigationStack[navigationStack.length - 1];
+      setFocusedNode(previous);
+      setNavigationStack(navigationStack.slice(0, -1));
+    } else {
+      setFocusedNode(null);
+    }
+  };
+
+  const handleResetView = () => {
+    setFocusedNode(null);
+    setNavigationStack([]);
+  };
+
   useEffect(() => {
     if (!data || !svgRef.current) return;
 
@@ -48,8 +95,25 @@ export function NetworkGraphVisualization({
     const width = svg.clientWidth;
     const height = svg.clientHeight;
 
+    // Filter nodes/edges based on focus
+    let visibleNodes = data.nodes;
+    let visibleEdges = data.edges;
+
+    if (focusedNode) {
+      // Show only the focused node and its direct connections
+      const connectedNodeIds = new Set([focusedNode]);
+      data.edges.forEach((edge) => {
+        if (edge.source === focusedNode) connectedNodeIds.add(edge.target);
+        if (edge.target === focusedNode) connectedNodeIds.add(edge.source);
+      });
+      visibleNodes = data.nodes.filter((n) => connectedNodeIds.has(n.id));
+      visibleEdges = data.edges.filter(
+        (e) => e.source === focusedNode || e.target === focusedNode,
+      );
+    }
+
     // Simple force-directed layout simulation
-    const nodes = data.nodes.map((n, i) => ({
+    const nodes = visibleNodes.map((n, i) => ({
       ...n,
       x: width / 2 + (Math.random() - 0.5) * width * 0.8,
       y: height / 2 + (Math.random() - 0.5) * height * 0.8,
@@ -57,7 +121,7 @@ export function NetworkGraphVisualization({
       vy: 0,
     }));
 
-    const edges = data.edges;
+    const edges = visibleEdges;
 
     // Physics simulation
     const simulate = () => {
@@ -156,35 +220,50 @@ export function NetworkGraphVisualization({
       nodeG.setAttribute('data-node-id', node.id);
       nodeG.style.cursor = 'pointer';
 
-      // Node circle
+      const isFocused = node.id === focusedNode;
+      const isConnectedToFocused = focusedNode
+        ? edges.some((e) => (e.source === focusedNode && e.target === node.id) || (e.target === focusedNode && e.source === node.id))
+        : false;
+
+      // Node circle - size based on holder count, color based on chain
       const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
       circle.setAttribute('cx', node.x.toString());
       circle.setAttribute('cy', node.y.toString());
-      const radius = Math.sqrt(node.holderCount) / 3 + 8;
+      
+      // Scale radius based on holder count (focused nodes get bigger)
+      const baseRadius = Math.sqrt(node.holderCount) / 3 + 8;
+      const radius = isFocused ? baseRadius * 1.5 : baseRadius;
       circle.setAttribute('r', radius.toString());
-      circle.setAttribute('fill', '#8b5cf6');
-      circle.setAttribute('stroke', '#a78bfa');
-      circle.setAttribute('stroke-width', '2');
+      
+      // Chain-based colors
+      const chainColor = getChainColor(node.chain);
+      circle.setAttribute('fill', chainColor);
+      circle.setAttribute('stroke', isFocused ? '#fff' : chainColor);
+      circle.setAttribute('stroke-width', isFocused ? '3' : '2');
+      circle.setAttribute('opacity', isFocused || !focusedNode || isConnectedToFocused ? '1' : '0.3');
       nodeG.appendChild(circle);
 
-      // Node label
-      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      text.setAttribute('x', node.x.toString());
-      text.setAttribute('y', (node.y + radius + 12).toString());
-      text.setAttribute('text-anchor', 'middle');
-      text.setAttribute('fill', '#d1d5db');
-      text.setAttribute('font-size', '10');
-      text.textContent = node.name.length > 20 ? node.name.slice(0, 18) + '...' : node.name;
-      nodeG.appendChild(text);
+      // Node label (show for focused or hovered nodes)
+      if (isFocused || node.id === hoveredNode || !focusedNode) {
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', node.x.toString());
+        text.setAttribute('y', (node.y + radius + 14).toString());
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('fill', '#f3f4f6');
+        text.setAttribute('font-size', isFocused ? '12' : '10');
+        text.setAttribute('font-weight', isFocused ? 'bold' : 'normal');
+        text.textContent = node.name.length > 20 ? node.name.slice(0, 18) + '...' : node.name;
+        nodeG.appendChild(text);
+      }
 
       // Hover events
       nodeG.addEventListener('mouseenter', () => setHoveredNode(node.id));
       nodeG.addEventListener('mouseleave', () => setHoveredNode(null));
-      nodeG.addEventListener('click', () => setSelectedNode(node.id));
+      nodeG.addEventListener('click', () => handleNodeClick(node.id));
 
       g.appendChild(nodeG);
     });
-  }, [data]);
+  }, [data, focusedNode, hoveredNode]);
 
   if (loading) {
     return (
@@ -222,9 +301,15 @@ export function NetworkGraphVisualization({
     );
   }
 
-  const selectedNodeData = selectedNode ? data.nodes.find((n) => n.id === selectedNode) : null;
-  const connectedEdges = selectedNode
-    ? data.edges.filter((e) => e.source === selectedNode || e.target === selectedNode)
+  const focusedNodeData = focusedNode ? data.nodes.find((n) => n.id === focusedNode) : null;
+  const connectedNodes = focusedNode
+    ? data.nodes.filter((n) =>
+        data.edges.some(
+          (e) =>
+            (e.source === focusedNode && e.target === n.id) ||
+            (e.target === focusedNode && e.source === n.id),
+        ),
+      )
     : [];
 
   return (
@@ -232,19 +317,33 @@ export function NetworkGraphVisualization({
       <div className="rounded-xl border border-gray-800 bg-gray-900/50 p-4">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-gray-100">Collection Network</h3>
+            <h3 className="font-semibold text-gray-100">
+              {focusedNodeData ? `Exploring: ${focusedNodeData.name}` : 'Collection Network'}
+            </h3>
             <p className="text-sm text-gray-400">
-              {data.nodes.length} collections • {data.edges.length} connections
+              {focusedNode
+                ? `${connectedNodes.length} connected collections`
+                : `${data.nodes.length} collections • ${data.edges.length} connections`}
             </p>
           </div>
-          {selectedNode && (
-            <button
-              onClick={() => setSelectedNode(null)}
-              className="rounded bg-gray-800 px-3 py-1 text-sm text-gray-300 hover:bg-gray-700"
-            >
-              Clear Selection
-            </button>
-          )}
+          <div className="flex gap-2">
+            {focusedNode && navigationStack.length > 0 && (
+              <button
+                onClick={handleGoBack}
+                className="rounded bg-gray-800 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
+              >
+                ← Back
+              </button>
+            )}
+            {focusedNode && (
+              <button
+                onClick={handleResetView}
+                className="rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600"
+              >
+                Reset View
+              </button>
+            )}
+          </div>
         </div>
         <svg
           ref={svgRef}
@@ -255,34 +354,61 @@ export function NetworkGraphVisualization({
         >
           <g />
         </svg>
+        
+        {/* Chain legend */}
+        <div className="mt-3 flex flex-wrap gap-3 text-xs">
+          <span className="text-gray-500">Chains:</span>
+          {Array.from(new Set(data.nodes.map((n) => n.chain))).map((chain) => (
+            <div key={chain} className="flex items-center gap-1.5">
+              <div
+                className="h-3 w-3 rounded-full border border-gray-700"
+                style={{ backgroundColor: getChainColor(chain) }}
+              />
+              <span className="text-gray-400">{chain}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {selectedNodeData && (
+      {focusedNode && connectedNodes.length > 0 && (
         <div className="rounded-xl border border-purple-900/50 bg-purple-950/30 p-4">
-          <div className="flex items-start gap-3">
-            {selectedNodeData.imageUrl && (
-              <img
-                src={selectedNodeData.imageUrl}
-                alt={selectedNodeData.name}
-                className="h-16 w-16 rounded-lg border border-gray-700 object-cover"
-              />
-            )}
-            <div className="flex-1">
-              <h4 className="font-medium text-gray-100">{selectedNodeData.name}</h4>
-              <p className="text-sm text-gray-400">
-                {selectedNodeData.chain} • {selectedNodeData.holderCount.toLocaleString()} holders
-              </p>
-              <p className="mt-2 text-xs text-gray-500">
-                Connected to {connectedEdges.length} other collection
-                {connectedEdges.length !== 1 ? 's' : ''}
-              </p>
-            </div>
-            <Link
-              href={`/collection/${selectedNodeData.chain}/${selectedNodeData.contractAddress}`}
-              className="rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600"
-            >
-              View
-            </Link>
+          <h4 className="mb-3 font-medium text-gray-100">
+            Collections that share holders with {focusedNodeData?.name}
+          </h4>
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+            {connectedNodes.map((node) => {
+              const edge = data.edges.find(
+                (e) =>
+                  (e.source === focusedNode && e.target === node.id) ||
+                  (e.target === focusedNode && e.source === node.id),
+              );
+              return (
+                <button
+                  key={node.id}
+                  onClick={() => handleNodeClick(node.id)}
+                  className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900/50 p-2 text-left transition-colors hover:border-purple-700 hover:bg-gray-900"
+                >
+                  {node.imageUrl && (
+                    <img
+                      src={node.imageUrl}
+                      alt={node.name}
+                      className="h-10 w-10 rounded border border-gray-700 object-cover"
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="truncate text-sm font-medium text-gray-200">{node.name}</p>
+                    <p className="text-xs text-gray-500">
+                      <span
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{ backgroundColor: getChainColor(node.chain) }}
+                      />{' '}
+                      {node.chain} • {edge?.sharedHolders || 0} shared
+                    </p>
+                  </div>
+                  <div className="text-xs text-purple-400">→</div>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
