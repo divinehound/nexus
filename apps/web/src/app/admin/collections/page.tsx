@@ -525,7 +525,7 @@ export default function AdminCollectionsPage() {
                 )}
               </div>
               <button
-                onClick={() => handleIndexHolders(lookupResult.id)}
+                onClick={() => handleIndexHolders(lookupResult)}
                 disabled={indexing[lookupResult.id]}
                 className="mt-2 rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600 disabled:opacity-50"
               >
