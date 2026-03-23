@@ -270,6 +270,33 @@ export function NetworkGraphVisualization({
       circle.setAttribute('opacity', isFocused || !focusedNode || isConnectedToFocused ? '1' : '0.3');
       nodeG.appendChild(circle);
 
+      // Collection image overlay (if available)
+      if (node.imageUrl) {
+        const clipId = `clip-${node.id}`;
+        
+        // Create circular clip path for image
+        const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
+        clipPath.setAttribute('id', clipId);
+        const clipCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        clipCircle.setAttribute('cx', node.x.toString());
+        clipCircle.setAttribute('cy', node.y.toString());
+        clipCircle.setAttribute('r', (radius * 0.7).toString()); // 70% of bubble size
+        clipPath.appendChild(clipCircle);
+        defs?.appendChild(clipPath);
+        
+        // Image element
+        const image = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+        image.setAttribute('href', node.imageUrl);
+        image.setAttribute('x', (node.x - radius * 0.7).toString());
+        image.setAttribute('y', (node.y - radius * 0.7).toString());
+        image.setAttribute('width', (radius * 1.4).toString());
+        image.setAttribute('height', (radius * 1.4).toString());
+        image.setAttribute('clip-path', `url(#${clipId})`);
+        image.setAttribute('opacity', isFocused || !focusedNode || isConnectedToFocused ? '0.95' : '0.3');
+        image.setAttribute('preserveAspectRatio', 'xMidYMid slice');
+        nodeG.appendChild(image);
+      }
+
       // Node label (always render, but hide with CSS for non-focused)
       const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
       text.setAttribute('x', node.x.toString());
