@@ -241,7 +241,7 @@ export class CollectionsService {
         SELECT DISTINCT
           COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
         FROM collection_holders ch
-        LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
+        LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
         WHERE ch.collection_id = ${collectionId}
       ),
       other_holder_groups AS (
@@ -250,7 +250,7 @@ export class CollectionsService {
           ch.collection_id,
           COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
         FROM collection_holders ch
-        LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
+        LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
         WHERE ch.collection_id != ${collectionId}
       ),
       other_collection_holders AS (
@@ -356,7 +356,7 @@ export class CollectionsService {
             ch.collection_id,
             COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
           FROM collection_holders ch
-          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
+          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
           WHERE ch.collection_id = ANY(ARRAY['${collectionIds.join("','")}']::uuid[])
         )
         SELECT 
@@ -440,7 +440,7 @@ export class CollectionsService {
           SELECT DISTINCT
             COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
           FROM collection_holders ch
-          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
+          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
           WHERE ch.collection_id = ANY(ARRAY['${userCollectionIds.join("','")}']::uuid[])
         ),
         all_holder_groups AS (
@@ -449,7 +449,7 @@ export class CollectionsService {
             ch.collection_id,
             COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
           FROM collection_holders ch
-          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
+          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
         )
         SELECT 
           c.id,
