@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { apiFetch, getCollectionStats, type CollectionStatsResponse, type CollectionVerificationStatus } from '@/lib/api';
 import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
 import { formatPrice, truncateAddress, chainCurrency } from '@/lib/utils';
+import { CollectionTabs } from '@/components/collections/collection-tabs';
 
 interface CollectionPageProps {
   params: Promise<{ slug: string; collection: string }>;
@@ -160,6 +161,8 @@ export default async function CollectionPage({ params }: CollectionPageProps) {
           Minted: {new Date(collection.mintDate).toLocaleDateString()}
         </p>
       )}
+
+      <CollectionTabs collectionId={collection.id} />
     </main>
   );
 }
