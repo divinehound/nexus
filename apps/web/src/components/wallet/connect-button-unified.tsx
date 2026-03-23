@@ -18,19 +18,23 @@ export function ConnectButton() {
 
   const [signing, setSigning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showSignIn, setShowSignIn] = useState(false);
   const processedAddress = useRef<string | null>(null);
 
-  // Reset processed address when disconnected
+  // Reset state when disconnected
   useEffect(() => {
     if (!isConnected) {
       processedAddress.current = null;
+      setShowSignIn(false);
+    } else if (!user && isConnected && address) {
+      // Show sign-in button when wallet connects but not logged in
+      setShowSignIn(true);
     }
-  }, [isConnected]);
+  }, [isConnected, user, address]);
 
-  // Auto-sign when wallet connects (only if not already logged in)
-  useEffect(() => {
-    // Don't auto-sign if user is already authenticated, already processed this address, or still loading
-    if (!isConnected || !address || user || signing || isLoading || processedAddress.current === address) return;
+  // Manual sign-in function
+  const handleSignIn = async () => {
+    if (!address || processedAddress.current === address) return;
 
     const handleAuth = async () => {
       // Mark this address as processed
@@ -112,8 +116,8 @@ export function ConnectButton() {
       }
     };
 
-    handleAuth();
-  }, [isConnected, address, user, signing, caipAddress, solanaProvider, evmProvider, getNonce, loginEvm, loginSolana, disconnect]);
+    await handleAuth();
+  };
 
   const handleDisconnect = async () => {
     try {
@@ -150,6 +154,23 @@ export function ConnectButton() {
       <div className="flex items-center gap-2 text-sm text-gray-300">
         <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-600 border-t-purple-500"></div>
         <span>Signing...</span>
+      </div>
+    );
+  }
+
+  // Show sign-in button if wallet is connected but not logged in
+  if (showSignIn && isConnected && !user) {
+    return (
+      <div className="flex flex-col gap-2">
+        <button
+          onClick={handleSignIn}
+          className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
+        >
+          Sign In
+        </button>
+        {error && (
+          <p className="text-xs text-red-400">{error}</p>
+        )}
       </div>
     );
   }
