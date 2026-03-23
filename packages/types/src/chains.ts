@@ -39,8 +39,7 @@ export const CHAIN_META: Record<Chain, ChainMeta> = {
     name: 'ApeChain',
     currency: 'APE',
     evmChainId: 33139,
-    // Alchemy does not natively support ApeChain — use a fallback RPC
-    alchemySubdomain: undefined,
+    alchemySubdomain: 'apechain-mainnet',
     isEvm: true,
   },
   [Chain.POLYGON]: {

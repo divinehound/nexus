@@ -261,7 +261,7 @@ export class HolderIndexerService {
       base: 'base-mainnet',
       polygon: 'polygon-mainnet',
       abstract: 'abstract-mainnet',
-      apechain: 'eth-mainnet', // Fallback - no native Alchemy support
+      apechain: 'apechain-mainnet',
     };
     return networks[chain] || 'eth-mainnet';
   }
