@@ -19,6 +19,7 @@ import {
   indexingJobs,
   walletIndexingJobs,
   wallets,
+  spamAllowlist,
 } from '@nexus/database';
 import { CollectionMetricsService } from '../collections/collection-metrics.service';
 import { HoldingsService } from '../holdings/holdings.service';
@@ -758,5 +759,66 @@ export class AdminService {
       holdersIndexed: result.holdersIndexed,
       error: result.error,
     };
+  }
+
+  async markCollectionAsSpam(collectionId: string, notes?: string) {
+    const collection = await this.db.query.collections.findFirst({
+      where: eq(collections.id, collectionId),
+    });
+
+    if (!collection) {
+      throw new NotFoundException('Collection not found');
+    }
+
+    await this.db
+      .update(collections)
+      .set({
+        isSpam: true,
+        spamScore: 100, // Manual confirmation = highest confidence
+        spamReason: notes || 'manually_flagged',
+        spamDetectedAt: new Date(),
+        spamDetectedBy: 'manual',
+      })
+      .where(eq(collections.id, collectionId));
+
+    this.logger.log(`Collection ${collectionId} (${collection.name}) marked as spam`);
+
+    return { success: true, collection: collection.name };
+  }
+
+  async markCollectionAsNotSpam(collectionId: string, reason: string) {
+    const collection = await this.db.query.collections.findFirst({
+      where: eq(collections.id, collectionId),
+    });
+
+    if (!collection) {
+      throw new NotFoundException('Collection not found');
+    }
+
+    // Remove spam flag
+    await this.db
+      .update(collections)
+      .set({
+        isSpam: false,
+        spamScore: 0,
+        spamReason: null,
+        spamDetectedAt: null,
+        spamDetectedBy: null,
+      })
+      .where(eq(collections.id, collectionId));
+
+    // Add to allowlist
+    await this.db
+      .insert(spamAllowlist)
+      .values({
+        collectionId,
+        addedByUserId: null, // TODO: pass in admin user ID
+        reason: reason || 'verified_legitimate',
+      })
+      .onConflictDoNothing();
+
+    this.logger.log(`Collection ${collectionId} (${collection.name}) marked as NOT spam and added to allowlist`);
+
+    return { success: true, collection: collection.name };
   }
 }

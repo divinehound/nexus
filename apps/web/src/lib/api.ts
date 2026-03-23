@@ -212,6 +212,20 @@ export function adminIndexCollectionHolders(collectionId: string, token: string)
   );
 }
 
+export function adminMarkCollectionAsSpam(collectionId: string, notes: string | undefined, token: string) {
+  return apiFetch<{ success: boolean; collection: string }>(
+    `/admin/collections/${collectionId}/mark-spam`,
+    { method: 'POST', token, body: JSON.stringify({ notes }) },
+  );
+}
+
+export function adminMarkCollectionAsNotSpam(collectionId: string, reason: string | undefined, token: string) {
+  return apiFetch<{ success: boolean; collection: string }>(
+    `/admin/collections/${collectionId}/mark-not-spam`,
+    { method: 'POST', token, body: JSON.stringify({ reason }) },
+  );
+}
+
 export type IndexingJobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface AdminIndexingJobListItem {

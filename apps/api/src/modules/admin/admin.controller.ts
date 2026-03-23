@@ -143,6 +143,18 @@ export class AdminController {
     return this.adminService.indexCollectionHolders(id);
   }
 
+  @Post('collections/:id/mark-spam')
+  @ApiOperation({ summary: 'Mark a collection as spam' })
+  markCollectionAsSpam(@Param('id') id: string, @Body() body: { notes?: string }) {
+    return this.adminService.markCollectionAsSpam(id, body.notes);
+  }
+
+  @Post('collections/:id/mark-not-spam')
+  @ApiOperation({ summary: 'Mark a collection as NOT spam (add to allowlist)' })
+  markCollectionAsNotSpam(@Param('id') id: string, @Body() body: { reason?: string }) {
+    return this.adminService.markCollectionAsNotSpam(id, body.reason || 'verified_legitimate');
+  }
+
   // --- Users ---
 
   @Get('users')

@@ -7,6 +7,8 @@ import {
   adminVerifyCollection,
   adminEnrichCollection,
   adminIndexCollectionHolders,
+  adminMarkCollectionAsSpam,
+  adminMarkCollectionAsNotSpam,
   apiFetch,
   type CollectionMappingStatus,
   type CollectionVerificationStatus,
@@ -232,16 +234,16 @@ export default function AdminCollectionsPage() {
   const handleMarkSpam = async (collection: AdminCollection) => {
     if (!accessToken) return;
 
-    const confirmed = window.confirm(
-      `Mark "${collection.name}" as spam?\n\nThis will hide it from public views.`
+    const notes = window.prompt(
+      `Mark "${collection.name}" as spam?\n\nOptional reason:`,
+      'manually_flagged'
     );
-    if (!confirmed) return;
+    if (notes === null) return; // User cancelled
 
     try {
-      // TODO: Add API endpoint
-      alert('Spam marking API endpoint not yet implemented');
-      // await apiFetch(`/admin/collections/${collection.id}/mark-spam`, { method: 'POST', token: accessToken });
-      // await fetchData();
+      const result = await adminMarkCollectionAsSpam(collection.id, notes || undefined, accessToken);
+      alert(`✅ Marked ${result.collection} as spam`);
+      await fetchData();
     } catch (err: any) {
       setError(err?.data?.message || err?.message || 'Failed to mark as spam');
     }
@@ -250,16 +252,16 @@ export default function AdminCollectionsPage() {
   const handleMarkNotSpam = async (collection: AdminCollection) => {
     if (!accessToken) return;
 
-    const confirmed = window.confirm(
-      `Mark "${collection.name}" as NOT spam?\n\nThis will add it to the allowlist.`
+    const reason = window.prompt(
+      `Mark "${collection.name}" as NOT spam?\n\nThis will add it to the allowlist.\n\nReason:`,
+      'verified_legitimate'
     );
-    if (!confirmed) return;
+    if (reason === null) return; // User cancelled
 
     try {
-      // TODO: Add API endpoint  
-      alert('Not spam API endpoint not yet implemented');
-      // await apiFetch(`/admin/collections/${collection.id}/mark-not-spam`, { method: 'POST', token: accessToken });
-      // await fetchData();
+      const result = await adminMarkCollectionAsNotSpam(collection.id, reason || undefined, accessToken);
+      alert(`✅ Marked ${result.collection} as NOT spam and added to allowlist`);
+      await fetchData();
     } catch (err: any) {
       setError(err?.data?.message || err?.message || 'Failed to mark as not spam');
     }
