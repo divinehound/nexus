@@ -155,16 +155,16 @@ export class AdminController {
     return this.adminService.markCollectionAsNotSpam(id, body.reason || 'verified_legitimate');
   }
 
-  @Post('collections/bulk-check-spam')
-  @ApiOperation({ summary: 'Check all existing collections for spam via Alchemy API' })
-  bulkCheckSpam() {
-    return this.adminService.bulkCheckSpam();
-  }
-
   @Get('collections/:id/check-spam-raw')
   @ApiOperation({ summary: 'Debug: Get raw spam data from Alchemy for a single collection' })
   checkSpamRaw(@Param('id') id: string) {
     return this.adminService.checkSpamRaw(id);
+  }
+
+  @Post('collections/bulk-check-spam')
+  @ApiOperation({ summary: 'Check all existing collections for spam via Alchemy API' })
+  bulkCheckSpam() {
+    return this.adminService.bulkCheckSpam();
   }
 
   // --- Users ---
