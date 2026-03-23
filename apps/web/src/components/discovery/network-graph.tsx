@@ -327,13 +327,28 @@ export function NetworkGraphVisualization({
 
   const focusedNodeData = focusedNode ? data.nodes.find((n) => n.id === focusedNode) : null;
   const connectedNodes = focusedNode
-    ? data.nodes.filter((n) =>
-        data.edges.some(
-          (e) =>
-            (e.source === focusedNode && e.target === n.id) ||
-            (e.target === focusedNode && e.source === n.id),
-        ),
-      )
+    ? data.nodes
+        .filter((n) =>
+          data.edges.some(
+            (e) =>
+              (e.source === focusedNode && e.target === n.id) ||
+              (e.target === focusedNode && e.source === n.id),
+          ),
+        )
+        .sort((a, b) => {
+          // Sort by shared holders (descending)
+          const edgeA = data.edges.find(
+            (e) =>
+              (e.source === focusedNode && e.target === a.id) ||
+              (e.target === focusedNode && e.source === a.id),
+          );
+          const edgeB = data.edges.find(
+            (e) =>
+              (e.source === focusedNode && e.target === b.id) ||
+              (e.target === focusedNode && e.source === b.id),
+          );
+          return (edgeB?.sharedHolders || 0) - (edgeA?.sharedHolders || 0);
+        })
     : [];
 
   return (
