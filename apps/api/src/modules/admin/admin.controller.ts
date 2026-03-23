@@ -292,6 +292,15 @@ export class AdminController {
     return this.adminService.refreshWalletIndexing(walletIdOrAddress);
   }
 
+  @Get('collections/search')
+  @ApiOperation({ summary: 'Search collections by name or contract address' })
+  searchCollections(
+    @Query('q') query: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.adminService.searchCollections(query, limit ? parseInt(limit) : 20);
+  }
+
   @Post('collections/:id/enrich')
   @ApiOperation({ summary: 'Re-fetch blockchain metadata for a collection' })
   enrichCollection(@Param('id') id: string) {

@@ -143,6 +143,47 @@ export class AdminService {
     return { deleted: true };
   }
 
+  // --- Collections Search ---
+
+  async searchCollections(query: string, limit: number = 20) {
+    if (!query || query.trim().length < 2) {
+      throw new BadRequestException('Search query must be at least 2 characters');
+    }
+
+    const lowerQuery = query.toLowerCase();
+
+    const results = await this.db.query.collections.findMany({
+      where: or(
+        sql`LOWER(${collections.name}) LIKE ${`%${lowerQuery}%`}`,
+        sql`LOWER(${collections.contractAddress}) LIKE ${`%${lowerQuery}%`}`,
+      ),
+      limit,
+      with: {
+        project: {
+          columns: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        },
+      },
+    });
+
+    return results.map((c) => ({
+      id: c.id,
+      name: c.name,
+      chain: c.chain,
+      contractAddress: c.contractAddress,
+      imageUrl: c.imageUrl,
+      holderCount: c.holderCount,
+      verificationStatus: c.verificationStatus,
+      mappingStatus: c.mappingStatus,
+      isSpam: c.isSpam,
+      spamScore: c.spamScore,
+      project: c.project,
+    }));
+  }
+
   // --- Wiki Suggestions ---
 
   async listWikiSuggestions(status?: string) {

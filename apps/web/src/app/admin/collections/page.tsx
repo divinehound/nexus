@@ -84,17 +84,28 @@ export default function AdminCollectionsPage() {
     setError(null);
 
     try {
-      const data = await apiFetch<ProjectListResponse>('/admin/projects?page=1&limit=200', {
-        token: accessToken,
-      });
+      // If search query exists and is long enough, use search endpoint
+      if (searchQuery.trim().length >= 2) {
+        const results = await apiFetch<AdminCollection[]>(
+          `/admin/collections/search?q=${encodeURIComponent(searchQuery)}&limit=100`,
+          { token: accessToken }
+        );
+        setCollections(results.map(c => ({ ...c, projectId: c.project?.id || '' })));
+        setProjects([]);
+      } else {
+        // Otherwise load via projects endpoint
+        const data = await apiFetch<ProjectListResponse>('/admin/projects?page=1&limit=200', {
+          token: accessToken,
+        });
 
-      setProjects(data.items.map((project) => ({ id: project.id, name: project.name })));
+        setProjects(data.items.map((project) => ({ id: project.id, name: project.name })));
 
-      const flattened = data.items.flatMap((project) =>
-        project.collections.map((collection) => ({ ...collection, projectId: project.id })),
-      );
+        const flattened = data.items.flatMap((project) =>
+          project.collections.map((collection) => ({ ...collection, projectId: project.id })),
+        );
 
-      setCollections(flattened);
+        setCollections(flattened);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load review queue');
       setCollections([]);
@@ -122,6 +133,10 @@ export default function AdminCollectionsPage() {
   useEffect(() => {
     fetchData();
   }, [accessToken]);
+
+  const handleSearch = () => {
+    fetchData();
+  };
 
   const queueStats = useMemo(() => {
     return {
@@ -433,13 +448,33 @@ export default function AdminCollectionsPage() {
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-semibold">Collections Review Queue</h2>
         <div className="flex flex-wrap items-center gap-2">
-          <input
-            type="text"
-            placeholder="Search by name or contract..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-64 rounded border border-gray-700 bg-gray-900 px-3 py-1 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:outline-none"
-          />
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="Search by name or contract..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+              className="w-64 rounded border border-gray-700 bg-gray-900 px-3 py-1 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:outline-none"
+            />
+            <button
+              onClick={handleSearch}
+              className="rounded bg-purple-700 px-3 py-1 text-sm font-medium text-white hover:bg-purple-600"
+            >
+              Search
+            </button>
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery('');
+                  fetchData();
+                }}
+                className="rounded border border-gray-700 px-3 py-1 text-sm text-gray-400 hover:text-white"
+              >
+                Clear
+              </button>
+            )}
+          </div>
           <select
             value={filter}
             onChange={(e) => setFilter(e.target.value as typeof filter)}
