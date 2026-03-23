@@ -72,17 +72,20 @@ export function ConnectButton() {
             console.error('Failed to get chain ID:', e);
           }
           
-          // SIWE message format
-          const message = `${domain} wants you to sign in with your Ethereum account:
-${address}
-
-Sign in to NEXUS
-
-URI: ${origin}
-Version: 1
-Chain ID: ${chainId}
-Nonce: ${nonce}
-Issued At: ${issuedAt}`;
+          // SIWE message format (strict spec compliance)
+          // See: https://eips.ethereum.org/EIPS/eip-4361
+          const message = [
+            `${domain} wants you to sign in with your Ethereum account:`,
+            address,
+            '',
+            'Sign in to NEXUS',
+            '',
+            `URI: ${origin}`,
+            'Version: 1',
+            `Chain ID: ${chainId}`,
+            `Nonce: ${nonce}`,
+            `Issued At: ${issuedAt}`,
+          ].join('\n');
           
           const signature = await provider.request({
             method: 'personal_sign',
