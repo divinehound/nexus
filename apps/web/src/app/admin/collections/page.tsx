@@ -39,6 +39,10 @@ interface AdminCollection {
   lastIndexFinishedAt?: string | null;
   lastIndexStatus?: string | null;
   indexStatus?: string | null;
+  isSpam?: boolean;
+  spamScore?: number | null;
+  spamReason?: string | null;
+  spamDetectedBy?: string | null;
 }
 
 interface ProjectListResponse {
@@ -60,8 +64,9 @@ export default function AdminCollectionsPage() {
   const [notesInput, setNotesInput] = useState<Record<string, string>>({});
   const [enriching, setEnriching] = useState<Record<string, boolean>>({});
   const [indexing, setIndexing] = useState<Record<string, boolean>>({});
-  const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'verified' | 'all'>('pending');
+  const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'verified' | 'spam' | 'all'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
+  const [showSpam, setShowSpam] = useState(false);
 
   const fetchData = async () => {
     if (!accessToken) return;
@@ -98,12 +103,18 @@ export default function AdminCollectionsPage() {
       pendingClaim: collections.filter((c) => c.verificationStatus === 'pending_claim').length,
       suggested: collections.filter((c) => c.mappingStatus === 'suggested').length,
       verified: collections.filter((c) => c.verificationStatus === 'verified').length,
+      spam: collections.filter((c) => c.isSpam === true).length,
       all: collections.length,
     };
   }, [collections]);
 
   const filteredCollections = useMemo(() => {
     let filtered = collections;
+    
+    // Apply spam filter first
+    if (!showSpam) {
+      filtered = filtered.filter((c) => !c.isSpam);
+    }
     
     // Apply status filter
     if (filter === 'pending') {
@@ -112,6 +123,8 @@ export default function AdminCollectionsPage() {
       filtered = filtered.filter((c) => c.mappingStatus === 'suggested');
     } else if (filter === 'verified') {
       filtered = filtered.filter((c) => c.verificationStatus === 'verified');
+    } else if (filter === 'spam') {
+      filtered = filtered.filter((c) => c.isSpam === true);
     } else if (filter !== 'all') {
       filtered = filtered.filter((c) => c.verificationStatus === filter);
     }
@@ -127,7 +140,7 @@ export default function AdminCollectionsPage() {
     }
 
     return filtered;
-  }, [collections, filter, searchQuery]);
+  }, [collections, filter, searchQuery, showSpam]);
 
   const handleVerify = async (collection: AdminCollection) => {
     if (!accessToken) return;
@@ -216,6 +229,42 @@ export default function AdminCollectionsPage() {
     }
   };
 
+  const handleMarkSpam = async (collection: AdminCollection) => {
+    if (!accessToken) return;
+
+    const confirmed = window.confirm(
+      `Mark "${collection.name}" as spam?\n\nThis will hide it from public views.`
+    );
+    if (!confirmed) return;
+
+    try {
+      // TODO: Add API endpoint
+      alert('Spam marking API endpoint not yet implemented');
+      // await apiFetch(`/admin/collections/${collection.id}/mark-spam`, { method: 'POST', token: accessToken });
+      // await fetchData();
+    } catch (err: any) {
+      setError(err?.data?.message || err?.message || 'Failed to mark as spam');
+    }
+  };
+
+  const handleMarkNotSpam = async (collection: AdminCollection) => {
+    if (!accessToken) return;
+
+    const confirmed = window.confirm(
+      `Mark "${collection.name}" as NOT spam?\n\nThis will add it to the allowlist.`
+    );
+    if (!confirmed) return;
+
+    try {
+      // TODO: Add API endpoint  
+      alert('Not spam API endpoint not yet implemented');
+      // await apiFetch(`/admin/collections/${collection.id}/mark-not-spam`, { method: 'POST', token: accessToken });
+      // await fetchData();
+    } catch (err: any) {
+      setError(err?.data?.message || err?.message || 'Failed to mark as not spam');
+    }
+  };
+
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -238,8 +287,18 @@ export default function AdminCollectionsPage() {
             <option value="pending_claim">Pending Claim</option>
             <option value="suggested">Suggested Mapping</option>
             <option value="verified">Verified ✓</option>
+            <option value="spam">🚫 Spam Only</option>
             <option value="all">All Collections</option>
           </select>
+          <label className="flex items-center gap-2 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={showSpam}
+              onChange={(e) => setShowSpam(e.target.checked)}
+              className="rounded border-gray-700 bg-gray-900 text-purple-600 focus:ring-purple-500"
+            />
+            Show spam
+          </label>
           <button
             onClick={fetchData}
             className="rounded border border-gray-700 px-3 py-1 text-sm text-gray-300 hover:text-white"
@@ -249,11 +308,12 @@ export default function AdminCollectionsPage() {
         </div>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <StatCard label="Tracked Unverified" value={queueStats.tracked} />
         <StatCard label="Pending Claim" value={queueStats.pendingClaim} />
         <StatCard label="Suggested Mapping" value={queueStats.suggested} />
         <StatCard label="Verified" value={queueStats.verified} />
+        <StatCard label="🚫 Spam" value={queueStats.spam} />
         <StatCard label="Total" value={queueStats.all} />
       </div>
 
@@ -335,6 +395,18 @@ export default function AdminCollectionsPage() {
                   <span className="rounded bg-gray-800 px-2 py-1 text-gray-300">
                     mapping: {c.mappingStatus}
                   </span>
+                  {c.isSpam && (
+                    <span className="rounded bg-red-900/50 px-2 py-1 text-red-300 font-medium">
+                      🚫 SPAM
+                      {c.spamScore && <span className="ml-1">({c.spamScore})</span>}
+                      {c.spamDetectedBy && <span className="ml-1 text-red-400/70">· {c.spamDetectedBy}</span>}
+                    </span>
+                  )}
+                  {c.spamScore && c.spamScore > 0 && !c.isSpam && (
+                    <span className="rounded bg-yellow-900/50 px-2 py-1 text-yellow-300">
+                      ⚠️ Score: {c.spamScore}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -414,6 +486,23 @@ export default function AdminCollectionsPage() {
                 >
                   {indexing[c.id] ? 'Indexing...' : '🔍 Index Holders'}
                 </button>
+                {c.isSpam ? (
+                  <button
+                    onClick={() => handleMarkNotSpam(c)}
+                    className="rounded border border-green-700 px-3 py-1.5 text-xs font-medium text-green-300 hover:border-green-500 hover:text-white"
+                    title="Remove from spam list and add to allowlist"
+                  >
+                    ✓ Not Spam
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleMarkSpam(c)}
+                    className="rounded border border-red-700 px-3 py-1.5 text-xs font-medium text-red-300 hover:border-red-500 hover:text-white"
+                    title="Mark as spam and hide from public views"
+                  >
+                    🚫 Mark Spam
+                  </button>
+                )}
               </div>
             </div>
           ))}
