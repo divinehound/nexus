@@ -7,24 +7,7 @@ import { CollectionsService } from './collections.service';
 export class CollectionsController {
   constructor(private readonly collectionsService: CollectionsService) {}
 
-  @Get(':chain/:contract')
-  @ApiOperation({ summary: 'Get collection by chain and contract address' })
-  getByChainAndContract(
-    @Param('chain') chain: string,
-    @Param('contract') contract: string,
-  ) {
-    return this.collectionsService.findByChainAndContract(chain, contract);
-  }
-
-  @Get(':id/related')
-  @ApiOperation({ summary: 'Get related collections based on holder overlap' })
-  getRelatedCollections(
-    @Param('id') id: string,
-    @Query('limit') limit?: string,
-  ) {
-    return this.collectionsService.getRelatedCollections(id, limit ? parseInt(limit) : 10);
-  }
-
+  // Static routes MUST come before dynamic parameter routes
   @Post('track')
   @ApiOperation({ summary: 'Track a new collection by contract address' })
   track(@Body() body: { chain: string; contractAddress: string }) {
@@ -57,5 +40,24 @@ export class CollectionsController {
       limit: limit ? parseInt(limit) : undefined,
       minOverlap: minOverlap ? parseInt(minOverlap) : undefined,
     });
+  }
+
+  // Dynamic parameter routes MUST come after static routes
+  @Get(':id/related')
+  @ApiOperation({ summary: 'Get related collections based on holder overlap' })
+  getRelatedCollections(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.collectionsService.getRelatedCollections(id, limit ? parseInt(limit) : 10);
+  }
+
+  @Get(':chain/:contract')
+  @ApiOperation({ summary: 'Get collection by chain and contract address' })
+  getByChainAndContract(
+    @Param('chain') chain: string,
+    @Param('contract') contract: string,
+  ) {
+    return this.collectionsService.findByChainAndContract(chain, contract);
   }
 }
