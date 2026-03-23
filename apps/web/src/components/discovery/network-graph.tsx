@@ -442,12 +442,16 @@ export function NetworkGraphVisualization({
                   onClick={() => handleNodeClick(node.id)}
                   className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900/50 p-2 text-left transition-colors hover:border-purple-700 hover:bg-gray-900"
                 >
-                  {node.imageUrl && (
+                  {node.imageUrl ? (
                     <img
                       src={node.imageUrl}
                       alt={node.name}
-                      className="h-10 w-10 rounded border border-gray-700 object-cover"
+                      className="h-10 w-10 flex-shrink-0 rounded border border-gray-700 object-cover"
                     />
+                  ) : (
+                    <div className="h-10 w-10 flex-shrink-0 rounded border border-gray-700 bg-gray-800 flex items-center justify-center">
+                      <span className="text-xs text-gray-600">NFT</span>
+                    </div>
                   )}
                   <div className="flex-1 min-w-0">
                     <p className="truncate text-sm font-medium text-gray-200">{node.name}</p>
