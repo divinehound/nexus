@@ -353,10 +353,10 @@ export function NetworkGraphVisualization({
           <defs>
             <style>{`
               .node-label-visible { opacity: 1; }
-              .node-label-hover { opacity: 0; transition: opacity 0.2s; }
+              .node-label-hover { opacity: 0; transition: opacity 0.15s ease-out; }
               g[data-node-id]:hover .node-label-hover { opacity: 1; }
-              g[data-node-id] { transition: transform 0.2s; }
-              g[data-node-id]:hover { transform: scale(1.1); }
+              g[data-node-id] circle { transition: stroke-width 0.15s ease-out; }
+              g[data-node-id]:hover circle { stroke-width: 3; }
             `}</style>
           </defs>
           <g />
