@@ -233,27 +233,38 @@ export class CollectionsService {
 
   async getRelatedCollections(collectionId: string, limit: number = 10) {
     // SQL query to find collections with overlapping holders
-    // Uses collection_holders table (full blockchain data, not limited to NEXUS users)
+    // Multi-wallet aware: addresses linked to same user = same holder
     const result = await this.db.execute<any>(/* sql */ `
-      WITH target_holders AS (
-        SELECT DISTINCT address
-        FROM collection_holders
-        WHERE collection_id = ${collectionId}
+      WITH target_holder_groups AS (
+        -- Group target collection holders by user or address
+        SELECT DISTINCT
+          COALESCE(w.user_id::text, LOWER(ch.address) || '::' || ch.chain) as holder_id
+        FROM collection_holders ch
+        LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
+        WHERE ch.collection_id = ${collectionId}
+      ),
+      other_holder_groups AS (
+        -- Group all collection holders by user or address
+        SELECT 
+          ch.collection_id,
+          COALESCE(w.user_id::text, LOWER(ch.address) || '::' || ch.chain) as holder_id
+        FROM collection_holders ch
+        LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
+        WHERE ch.collection_id != ${collectionId}
       ),
       other_collection_holders AS (
         SELECT 
-          ch.collection_id,
-          COUNT(DISTINCT ch.address) as shared_holders
-        FROM collection_holders ch
-        INNER JOIN target_holders th ON ch.address = th.address
-        WHERE ch.collection_id != ${collectionId}
-        GROUP BY ch.collection_id
+          ohg.collection_id,
+          COUNT(DISTINCT ohg.holder_id) as shared_holders
+        FROM other_holder_groups ohg
+        INNER JOIN target_holder_groups thg ON ohg.holder_id = thg.holder_id
+        GROUP BY ohg.collection_id
       ),
       total_collection_holders AS (
         SELECT 
           collection_id,
-          COUNT(DISTINCT address) as total_holders
-        FROM collection_holders
+          COUNT(DISTINCT holder_id) as total_holders
+        FROM other_holder_groups
         WHERE collection_id IN (SELECT collection_id FROM other_collection_holders)
         GROUP BY collection_id
       )
@@ -267,7 +278,7 @@ export class CollectionsService {
         tch.total_holders::text,
         ROUND(
           (och.shared_holders::numeric / 
-           (SELECT COUNT(DISTINCT address) FROM target_holders)::numeric) * 100, 
+           (SELECT COUNT(*) FROM target_holder_groups)::numeric) * 100, 
           1
         )::text as overlap_percentage
       FROM other_collection_holders och
@@ -333,21 +344,29 @@ export class CollectionsService {
       return { nodes: [], edges: [] };
     }
 
-    // Get overlap edges (cross-chain aware - same address = same holder)
+    // Get overlap edges (cross-chain + multi-wallet aware)
+    // Same address OR addresses linked to same user = same holder
     const edgesResult = await this.db.execute(
       sql.raw(`
+        WITH holder_groups AS (
+          -- Group addresses by user (addresses owned by same user = same holder)
+          SELECT 
+            ch.collection_id,
+            COALESCE(w.user_id::text, LOWER(ch.address) || '::' || ch.chain) as holder_id
+          FROM collection_holders ch
+          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
+          WHERE ch.collection_id = ANY(ARRAY['${collectionIds.join("','")}']::uuid[])
+        )
         SELECT 
           a.collection_id as source_id,
           b.collection_id as target_id,
-          COUNT(DISTINCT a.address) as shared_holders
-        FROM collection_holders a
-        INNER JOIN collection_holders b 
-          ON LOWER(a.address) = LOWER(b.address)
+          COUNT(DISTINCT a.holder_id) as shared_holders
+        FROM holder_groups a
+        INNER JOIN holder_groups b 
+          ON a.holder_id = b.holder_id
           AND a.collection_id < b.collection_id
-        WHERE a.collection_id = ANY(ARRAY['${collectionIds.join("','")}']::uuid[])
-          AND b.collection_id = ANY(ARRAY['${collectionIds.join("','")}']::uuid[])
         GROUP BY a.collection_id, b.collection_id
-        HAVING COUNT(DISTINCT a.address) >= ${minShared}
+        HAVING COUNT(DISTINCT a.holder_id) >= ${minShared}
         ORDER BY shared_holders DESC
       `),
     );
@@ -409,10 +428,26 @@ export class CollectionsService {
         return []; // User doesn't hold any indexed collections
       }
 
-    // Find collections with high holder overlap (cross-chain aware)
-    // Same address on different chains = same holder
+    // Find collections with high holder overlap (cross-chain + multi-wallet aware)
+    // Addresses linked to same user = same holder
     const recommendations = await this.db.execute(
       sql.raw(`
+        WITH user_holder_groups AS (
+          -- Map user's collection holdings to holder groups
+          SELECT DISTINCT
+            COALESCE(w.user_id::text, LOWER(ch.address) || '::' || ch.chain) as holder_id
+          FROM collection_holders ch
+          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
+          WHERE ch.collection_id = ANY(ARRAY['${userCollectionIds.join("','")}']::uuid[])
+        ),
+        all_holder_groups AS (
+          -- Map all collection holdings to holder groups
+          SELECT 
+            ch.collection_id,
+            COALESCE(w.user_id::text, LOWER(ch.address) || '::' || ch.chain) as holder_id
+          FROM collection_holders ch
+          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
+        )
         SELECT 
           c.id,
           c.name,
@@ -420,17 +455,15 @@ export class CollectionsService {
           c.contract_address,
           c.image_url,
           c.floor_price,
-          COUNT(DISTINCT ch.address) as holder_count,
-          COUNT(DISTINCT ch2.address) as shared_holders
+          COUNT(DISTINCT ahg.holder_id) as holder_count,
+          COUNT(DISTINCT CASE WHEN uhg.holder_id IS NOT NULL THEN ahg.holder_id END) as shared_holders
         FROM collections c
-        INNER JOIN collection_holders ch ON ch.collection_id = c.id
-        INNER JOIN collection_holders ch2 
-          ON LOWER(ch2.address) = LOWER(ch.address)
-          AND ch2.collection_id = ANY(ARRAY['${userCollectionIds.join("','")}']::uuid[])
+        INNER JOIN all_holder_groups ahg ON ahg.collection_id = c.id
+        LEFT JOIN user_holder_groups uhg ON uhg.holder_id = ahg.holder_id
         WHERE c.is_spam = false
           AND c.id != ALL(ARRAY['${userCollectionIds.join("','")}']::uuid[])
         GROUP BY c.id
-        HAVING COUNT(DISTINCT ch2.address) >= ${minOverlap}
+        HAVING COUNT(DISTINCT CASE WHEN uhg.holder_id IS NOT NULL THEN ahg.holder_id END) >= ${minOverlap}
         ORDER BY shared_holders DESC, holder_count DESC
         LIMIT ${limit}
       `),
