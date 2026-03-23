@@ -234,7 +234,7 @@ export class CollectionsService {
   async getRelatedCollections(collectionId: string, limit: number = 10) {
     // SQL query to find collections with overlapping holders
     // Multi-wallet aware: addresses linked to same user = same holder
-    const result = await this.db.execute<any>(/* sql */ `
+    const result = await this.db.execute<any>(sql`
       WITH target_holder_groups AS (
         -- Group target collection holders by user or address
         -- Use lowercase address for cross-chain matching
