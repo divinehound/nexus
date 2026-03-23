@@ -344,8 +344,8 @@ export class CollectionsService {
           ON a.address = b.address 
           AND a.chain = b.chain
           AND a.collection_id < b.collection_id
-        WHERE a.collection_id = ANY(ARRAY['${collectionIds.join("','")}'])
-          AND b.collection_id = ANY(ARRAY['${collectionIds.join("','")}'])
+        WHERE a.collection_id = ANY(ARRAY['${collectionIds.join("','")}']::uuid[])
+          AND b.collection_id = ANY(ARRAY['${collectionIds.join("','")}']::uuid[])
         GROUP BY a.collection_id, b.collection_id
         HAVING COUNT(DISTINCT a.address) >= ${minShared}
         ORDER BY shared_holders DESC
@@ -426,9 +426,9 @@ export class CollectionsService {
         INNER JOIN collection_holders ch2 
           ON ch2.address = ch.address
           AND ch2.chain = ch.chain
-          AND ch2.collection_id = ANY(ARRAY['${userCollectionIds.join("','")}'])
+          AND ch2.collection_id = ANY(ARRAY['${userCollectionIds.join("','")}']::uuid[])
         WHERE c.is_spam = false
-          AND c.id != ALL(ARRAY['${userCollectionIds.join("','")}'])
+          AND c.id != ALL(ARRAY['${userCollectionIds.join("','")}']::uuid[])
           AND ch.chain = '${chain}'
         GROUP BY c.id
         HAVING COUNT(DISTINCT ch2.address) >= ${minOverlap}
