@@ -317,17 +317,27 @@ export class CollectionsService {
     try {
       // Get collections with indexed holders
       const collectionsResult = await this.db.execute(
-        sql.raw(`
-          SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
-          FROM collections c
-          INNER JOIN collection_holders ch ON ch.collection_id = c.id
-          WHERE c.is_spam = false
-          ${chains.length > 0 ? `AND c.chain = ANY(ARRAY[${chains.map((c) => `'${c}'`).join(',')}])` : ''}
-          GROUP BY c.id
-          HAVING COUNT(ch.address) > 0
-          ORDER BY holder_count DESC
-          LIMIT ${maxNodes}
-        `),
+        chains.length > 0
+          ? sql`
+              SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
+              FROM collections c
+              INNER JOIN collection_holders ch ON ch.collection_id = c.id
+              WHERE c.is_spam = false AND c.chain = ANY(${chains})
+              GROUP BY c.id
+              HAVING COUNT(ch.address) > 0
+              ORDER BY holder_count DESC
+              LIMIT ${maxNodes}
+            `
+          : sql`
+              SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
+              FROM collections c
+              INNER JOIN collection_holders ch ON ch.collection_id = c.id
+              WHERE c.is_spam = false
+              GROUP BY c.id
+              HAVING COUNT(ch.address) > 0
+              ORDER BY holder_count DESC
+              LIMIT ${maxNodes}
+            `,
       );
 
     const nodes = collectionsResult.map((row: any) => ({
@@ -348,16 +358,14 @@ export class CollectionsService {
     // Get overlap edges (cross-chain + multi-wallet aware)
     // Same address OR addresses linked to same user = same holder
     const edgesResult = await this.db.execute(
-      sql.raw(`
+      sql`
         WITH holder_groups AS (
-          -- Group addresses by user (addresses owned by same user = same holder)
-          -- For non-Nexus wallets, use lowercase address for cross-chain matching
           SELECT 
             ch.collection_id,
             COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
           FROM collection_holders ch
           LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
-          WHERE ch.collection_id = ANY(ARRAY['${collectionIds.join("','")}']::uuid[])
+          WHERE ch.collection_id = ANY(${collectionIds}::uuid[])
         )
         SELECT 
           a.collection_id as source_id,
@@ -370,7 +378,7 @@ export class CollectionsService {
         GROUP BY a.collection_id, b.collection_id
         HAVING COUNT(DISTINCT a.holder_id) >= ${minShared}
         ORDER BY shared_holders DESC
-      `),
+      `,
     );
 
     const edges = edgesResult.map((row: any) => {
@@ -427,14 +435,14 @@ export class CollectionsService {
 
       // Get collections user already holds
       const userCollections = await this.db.execute(
-        sql.raw(`
+        sql`
           SELECT DISTINCT ch.collection_id, c.name
           FROM collection_holders ch
           INNER JOIN collections c ON c.id = ch.collection_id
-          WHERE ch.address = '${userAddress.toLowerCase()}' 
-            AND ch.chain = '${chain}' 
+          WHERE ch.address = ${userAddress.toLowerCase()}
+            AND ch.chain = ${chain}
             AND c.is_spam = false
-        `),
+        `,
       );
 
       const userCollectionIds = userCollections.map((row: any) => row.collection_id);
@@ -446,18 +454,15 @@ export class CollectionsService {
     // Find collections with high holder overlap (cross-chain + multi-wallet aware)
     // Addresses linked to same user = same holder
     const recommendations = await this.db.execute(
-      sql.raw(`
+      sql`
         WITH user_holder_groups AS (
-          -- Map user's collection holdings to holder groups
-          -- Use lowercase address for cross-chain matching (non-Nexus wallets)
           SELECT DISTINCT
             COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
           FROM collection_holders ch
           LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
-          WHERE ch.collection_id = ANY(ARRAY['${userCollectionIds.join("','")}']::uuid[])
+          WHERE ch.collection_id = ANY(${userCollectionIds}::uuid[])
         ),
         all_holder_groups AS (
-          -- Map all collection holdings to holder groups
           SELECT 
             ch.collection_id,
             COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
@@ -477,12 +482,12 @@ export class CollectionsService {
         INNER JOIN all_holder_groups ahg ON ahg.collection_id = c.id
         LEFT JOIN user_holder_groups uhg ON uhg.holder_id = ahg.holder_id
         WHERE c.is_spam = false
-          AND c.id != ALL(ARRAY['${userCollectionIds.join("','")}']::uuid[])
+          AND c.id != ALL(${userCollectionIds}::uuid[])
         GROUP BY c.id
         HAVING COUNT(DISTINCT CASE WHEN uhg.holder_id IS NOT NULL THEN ahg.holder_id END) >= ${minOverlap}
         ORDER BY shared_holders DESC, holder_count DESC
         LIMIT ${limit}
-      `),
+      `,
     );
 
       return recommendations.map((row: any) => {
