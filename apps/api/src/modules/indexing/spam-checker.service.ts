@@ -109,7 +109,7 @@ export class SpamCheckerService {
 
   /**
    * Check a single collection for spam via Alchemy
-   * Uses getContractMetadata endpoint which includes spam detection
+   * Uses getContractMetadata endpoint with heuristic spam detection
    */
   private async checkCollectionSpam(
     chain: string,
@@ -130,35 +130,40 @@ export class SpamCheckerService {
 
       const data: any = await response.json();
 
-      // Debug: Log full response for known spam contracts
-      const knownSpamContracts = [
-        '0x906cb022cd0b5125b522dc4f1daf70c6ba05d852',
-        '0xee523cb3545b086d038aae125ff57bab855e9113',
-      ];
-      if (knownSpamContracts.includes(contractAddress.toLowerCase())) {
-        this.logger.log(
-          `DEBUG spam contract ${chain}/${contractAddress}:\n${JSON.stringify(data, null, 2)}`,
-        );
-      }
-
-      // Check multiple possible spam indicators
+      // Heuristic spam detection
+      const name = (data.name || '').toLowerCase();
+      const symbol = (data.symbol || '').toLowerCase();
+      const safelistStatus = data.openSeaMetadata?.safelistRequestStatus;
       const openSeaSpam = data.openSeaMetadata?.isSpam === true;
-      const openSeaSafelistStatus = data.openSeaMetadata?.safelistRequestStatus;
-      const contractDeployer = data.contractDeployer;
-      
-      // Log what we found
-      if (openSeaSpam || openSeaSafelistStatus === 'not_requested') {
-        this.logger.log(
-          `Potential spam: ${chain}/${contractAddress} - ` +
-          `openSeaSpam=${openSeaSpam}, safelistStatus=${openSeaSafelistStatus}`,
-        );
-      }
-      
+
+      // High-confidence spam patterns
+      const spamKeywords = [
+        'claim', 'reward', 'airdrop', 'bonus', 'free', 'gift',
+        'visit', 'http', '.com', '.org', '.net', '.io', '.xyz',
+        '10bnb', '100eth', '1000usdt', 'rewards.', 'claimit',
+      ];
+
+      const hasSpamKeyword = spamKeywords.some(
+        (keyword) => name.includes(keyword) || symbol.includes(keyword),
+      );
+
+      // Check for obvious spam patterns
       if (openSeaSpam) {
         return {
           isSpam: true,
-          score: 90,
+          score: 95,
           reason: 'opensea_spam_flag',
+        };
+      }
+
+      if (hasSpamKeyword) {
+        this.logger.log(
+          `Spam detected: ${chain}/${contractAddress} - name="${data.name}", symbol="${data.symbol}"`,
+        );
+        return {
+          isSpam: true,
+          score: 90,
+          reason: 'spam_keywords_in_name',
         };
       }
 
