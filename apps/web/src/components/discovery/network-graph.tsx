@@ -39,7 +39,6 @@ export function NetworkGraphVisualization({
   const [data, setData] = useState<NetworkGraph | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [focusedNode, setFocusedNode] = useState<string | null>(null);
   const [navigationStack, setNavigationStack] = useState<string[]>([]);
 
@@ -243,27 +242,24 @@ export function NetworkGraphVisualization({
       circle.setAttribute('opacity', isFocused || !focusedNode || isConnectedToFocused ? '1' : '0.3');
       nodeG.appendChild(circle);
 
-      // Node label (show for focused or hovered nodes)
-      if (isFocused || node.id === hoveredNode || !focusedNode) {
-        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', node.x.toString());
-        text.setAttribute('y', (node.y + radius + 14).toString());
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('fill', '#f3f4f6');
-        text.setAttribute('font-size', isFocused ? '12' : '10');
-        text.setAttribute('font-weight', isFocused ? 'bold' : 'normal');
-        text.textContent = node.name.length > 20 ? node.name.slice(0, 18) + '...' : node.name;
-        nodeG.appendChild(text);
-      }
+      // Node label (always render, but hide with CSS for non-focused)
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', node.x.toString());
+      text.setAttribute('y', (node.y + radius + 14).toString());
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('fill', '#f3f4f6');
+      text.setAttribute('font-size', isFocused ? '12' : '10');
+      text.setAttribute('font-weight', isFocused ? 'bold' : 'normal');
+      text.setAttribute('class', isFocused || !focusedNode ? 'node-label-visible' : 'node-label-hover');
+      text.textContent = node.name.length > 20 ? node.name.slice(0, 18) + '...' : node.name;
+      nodeG.appendChild(text);
 
-      // Hover events
-      nodeG.addEventListener('mouseenter', () => setHoveredNode(node.id));
-      nodeG.addEventListener('mouseleave', () => setHoveredNode(null));
+      // Click event only (no hover state changes to avoid re-renders)
       nodeG.addEventListener('click', () => handleNodeClick(node.id));
 
       g.appendChild(nodeG);
     });
-  }, [data, focusedNode, hoveredNode]);
+  }, [data, focusedNode]);
 
   if (loading) {
     return (
@@ -352,6 +348,15 @@ export function NetworkGraphVisualization({
           viewBox={`0 0 1000 ${height}`}
           preserveAspectRatio="xMidYMid meet"
         >
+          <defs>
+            <style>{`
+              .node-label-visible { opacity: 1; }
+              .node-label-hover { opacity: 0; transition: opacity 0.2s; }
+              g[data-node-id]:hover .node-label-hover { opacity: 1; }
+              g[data-node-id] { transition: transform 0.2s; }
+              g[data-node-id]:hover { transform: scale(1.1); }
+            `}</style>
+          </defs>
           <g />
         </svg>
         
