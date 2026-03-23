@@ -130,14 +130,31 @@ export class SpamCheckerService {
 
       const data: any = await response.json();
 
-      // Check openSeaMetadata.isSpam field
-      const openSeaSpam = data.openSeaMetadata?.isSpam === true;
-      
-      // Alchemy doesn't have a dedicated spam field in metadata, but OpenSea data is reliable
-      if (openSeaSpam) {
-        this.logger.debug(
-          `Spam detected for ${chain}/${contractAddress} via OpenSea metadata`,
+      // Debug: Log full response for known spam contracts
+      const knownSpamContracts = [
+        '0x906cb022cd0b5125b522dc4f1daf70c6ba05d852',
+        '0xee523cb3545b086d038aae125ff57bab855e9113',
+      ];
+      if (knownSpamContracts.includes(contractAddress.toLowerCase())) {
+        this.logger.log(
+          `DEBUG spam contract ${chain}/${contractAddress}:\n${JSON.stringify(data, null, 2)}`,
         );
+      }
+
+      // Check multiple possible spam indicators
+      const openSeaSpam = data.openSeaMetadata?.isSpam === true;
+      const openSeaSafelistStatus = data.openSeaMetadata?.safelistRequestStatus;
+      const contractDeployer = data.contractDeployer;
+      
+      // Log what we found
+      if (openSeaSpam || openSeaSafelistStatus === 'not_requested') {
+        this.logger.log(
+          `Potential spam: ${chain}/${contractAddress} - ` +
+          `openSeaSpam=${openSeaSpam}, safelistStatus=${openSeaSafelistStatus}`,
+        );
+      }
+      
+      if (openSeaSpam) {
         return {
           isSpam: true,
           score: 90,
