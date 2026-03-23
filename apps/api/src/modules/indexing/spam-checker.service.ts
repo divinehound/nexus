@@ -109,7 +109,7 @@ export class SpamCheckerService {
 
   /**
    * Check a single collection for spam via Alchemy
-   * Uses isSpamContract endpoint which is specifically designed for spam detection
+   * Uses getContractMetadata endpoint which includes spam detection
    */
   private async checkCollectionSpam(
     chain: string,
@@ -117,14 +117,11 @@ export class SpamCheckerService {
     apiKey: string,
   ): Promise<{ isSpam: boolean; score: number; reason?: string } | null> {
     const network = this.getAlchemyNetwork(chain);
-    const url = `https://${network}.g.alchemy.com/nft/v3/${apiKey}/isSpamContract`;
+    const url = new URL(`https://${network}.g.alchemy.com/nft/v3/${apiKey}/getContractMetadata`);
+    url.searchParams.set('contractAddress', contractAddress);
 
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contractAddress }),
-      });
+      const response = await fetch(url.toString());
 
       if (!response.ok) {
         this.logger.warn(`Alchemy API error for ${chain}/${contractAddress}: ${response.status}`);
@@ -133,17 +130,26 @@ export class SpamCheckerService {
 
       const data: any = await response.json();
 
-      // Alchemy returns: { isSpamContract: boolean }
-      const isSpam = data.isSpamContract === true;
+      // Check openSeaMetadata.isSpam field
+      const openSeaSpam = data.openSeaMetadata?.isSpam === true;
+      
+      // Alchemy doesn't have a dedicated spam field in metadata, but OpenSea data is reliable
+      if (openSeaSpam) {
+        this.logger.debug(
+          `Spam detected for ${chain}/${contractAddress} via OpenSea metadata`,
+        );
+        return {
+          isSpam: true,
+          score: 90,
+          reason: 'opensea_spam_flag',
+        };
+      }
 
-      this.logger.debug(
-        `Spam check for ${chain}/${contractAddress}: isSpam=${isSpam}`,
-      );
-
+      // Not spam based on available data
       return {
-        isSpam,
-        score: isSpam ? 95 : 5, // High confidence from dedicated spam endpoint
-        reason: isSpam ? 'alchemy_spam_detection' : undefined,
+        isSpam: false,
+        score: 0,
+        reason: undefined,
       };
     } catch (err: any) {
       this.logger.error(`Error checking spam for ${chain}/${contractAddress}: ${err.message}`);
