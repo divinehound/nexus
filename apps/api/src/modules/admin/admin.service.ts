@@ -826,6 +826,13 @@ export class AdminService {
 
   async bulkCheckSpam() {
     this.logger.log('Starting bulk spam check for all collections');
-    return this.spamCheckerService.checkAllCollections();
+    try {
+      const result = await this.spamCheckerService.checkAllCollections();
+      this.logger.log(`Bulk spam check completed: ${JSON.stringify(result)}`);
+      return result;
+    } catch (err: any) {
+      this.logger.error('Bulk spam check failed:', err.message, err.stack);
+      throw err;
+    }
   }
 }

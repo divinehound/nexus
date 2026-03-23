@@ -90,9 +90,13 @@ export class SpamCheckerService {
         if (checked % 50 === 0) {
           this.logger.log(`Progress: ${checked}/${allCollections.length} checked, ${flagged} flagged`);
         }
+
+        // Small delay to avoid rate limits (10 requests per second max)
+        await new Promise((resolve) => setTimeout(resolve, 100));
       } catch (err: any) {
         this.logger.error(
           `Failed to check ${collection.chain}/${collection.contractAddress}: ${err.message}`,
+          err.stack,
         );
         errors++;
       }
