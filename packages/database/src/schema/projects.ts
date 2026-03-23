@@ -11,7 +11,6 @@ import {
   numeric,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { users } from './users';
 
 export const collectionTypeEnum = pgEnum('collection_type', [
   'erc721',
@@ -227,7 +226,7 @@ export const spamReports = pgTable('spam_reports', {
   collectionId: uuid('collection_id')
     .notNull()
     .references(() => collections.id, { onDelete: 'cascade' }),
-  reportedByUserId: uuid('reported_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  reportedByUserId: uuid('reported_by_user_id'), // References users table (defined in relations)
   reportType: spamReportTypeEnum('report_type').notNull(),
   reason: text('reason'),
   notes: text('notes'),
@@ -239,7 +238,7 @@ export const spamAllowlist = pgTable('spam_allowlist', {
   collectionId: uuid('collection_id')
     .notNull()
     .references(() => collections.id, { onDelete: 'cascade' }),
-  addedByUserId: uuid('added_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  addedByUserId: uuid('added_by_user_id'), // References users table (defined in relations)
   reason: text('reason').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
