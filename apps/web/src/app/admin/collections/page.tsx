@@ -58,6 +58,7 @@ export default function AdminCollectionsPage() {
   const [enriching, setEnriching] = useState<Record<string, boolean>>({});
   const [indexing, setIndexing] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'verified' | 'all'>('pending');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const fetchData = async () => {
     if (!accessToken) return;
@@ -99,14 +100,31 @@ export default function AdminCollectionsPage() {
   }, [collections]);
 
   const filteredCollections = useMemo(() => {
-    if (filter === 'all') return collections;
+    let filtered = collections;
+    
+    // Apply status filter
     if (filter === 'pending') {
-      return collections.filter((c) => c.verificationStatus === 'tracked_unverified' || c.verificationStatus === 'pending_claim');
+      filtered = filtered.filter((c) => c.verificationStatus === 'tracked_unverified' || c.verificationStatus === 'pending_claim');
+    } else if (filter === 'suggested') {
+      filtered = filtered.filter((c) => c.mappingStatus === 'suggested');
+    } else if (filter === 'verified') {
+      filtered = filtered.filter((c) => c.verificationStatus === 'verified');
+    } else if (filter !== 'all') {
+      filtered = filtered.filter((c) => c.verificationStatus === filter);
     }
-    if (filter === 'suggested') return collections.filter((c) => c.mappingStatus === 'suggested');
-    if (filter === 'verified') return collections.filter((c) => c.verificationStatus === 'verified');
-    return collections.filter((c) => c.verificationStatus === filter);
-  }, [collections, filter]);
+
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter((c) => 
+        c.name.toLowerCase().includes(query) ||
+        c.contractAddress.toLowerCase().includes(query) ||
+        c.chain.toLowerCase().includes(query)
+      );
+    }
+
+    return filtered;
+  }, [collections, filter, searchQuery]);
 
   const handleVerify = async (collection: AdminCollection) => {
     if (!accessToken) return;
@@ -203,7 +221,14 @@ export default function AdminCollectionsPage() {
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-semibold">Collections Review Queue</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            placeholder="Search by name or contract..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-64 rounded border border-gray-700 bg-gray-900 px-3 py-1 text-sm text-white placeholder-gray-500 focus:border-purple-500 focus:outline-none"
+          />
           <select
             value={filter}
             onChange={(e) => setFilter(e.target.value as typeof filter)}
