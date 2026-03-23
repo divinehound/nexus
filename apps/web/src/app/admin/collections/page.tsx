@@ -36,6 +36,9 @@ interface AdminCollection {
   mappingConfidence: string | null;
   verificationNotes: string | null;
   projectId: string;
+  lastIndexFinishedAt?: string | null;
+  lastIndexStatus?: string | null;
+  indexStatus?: string | null;
 }
 
 interface ProjectListResponse {
@@ -302,6 +305,21 @@ export default function AdminCollectionsPage() {
                       {c.holderCount && <span>· Holders: {c.holderCount.toLocaleString()}</span>}
                       {c.floorPrice && <span>· Floor: {c.floorPrice} ETH</span>}
                     </div>
+                    {c.lastIndexFinishedAt && (
+                      <div className="mt-1 text-xs text-gray-500">
+                        Last indexed: {new Date(c.lastIndexFinishedAt).toLocaleString()} 
+                        {c.lastIndexStatus && (
+                          <span className={c.lastIndexStatus === 'success' ? 'text-green-400' : 'text-red-400'}>
+                            {' '}({c.lastIndexStatus})
+                          </span>
+                        )}
+                        {c.indexStatus && c.indexStatus !== 'nexus_only' && (
+                          <span className="ml-2 rounded bg-purple-900/50 px-1.5 py-0.5 text-purple-300">
+                            {c.indexStatus}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {getExplorerLink(c.chain, c.contractAddress) && (
                       <a
                         href={getExplorerLink(c.chain, c.contractAddress)}
