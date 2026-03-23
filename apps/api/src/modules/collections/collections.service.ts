@@ -237,8 +237,9 @@ export class CollectionsService {
     const result = await this.db.execute<any>(/* sql */ `
       WITH target_holder_groups AS (
         -- Group target collection holders by user or address
+        -- Use lowercase address for cross-chain matching
         SELECT DISTINCT
-          COALESCE(w.user_id::text, LOWER(ch.address) || '::' || ch.chain) as holder_id
+          COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
         FROM collection_holders ch
         LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
         WHERE ch.collection_id = ${collectionId}
@@ -247,7 +248,7 @@ export class CollectionsService {
         -- Group all collection holders by user or address
         SELECT 
           ch.collection_id,
-          COALESCE(w.user_id::text, LOWER(ch.address) || '::' || ch.chain) as holder_id
+          COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
         FROM collection_holders ch
         LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
         WHERE ch.collection_id != ${collectionId}
@@ -350,9 +351,10 @@ export class CollectionsService {
       sql.raw(`
         WITH holder_groups AS (
           -- Group addresses by user (addresses owned by same user = same holder)
+          -- For non-Nexus wallets, use lowercase address for cross-chain matching
           SELECT 
             ch.collection_id,
-            COALESCE(w.user_id::text, LOWER(ch.address) || '::' || ch.chain) as holder_id
+            COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
           FROM collection_holders ch
           LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
           WHERE ch.collection_id = ANY(ARRAY['${collectionIds.join("','")}']::uuid[])
@@ -434,8 +436,9 @@ export class CollectionsService {
       sql.raw(`
         WITH user_holder_groups AS (
           -- Map user's collection holdings to holder groups
+          -- Use lowercase address for cross-chain matching (non-Nexus wallets)
           SELECT DISTINCT
-            COALESCE(w.user_id::text, LOWER(ch.address) || '::' || ch.chain) as holder_id
+            COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
           FROM collection_holders ch
           LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
           WHERE ch.collection_id = ANY(ARRAY['${userCollectionIds.join("','")}']::uuid[])
@@ -444,7 +447,7 @@ export class CollectionsService {
           -- Map all collection holdings to holder groups
           SELECT 
             ch.collection_id,
-            COALESCE(w.user_id::text, LOWER(ch.address) || '::' || ch.chain) as holder_id
+            COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
           FROM collection_holders ch
           LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain = ch.chain
         )
