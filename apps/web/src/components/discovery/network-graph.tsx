@@ -226,21 +226,47 @@ export function NetworkGraphVisualization({
         ? edges.some((e) => (e.source === focusedNode && e.target === node.id) || (e.target === focusedNode && e.source === node.id))
         : false;
 
-      // Node circle - size based on holder count, color based on chain
-      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      circle.setAttribute('cx', node.x.toString());
-      circle.setAttribute('cy', node.y.toString());
-      
       // Scale radius based on holder count (focused nodes get bigger)
       const baseRadius = Math.sqrt(node.holderCount) / 3 + 8;
       const radius = isFocused ? baseRadius * 1.5 : baseRadius;
-      circle.setAttribute('r', radius.toString());
       
       // Chain-based colors
       const chainColor = getChainColor(node.chain);
-      circle.setAttribute('fill', chainColor);
-      circle.setAttribute('stroke', isFocused ? '#fff' : chainColor);
-      circle.setAttribute('stroke-width', isFocused ? '3' : '2');
+      const gradientId = `gradient-${node.id}`;
+      
+      // Create gradient for this node
+      const defs = svg.querySelector('defs');
+      const gradient = document.createElementNS('http://www.w3.org/2000/svg', 'radialGradient');
+      gradient.setAttribute('id', gradientId);
+      
+      const stop1 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+      stop1.setAttribute('offset', '0%');
+      stop1.setAttribute('stop-color', chainColor);
+      stop1.setAttribute('stop-opacity', '1');
+      
+      const stop2 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+      stop2.setAttribute('offset', '70%');
+      stop2.setAttribute('stop-color', chainColor);
+      stop2.setAttribute('stop-opacity', '0.9');
+      
+      const stop3 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+      stop3.setAttribute('offset', '100%');
+      stop3.setAttribute('stop-color', chainColor);
+      stop3.setAttribute('stop-opacity', '0.7');
+      
+      gradient.appendChild(stop1);
+      gradient.appendChild(stop2);
+      gradient.appendChild(stop3);
+      defs?.appendChild(gradient);
+      
+      // Node circle with gradient fill and strong border
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', node.x.toString());
+      circle.setAttribute('cy', node.y.toString());
+      circle.setAttribute('r', radius.toString());
+      circle.setAttribute('fill', `url(#${gradientId})`);
+      circle.setAttribute('stroke', isFocused ? '#ffffff' : '#1f2937');
+      circle.setAttribute('stroke-width', isFocused ? '3' : '2.5');
       circle.setAttribute('opacity', isFocused || !focusedNode || isConnectedToFocused ? '1' : '0.3');
       nodeG.appendChild(circle);
 
