@@ -456,7 +456,8 @@ export function NetworkGraphVisualization({
                         className="inline-block h-2 w-2 rounded-full"
                         style={{ backgroundColor: getChainColor(node.chain) }}
                       />{' '}
-                      {node.chain} • {Math.round((edge?.weight || 0) * 100)}% overlap ({edge?.sharedHolders || 0} holders)
+                      {node.chain} • {edge?.sharedHolders || 0} shared
+                      {edge?.holderDataReliable && ` (${Math.round((edge?.weight || 0) * 100)}%)`}
                     </p>
                   </div>
                   <div className="text-xs text-purple-400">→</div>

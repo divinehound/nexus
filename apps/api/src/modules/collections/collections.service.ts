@@ -379,17 +379,30 @@ export class CollectionsService {
       const targetNode = nodes.find((n) => n.id === row.target_id);
       
       // Weight by percentage of smaller collection
-      const smallerCount = Math.min(
-        sourceNode?.holderCount || 1,
-        targetNode?.holderCount || 1,
-      );
-      const weight = Math.min(sharedHolders / smallerCount, 1);
+      // BUT: if indexed holder count < shared holders (data incomplete), use normalized absolute count
+      const sourceCount = sourceNode?.holderCount || 0;
+      const targetCount = targetNode?.holderCount || 0;
+      const smallerCount = Math.min(sourceCount, targetCount);
+      
+      let weight: number;
+      if (smallerCount < sharedHolders) {
+        // Data issue: indexed holders < shared (shouldn't happen, but Solana data may be incomplete)
+        // Fallback: normalize by shared holders (0-1 scale based on max seen)
+        weight = Math.min(sharedHolders / 100, 1); // Arbitrary scale
+      } else if (smallerCount === 0) {
+        // No holder data: weight by absolute count only
+        weight = Math.min(sharedHolders / 100, 1);
+      } else {
+        // Normal case: percentage of smaller collection
+        weight = Math.min(sharedHolders / smallerCount, 1);
+      }
 
       return {
         source: row.source_id,
         target: row.target_id,
         sharedHolders,
         weight,
+        holderDataReliable: smallerCount >= sharedHolders && smallerCount > 0,
       };
     });
 

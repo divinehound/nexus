@@ -529,6 +529,7 @@ export interface NetworkGraphEdge {
   target: string;
   sharedHolders: number;
   weight: number;
+  holderDataReliable?: boolean;
 }
 
 export interface NetworkGraph {
