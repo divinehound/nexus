@@ -4,7 +4,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import {
   type Database,
@@ -287,5 +287,177 @@ export class CollectionsService {
       totalHolders: parseInt(row.total_holders),
       overlapPercentage: parseFloat(row.overlap_percentage),
     }));
+  }
+
+  /**
+   * Get network graph data showing collection overlaps
+   * Returns nodes (collections) and edges (shared holders)
+   */
+  async getNetworkGraph(options?: {
+    minSharedHolders?: number;
+    maxNodes?: number;
+    chains?: string[];
+  }) {
+    const minShared = options?.minSharedHolders || 5;
+    const maxNodes = options?.maxNodes || 50;
+    const chains = options?.chains || [];
+
+    // Get collections with indexed holders
+    const collectionsResult = await this.db.execute(
+      sql.raw(`
+        SELECT DISTINCT c.id, c.name, c.chain, c.image_url, COUNT(ch.address) as holder_count
+        FROM collections c
+        INNER JOIN collection_holders ch ON ch.collection_id = c.id
+        WHERE c.is_spam = false
+        ${chains.length > 0 ? `AND c.chain = ANY(ARRAY[${chains.map((c) => `'${c}'`).join(',')}])` : ''}
+        GROUP BY c.id
+        HAVING COUNT(ch.address) > 0
+        ORDER BY holder_count DESC
+        LIMIT ${maxNodes}
+      `),
+    );
+
+    const nodes = collectionsResult.map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      chain: row.chain,
+      imageUrl: row.image_url,
+      holderCount: parseInt(row.holder_count),
+    }));
+
+    const collectionIds = nodes.map((n) => n.id);
+
+    if (collectionIds.length === 0) {
+      return { nodes: [], edges: [] };
+    }
+
+    // Get overlap edges
+    const edgesResult = await this.db.execute(
+      sql.raw(`
+        SELECT 
+          a.collection_id as source_id,
+          b.collection_id as target_id,
+          COUNT(DISTINCT a.address) as shared_holders
+        FROM collection_holders a
+        INNER JOIN collection_holders b 
+          ON a.address = b.address 
+          AND a.chain = b.chain
+          AND a.collection_id < b.collection_id
+        WHERE a.collection_id = ANY(ARRAY['${collectionIds.join("','")}'])
+          AND b.collection_id = ANY(ARRAY['${collectionIds.join("','")}'])
+        GROUP BY a.collection_id, b.collection_id
+        HAVING COUNT(DISTINCT a.address) >= ${minShared}
+        ORDER BY shared_holders DESC
+      `),
+    );
+
+    const edges = edgesResult.map((row: any) => {
+      const sharedHolders = parseInt(row.shared_holders);
+      const sourceNode = nodes.find((n) => n.id === row.source_id);
+      const targetNode = nodes.find((n) => n.id === row.target_id);
+      
+      // Weight by percentage of smaller collection
+      const smallerCount = Math.min(
+        sourceNode?.holderCount || 1,
+        targetNode?.holderCount || 1,
+      );
+      const weight = Math.min(sharedHolders / smallerCount, 1);
+
+      return {
+        source: row.source_id,
+        target: row.target_id,
+        sharedHolders,
+        weight,
+      };
+    });
+
+    return { nodes, edges };
+  }
+
+  /**
+   * Get personalized collection recommendations based on user's holdings
+   */
+  async getRecommendations(userAddress: string, chain: string, options?: {
+    limit?: number;
+    minOverlap?: number;
+  }) {
+    const limit = options?.limit || 10;
+    const minOverlap = options?.minOverlap || 3;
+
+    // Get collections user already holds
+    const userCollections = await this.db.execute(
+      sql.raw(`
+        SELECT DISTINCT ch.collection_id, c.name
+        FROM collection_holders ch
+        INNER JOIN collections c ON c.id = ch.collection_id
+        WHERE ch.address = '${userAddress.toLowerCase()}' 
+          AND ch.chain = '${chain}' 
+          AND c.is_spam = false
+      `),
+    );
+
+    const userCollectionIds = userCollections.map((row: any) => row.collection_id);
+
+    if (userCollectionIds.length === 0) {
+      return []; // User doesn't hold any indexed collections
+    }
+
+    // Find collections with high holder overlap (simplified)
+    const recommendations = await this.db.execute(
+      sql.raw(`
+        SELECT 
+          c.id,
+          c.name,
+          c.chain,
+          c.contract_address,
+          c.image_url,
+          c.floor_price,
+          COUNT(DISTINCT ch.address) as holder_count,
+          COUNT(DISTINCT ch2.address) as shared_holders
+        FROM collections c
+        INNER JOIN collection_holders ch ON ch.collection_id = c.id
+        INNER JOIN collection_holders ch2 
+          ON ch2.address = ch.address
+          AND ch2.chain = ch.chain
+          AND ch2.collection_id = ANY(ARRAY['${userCollectionIds.join("','")}'])
+        WHERE c.is_spam = false
+          AND c.id != ALL(ARRAY['${userCollectionIds.join("','")}'])
+          AND ch.chain = '${chain}'
+        GROUP BY c.id
+        HAVING COUNT(DISTINCT ch2.address) >= ${minOverlap}
+        ORDER BY shared_holders DESC, holder_count DESC
+        LIMIT ${limit}
+      `),
+    );
+
+    return recommendations.map((row: any) => {
+      const sharedHolders = parseInt(row.shared_holders);
+      const holderCount = parseInt(row.holder_count) || 1;
+      const score = Math.min(sharedHolders / holderCount, 1);
+
+      const basedOnCollections = userCollections
+        .filter((uc: any) => userCollectionIds.includes(uc.collection_id))
+        .map((uc: any) => ({
+          id: uc.collection_id,
+          name: uc.name,
+          overlap: Math.floor(sharedHolders / userCollectionIds.length),
+        }));
+
+      return {
+        collection: {
+          id: row.id,
+          name: row.name,
+          chain: row.chain,
+          contractAddress: row.contract_address,
+          imageUrl: row.image_url,
+          holderCount,
+          floorPrice: row.floor_price ? parseFloat(row.floor_price) : null,
+        },
+        score,
+        sharedHolders,
+        basedOn: basedOnCollections,
+        reason: `${sharedHolders} collectors from your communities also hold this`,
+      };
+    });
   }
 }

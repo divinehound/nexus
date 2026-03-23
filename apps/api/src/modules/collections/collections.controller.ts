@@ -30,4 +30,32 @@ export class CollectionsController {
   track(@Body() body: { chain: string; contractAddress: string }) {
     return this.collectionsService.trackCollection(body);
   }
+
+  @Get('network/graph')
+  @ApiOperation({ summary: 'Get collection network graph data for visualization' })
+  getNetworkGraph(
+    @Query('minSharedHolders') minSharedHolders?: string,
+    @Query('maxNodes') maxNodes?: string,
+    @Query('chains') chains?: string,
+  ) {
+    return this.collectionsService.getNetworkGraph({
+      minSharedHolders: minSharedHolders ? parseInt(minSharedHolders) : undefined,
+      maxNodes: maxNodes ? parseInt(maxNodes) : undefined,
+      chains: chains ? chains.split(',') : undefined,
+    });
+  }
+
+  @Get('recommendations/:chain/:address')
+  @ApiOperation({ summary: 'Get personalized collection recommendations for a wallet' })
+  getRecommendations(
+    @Param('chain') chain: string,
+    @Param('address') address: string,
+    @Query('limit') limit?: string,
+    @Query('minOverlap') minOverlap?: string,
+  ) {
+    return this.collectionsService.getRecommendations(address, chain, {
+      limit: limit ? parseInt(limit) : undefined,
+      minOverlap: minOverlap ? parseInt(minOverlap) : undefined,
+    });
+  }
 }
