@@ -835,4 +835,19 @@ export class AdminService {
       throw err;
     }
   }
+
+  async checkSpamRaw(collectionId: string) {
+    const collection = await this.db.query.collections.findFirst({
+      where: eq(collections.id, collectionId),
+    });
+
+    if (!collection) {
+      throw new NotFoundException('Collection not found');
+    }
+
+    return this.spamCheckerService.checkCollectionRaw(
+      collection.chain,
+      collection.contractAddress,
+    );
+  }
 }

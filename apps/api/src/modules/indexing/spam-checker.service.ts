@@ -156,6 +156,34 @@ export class SpamCheckerService {
     }
   }
 
+  /**
+   * Debug endpoint: Return raw Alchemy response for a collection
+   */
+  async checkCollectionRaw(chain: string, contractAddress: string) {
+    const apiKey = this.config.get<string>('alchemy.apiKey');
+    if (!apiKey) {
+      throw new Error('Alchemy API key not configured');
+    }
+
+    const network = this.getAlchemyNetwork(chain);
+    const url = new URL(`https://${network}.g.alchemy.com/nft/v3/${apiKey}/getOwnersForContract`);
+    url.searchParams.set('contractAddress', contractAddress);
+    url.searchParams.set('withTokenBalances', 'false');
+    url.searchParams.set('pageSize', '1');
+
+    const response = await fetch(url.toString());
+    const data = await response.json();
+
+    return {
+      chain,
+      contractAddress,
+      network,
+      responseStatus: response.status,
+      spamClassifications: data.spamClassifications || null,
+      fullResponse: data,
+    };
+  }
+
   private getAlchemyNetwork(chain: string): string {
     const networks: Record<string, string> = {
       ethereum: 'eth-mainnet',

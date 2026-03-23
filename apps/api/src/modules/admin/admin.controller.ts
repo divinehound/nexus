@@ -161,6 +161,12 @@ export class AdminController {
     return this.adminService.bulkCheckSpam();
   }
 
+  @Get('collections/:id/check-spam-raw')
+  @ApiOperation({ summary: 'Debug: Get raw spam data from Alchemy for a single collection' })
+  checkSpamRaw(@Param('id') id: string) {
+    return this.adminService.checkSpamRaw(id);
+  }
+
   // --- Users ---
 
   @Get('users')
