@@ -114,8 +114,9 @@ export function NetworkGraphVisualization({
     // Simple force-directed layout simulation
     const nodes = visibleNodes.map((n, i) => ({
       ...n,
-      x: width / 2 + (Math.random() - 0.5) * width * 0.8,
-      y: height / 2 + (Math.random() - 0.5) * height * 0.8,
+      // Spread initial positions across full canvas
+      x: 50 + Math.random() * (width - 100),
+      y: 50 + Math.random() * (height - 100),
       vx: 0,
       vy: 0,
     }));
@@ -125,9 +126,9 @@ export function NetworkGraphVisualization({
     // Physics simulation
     const simulate = () => {
       const alpha = 0.3;
-      const centerForce = 0.01;
-      const repelForce = 2000;
-      const attractForce = 0.05;
+      const centerForce = focusedNode ? 0.015 : 0.003; // Weaker center force, stronger when focused
+      const repelForce = focusedNode ? 3000 : 5000; // Stronger repulsion to spread nodes
+      const attractForce = 0.08; // Stronger attraction for connected nodes
 
       // Repel nodes from each other
       for (let i = 0; i < nodes.length; i++) {
@@ -174,17 +175,18 @@ export function NetworkGraphVisualization({
       nodes.forEach((node) => {
         node.x += node.vx * alpha;
         node.y += node.vy * alpha;
-        node.vx *= 0.8;
-        node.vy *= 0.8;
+        node.vx *= 0.85; // Slightly less damping for more movement
+        node.vy *= 0.85;
 
-        // Keep in bounds
-        node.x = Math.max(30, Math.min(width - 30, node.x));
-        node.y = Math.max(30, Math.min(height - 30, node.y));
+        // Keep in bounds with more padding
+        const padding = 60;
+        node.x = Math.max(padding, Math.min(width - padding, node.x));
+        node.y = Math.max(padding, Math.min(height - padding, node.y));
       });
     };
 
-    // Run simulation
-    const iterations = 100;
+    // Run simulation (more iterations for better spacing)
+    const iterations = focusedNode ? 150 : 200;
     for (let i = 0; i < iterations; i++) {
       simulate();
     }
