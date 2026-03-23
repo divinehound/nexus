@@ -105,24 +105,9 @@ export function PersonalizedRecommendations({ limit = 10, minOverlap = 3 }: Reco
     );
   }
 
-  if (recommendations.length === 0) {
-    return (
-      <div className="rounded-xl border border-gray-800 bg-gray-900/50 p-6 text-center">
-        <h3 className="font-medium text-gray-100">No Recommendations Yet</h3>
-        <p className="mt-2 text-sm text-gray-400">
-          We couldn't find collections with overlapping holders. This could mean:
-        </p>
-        <ul className="mt-3 space-y-1 text-left text-sm text-gray-500">
-          <li>• Your collections haven't been indexed yet</li>
-          <li>• You don't hold any indexed collections</li>
-          <li>• Your collections are very unique (rare taste!)</li>
-        </ul>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4">
+      {/* Header with wallet selector - always visible */}
       <div className="flex items-center justify-between">
         <div>
           <h3 className="font-semibold text-gray-100">You Might Like</h3>
@@ -148,6 +133,21 @@ export function PersonalizedRecommendations({ limit = 10, minOverlap = 3 }: Reco
           </select>
         )}
       </div>
+
+      {/* Results or empty state */}
+      {recommendations.length === 0 ? (
+        <div className="rounded-xl border border-gray-800 bg-gray-900/50 p-6 text-center">
+          <h3 className="font-medium text-gray-100">No Recommendations Yet</h3>
+          <p className="mt-2 text-sm text-gray-400">
+            We couldn't find collections with overlapping holders. This could mean:
+          </p>
+          <ul className="mt-3 space-y-1 text-left text-sm text-gray-500">
+            <li>• Your collections haven't been indexed yet</li>
+            <li>• You don't hold any indexed collections</li>
+            <li>• Your collections are very unique (rare taste!)</li>
+          </ul>
+        </div>
+      ) : (
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
         {recommendations.map((rec) => (
@@ -207,6 +207,7 @@ export function PersonalizedRecommendations({ limit = 10, minOverlap = 3 }: Reco
           </Link>
         ))}
       </div>
+      )}
     </div>
   );
 }
