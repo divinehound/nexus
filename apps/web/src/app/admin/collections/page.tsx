@@ -71,6 +71,8 @@ export default function AdminCollectionsPage() {
   const [bulkChecking, setBulkChecking] = useState(false);
   const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'verified' | 'spam' | 'all'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkActionInProgress, setBulkActionInProgress] = useState(false);
   const [showSpam, setShowSpam] = useState(false);
 
   const fetchData = async () => {
@@ -326,6 +328,87 @@ export default function AdminCollectionsPage() {
     }
   };
 
+  // Bulk selection handlers
+  const handleToggleSelect = (collectionId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(collectionId)) {
+        next.delete(collectionId);
+      } else {
+        next.add(collectionId);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAll = () => {
+    if (selectedIds.size === filteredCollections.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredCollections.map((c) => c.id)));
+    }
+  };
+
+  const handleBulkMarkSpam = async () => {
+    if (!accessToken || selectedIds.size === 0) return;
+
+    const confirmed = window.confirm(
+      `Mark ${selectedIds.size} selected collection(s) as SPAM?\n\nThis will hide them from the main feed.`
+    );
+    if (!confirmed) return;
+
+    setBulkActionInProgress(true);
+    setError(null);
+
+    let succeeded = 0;
+    let failed = 0;
+
+    for (const id of selectedIds) {
+      try {
+        await adminMarkCollectionAsSpam(id, 'bulk_manual_review', accessToken);
+        succeeded++;
+      } catch (err) {
+        failed++;
+      }
+    }
+
+    setBulkActionInProgress(false);
+    setSelectedIds(new Set());
+    
+    alert(`✅ Bulk spam marking complete!\n\nSucceeded: ${succeeded}\nFailed: ${failed}`);
+    await fetchData();
+  };
+
+  const handleBulkMarkNotSpam = async () => {
+    if (!accessToken || selectedIds.size === 0) return;
+
+    const confirmed = window.confirm(
+      `Mark ${selectedIds.size} selected collection(s) as NOT SPAM?\n\nThis will add them to the allowlist.`
+    );
+    if (!confirmed) return;
+
+    setBulkActionInProgress(true);
+    setError(null);
+
+    let succeeded = 0;
+    let failed = 0;
+
+    for (const id of selectedIds) {
+      try {
+        await adminMarkCollectionAsNotSpam(id, 'bulk_verified_legitimate', accessToken);
+        succeeded++;
+      } catch (err) {
+        failed++;
+      }
+    }
+
+    setBulkActionInProgress(false);
+    setSelectedIds(new Set());
+    
+    alert(`✅ Bulk verification complete!\n\nSucceeded: ${succeeded}\nFailed: ${failed}`);
+    await fetchData();
+  };
+
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -375,6 +458,37 @@ export default function AdminCollectionsPage() {
             {bulkChecking ? '⏳ Checking...' : '🔍 Bulk Check Spam'}
           </button>
         </div>
+
+        {/* Bulk Actions Bar */}
+        {selectedIds.size > 0 && (
+          <div className="flex items-center justify-between rounded-xl border border-purple-900/50 bg-purple-950/30 p-3">
+            <span className="text-sm font-medium text-purple-200">
+              {selectedIds.size} collection{selectedIds.size !== 1 ? 's' : ''} selected
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={handleBulkMarkSpam}
+                disabled={bulkActionInProgress}
+                className="rounded bg-red-700 px-3 py-1 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {bulkActionInProgress ? '⏳ Processing...' : '🚫 Mark as Spam'}
+              </button>
+              <button
+                onClick={handleBulkMarkNotSpam}
+                disabled={bulkActionInProgress}
+                className="rounded bg-green-700 px-3 py-1 text-sm font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {bulkActionInProgress ? '⏳ Processing...' : '✓ Mark as NOT Spam'}
+              </button>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                className="rounded border border-gray-700 px-3 py-1 text-sm text-gray-300 hover:text-white"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
@@ -399,11 +513,30 @@ export default function AdminCollectionsPage() {
       ) : filteredCollections.length === 0 ? (
         <p className="text-gray-500">No collections in this queue state.</p>
       ) : (
-        <div className="space-y-3">
-          {filteredCollections.map((c) => (
-            <div key={c.id} className="rounded-xl border border-gray-800 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div className="flex items-start gap-3">
+        <>
+          {/* Select All */}
+          <div className="mb-3 flex items-center gap-2 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={selectedIds.size > 0 && selectedIds.size === filteredCollections.length}
+              onChange={handleSelectAll}
+              className="rounded border-gray-700 bg-gray-900 text-purple-600 focus:ring-purple-500"
+            />
+            <label>Select all {filteredCollections.length} visible collections</label>
+          </div>
+
+          <div className="space-y-3">
+            {filteredCollections.map((c) => (
+              <div key={c.id} className="rounded-xl border border-gray-800 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    {/* Checkbox */}
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(c.id)}
+                      onChange={() => handleToggleSelect(c.id)}
+                      className="mt-1 rounded border-gray-700 bg-gray-900 text-purple-600 focus:ring-purple-500"
+                    />
                   {c.imageUrl ? (
                     <img
                       src={c.imageUrl}
@@ -582,7 +715,8 @@ export default function AdminCollectionsPage() {
               </div>
             </div>
           ))}
-        </div>
+          </div>
+        </>
       )}
 
       <datalist id="admin-project-options">
