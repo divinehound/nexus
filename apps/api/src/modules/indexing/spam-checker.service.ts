@@ -109,7 +109,7 @@ export class SpamCheckerService {
 
   /**
    * Check a single collection for spam via Alchemy
-   * Uses getOwnersForContract (same as holder indexing) which includes spam data
+   * Uses isSpamContract endpoint which is specifically designed for spam detection
    */
   private async checkCollectionSpam(
     chain: string,
@@ -117,13 +117,15 @@ export class SpamCheckerService {
     apiKey: string,
   ): Promise<{ isSpam: boolean; score: number; reason?: string } | null> {
     const network = this.getAlchemyNetwork(chain);
-    const url = new URL(`https://${network}.g.alchemy.com/nft/v3/${apiKey}/getOwnersForContract`);
-    url.searchParams.set('contractAddress', contractAddress);
-    url.searchParams.set('withTokenBalances', 'false'); // We don't need token data
-    url.searchParams.set('pageSize', '1'); // Minimal data
+    const url = `https://${network}.g.alchemy.com/nft/v3/${apiKey}/isSpamContract`;
 
     try {
-      const response = await fetch(url.toString());
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contractAddress }),
+      });
+
       if (!response.ok) {
         this.logger.warn(`Alchemy API error for ${chain}/${contractAddress}: ${response.status}`);
         return null;
@@ -131,25 +133,18 @@ export class SpamCheckerService {
 
       const data: any = await response.json();
 
-      // Check for spam classifications (same structure as holder indexing)
-      const spamClassifications = data.spamClassifications;
-      if (spamClassifications) {
-        const isSpam = spamClassifications.isSpam === true;
-        const classifications = spamClassifications.classifications || [];
-        
-        this.logger.debug(
-          `Spam check for ${chain}/${contractAddress}: isSpam=${isSpam}, classifications=${classifications.join(', ')}`,
-        );
+      // Alchemy returns: { isSpamContract: boolean }
+      const isSpam = data.isSpamContract === true;
 
-        return {
-          isSpam,
-          score: isSpam ? 90 : 10,
-          reason: classifications.length > 0 ? classifications.join(', ') : undefined,
-        };
-      }
+      this.logger.debug(
+        `Spam check for ${chain}/${contractAddress}: isSpam=${isSpam}`,
+      );
 
-      // No spam data in response
-      return null;
+      return {
+        isSpam,
+        score: isSpam ? 95 : 5, // High confidence from dedicated spam endpoint
+        reason: isSpam ? 'alchemy_spam_detection' : undefined,
+      };
     } catch (err: any) {
       this.logger.error(`Error checking spam for ${chain}/${contractAddress}: ${err.message}`);
       return null;
