@@ -333,7 +333,7 @@ export class CollectionsService {
       return { nodes: [], edges: [] };
     }
 
-    // Get overlap edges
+    // Get overlap edges (cross-chain aware - same address = same holder)
     const edgesResult = await this.db.execute(
       sql.raw(`
         SELECT 
@@ -342,8 +342,7 @@ export class CollectionsService {
           COUNT(DISTINCT a.address) as shared_holders
         FROM collection_holders a
         INNER JOIN collection_holders b 
-          ON a.address = b.address 
-          AND a.chain = b.chain
+          ON LOWER(a.address) = LOWER(b.address)
           AND a.collection_id < b.collection_id
         WHERE a.collection_id = ANY(ARRAY['${collectionIds.join("','")}']::uuid[])
           AND b.collection_id = ANY(ARRAY['${collectionIds.join("','")}']::uuid[])
@@ -410,7 +409,8 @@ export class CollectionsService {
         return []; // User doesn't hold any indexed collections
       }
 
-    // Find collections with high holder overlap (simplified)
+    // Find collections with high holder overlap (cross-chain aware)
+    // Same address on different chains = same holder
     const recommendations = await this.db.execute(
       sql.raw(`
         SELECT 
@@ -425,12 +425,10 @@ export class CollectionsService {
         FROM collections c
         INNER JOIN collection_holders ch ON ch.collection_id = c.id
         INNER JOIN collection_holders ch2 
-          ON ch2.address = ch.address
-          AND ch2.chain = ch.chain
+          ON LOWER(ch2.address) = LOWER(ch.address)
           AND ch2.collection_id = ANY(ARRAY['${userCollectionIds.join("','")}']::uuid[])
         WHERE c.is_spam = false
           AND c.id != ALL(ARRAY['${userCollectionIds.join("','")}']::uuid[])
-          AND ch.chain = '${chain}'
         GROUP BY c.id
         HAVING COUNT(DISTINCT ch2.address) >= ${minOverlap}
         ORDER BY shared_holders DESC, holder_count DESC
