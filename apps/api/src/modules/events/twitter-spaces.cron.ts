@@ -26,6 +26,12 @@ export class TwitterSpacesCron {
 
   @Cron(CronExpression.EVERY_5_MINUTES)
   async pollLiveSpaces() {
+    // Temporarily disabled - revisiting TwitterSpaces feature
+    const enabled = this.config.get<boolean>('twitter.spacesPollingEnabled');
+    if (!enabled) {
+      return;
+    }
+
     const bearerToken = this.config.get<string>('twitter.bearerToken');
     if (!bearerToken) {
       this.logger.warn('TWITTER_BEARER_TOKEN not set — skipping spaces poll');
