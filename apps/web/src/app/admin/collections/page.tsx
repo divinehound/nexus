@@ -10,6 +10,7 @@ import {
   adminMarkCollectionAsSpam,
   adminMarkCollectionAsNotSpam,
   adminBulkCheckSpam,
+  adminCheckSpamRaw,
   apiFetch,
   type CollectionMappingStatus,
   type CollectionVerificationStatus,
@@ -296,6 +297,34 @@ export default function AdminCollectionsPage() {
     }
   };
 
+  const handleDebugSpam = async (collection: AdminCollection) => {
+    if (!accessToken) return;
+
+    try {
+      const result = await adminCheckSpamRaw(collection.id, accessToken);
+      console.log('Raw spam check result:', result);
+      
+      const spamData = result.spamClassifications;
+      if (spamData) {
+        alert(
+          `Spam Data for ${collection.name}:\n\n` +
+          `Is Spam: ${spamData.isSpam}\n` +
+          `Classifications: ${spamData.classifications?.join(', ') || 'none'}\n\n` +
+          `Full data logged to console`
+        );
+      } else {
+        alert(
+          `No spam data returned for ${collection.name}\n\n` +
+          `Response status: ${result.responseStatus}\n` +
+          `Full response logged to console`
+        );
+      }
+    } catch (err: any) {
+      console.error('Debug spam check error:', err);
+      alert(`Error: ${err?.data?.message || err?.message || 'Failed to check spam'}`);
+    }
+  };
+
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -542,6 +571,13 @@ export default function AdminCollectionsPage() {
                     🚫 Mark Spam
                   </button>
                 )}
+                <button
+                  onClick={() => handleDebugSpam(c)}
+                  className="rounded border border-yellow-700 px-3 py-1.5 text-xs font-medium text-yellow-300 hover:border-yellow-500 hover:text-white"
+                  title="Check raw spam data from Alchemy API"
+                >
+                  🐛 Debug Spam
+                </button>
               </div>
             </div>
           ))}

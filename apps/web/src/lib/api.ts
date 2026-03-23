@@ -233,6 +233,13 @@ export function adminBulkCheckSpam(token: string) {
   );
 }
 
+export function adminCheckSpamRaw(collectionId: string, token: string) {
+  return apiFetch<any>(
+    `/admin/collections/${collectionId}/check-spam-raw`,
+    { method: 'GET', token },
+  );
+}
+
 export type IndexingJobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface AdminIndexingJobListItem {
