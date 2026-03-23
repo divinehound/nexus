@@ -306,7 +306,7 @@ export class CollectionsService {
       // Get collections with indexed holders
       const collectionsResult = await this.db.execute(
         sql.raw(`
-          SELECT DISTINCT c.id, c.name, c.chain, c.image_url, COUNT(ch.address) as holder_count
+          SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
           FROM collections c
           INNER JOIN collection_holders ch ON ch.collection_id = c.id
           WHERE c.is_spam = false
@@ -322,6 +322,7 @@ export class CollectionsService {
       id: row.id,
       name: row.name,
       chain: row.chain,
+      contractAddress: row.contract_address,
       imageUrl: row.image_url,
       holderCount: parseInt(row.holder_count),
     }));

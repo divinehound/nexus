@@ -278,7 +278,7 @@ export function NetworkGraphVisualization({
               </p>
             </div>
             <Link
-              href={`/collection/${selectedNodeData.id}`}
+              href={`/collection/${selectedNodeData.chain}/${selectedNodeData.contractAddress}`}
               className="rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600"
             >
               View

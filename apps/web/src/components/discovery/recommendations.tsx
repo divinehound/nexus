@@ -25,14 +25,23 @@ export function PersonalizedRecommendations({ limit = 10, minOverlap = 3 }: Reco
         chain: user.primaryWallet.chain,
         address: user.primaryWallet.address,
       });
+    } else if (user?.wallets && user.wallets.length > 0) {
+      // Fallback to first wallet if no primary wallet set
+      setSelectedWallet({
+        chain: user.wallets[0].chain,
+        address: user.wallets[0].address,
+      });
     }
   }, [user]);
 
   useEffect(() => {
     if (selectedWallet) {
       loadRecommendations();
+    } else if (user !== undefined && !user) {
+      // User is logged out
+      setLoading(false);
     }
-  }, [selectedWallet, limit, minOverlap]);
+  }, [selectedWallet, limit, minOverlap, user]);
 
   const loadRecommendations = async () => {
     if (!selectedWallet) return;
@@ -144,7 +153,7 @@ export function PersonalizedRecommendations({ limit = 10, minOverlap = 3 }: Reco
         {recommendations.map((rec) => (
           <Link
             key={rec.collection.id}
-            href={`/collection/${rec.collection.id}`}
+            href={`/collection/${rec.collection.chain}/${rec.collection.contractAddress}`}
             className="group rounded-xl border border-gray-800 bg-gray-900/50 p-4 transition-colors hover:border-purple-700 hover:bg-gray-900"
           >
             <div className="flex items-start gap-3">

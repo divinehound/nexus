@@ -519,6 +519,7 @@ export interface NetworkGraphNode {
   id: string;
   name: string;
   chain: string;
+  contractAddress: string;
   imageUrl: string | null;
   holderCount: number;
 }
