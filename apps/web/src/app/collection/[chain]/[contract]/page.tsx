@@ -48,12 +48,17 @@ export default function CollectionPage() {
     setLoading(true);
     setError(null);
     try {
-      const [collectionData, statsData] = await Promise.all([
-        getCollectionByChainAndContract(chain, contract),
-        getCollectionStats(chain, contract),
-      ]);
+      const collectionData = await getCollectionByChainAndContract(chain, contract);
       setCollection(collectionData);
-      setStats(statsData);
+      
+      // Try to load stats, but don't fail if unavailable
+      try {
+        const statsData = await getCollectionStats(chain, contract);
+        setStats(statsData);
+      } catch (statsErr) {
+        console.warn('Stats unavailable:', statsErr);
+        setStats(null);
+      }
     } catch (err) {
       setCollection(null);
       setStats(null);
