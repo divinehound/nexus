@@ -140,6 +140,21 @@ export function getCollectionStats(chain: string, contractAddress: string) {
   return apiFetch<CollectionStatsResponse>(`/collections/${encodeURIComponent(chain)}/${encodeURIComponent(contractAddress)}/stats`);
 }
 
+export interface RelatedCollection {
+  id: string;
+  name: string;
+  contractAddress: string;
+  chain: string;
+  imageUrl: string | null;
+  sharedHolders: number;
+  totalHolders: number;
+  overlapPercentage: number;
+}
+
+export function getRelatedCollections(collectionId: string, limit: number = 10) {
+  return apiFetch<RelatedCollection[]>(`/collections/${collectionId}/related?limit=${limit}`);
+}
+
 export interface AdminCollectionActionInput {
   notes?: string;
   projectId?: string;

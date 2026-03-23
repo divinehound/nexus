@@ -11,6 +11,7 @@ import {
 } from '@/lib/api';
 import { chainCurrency, formatPrice, truncateAddress } from '@/lib/utils';
 import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
+import { RelatedCollections } from '@/components/collections/related-collections';
 
 function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -203,6 +204,8 @@ export default function CollectionPage() {
           </div>
         </section>
       )}
+
+      {collection && <RelatedCollections collectionId={collection.id} />}
     </main>
   );
 }
