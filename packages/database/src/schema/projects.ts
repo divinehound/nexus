@@ -60,6 +60,12 @@ export const trackingTierEnum = pgEnum('tracking_tier', [
   'suppressed',
 ]);
 
+export const indexStatusEnum = pgEnum('index_status', [
+  'nexus_only',
+  'sampled',
+  'full',
+]);
+
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 255 }).notNull(),
@@ -112,6 +118,7 @@ export const collections = pgTable(
     mappingConfidence: numeric('mapping_confidence', { precision: 4, scale: 3 }),
     verificationNotes: text('verification_notes'),
     trackingTier: trackingTierEnum('tracking_tier').default('lightweight').notNull(),
+    indexStatus: indexStatusEnum('index_status').default('nexus_only').notNull(),
     qualityScore: numeric('quality_score', { precision: 5, scale: 2 }),
     qualityReason: text('quality_reason'),
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),

@@ -23,6 +23,7 @@ import {
 import { CollectionMetricsService } from '../collections/collection-metrics.service';
 import { HoldingsService } from '../holdings/holdings.service';
 import { BlockchainLookupService } from '../search/blockchain-lookup.service';
+import { HolderIndexerService } from '../indexing/holder-indexer.service';
 
 @Injectable()
 export class AdminService {
@@ -33,6 +34,7 @@ export class AdminService {
     private readonly collectionMetricsService: CollectionMetricsService,
     private readonly holdingsService: HoldingsService,
     private readonly blockchainLookup: BlockchainLookupService,
+    private readonly holderIndexerService: HolderIndexerService,
   ) {}
 
   // --- Dashboard Stats ---
@@ -727,5 +729,34 @@ export class AdminService {
     this.logger.log(`Enriched collection ${collectionId}: ${metadata.name}`);
 
     return { success: true, collection: updated, metadata };
+  }
+
+  async indexCollectionHolders(collectionId: string) {
+    const collection = await this.db.query.collections.findFirst({
+      where: eq(collections.id, collectionId),
+    });
+
+    if (!collection) {
+      throw new NotFoundException('Collection not found');
+    }
+
+    // Mark indexing as started
+    await this.db
+      .update(collections)
+      .set({
+        lastIndexStartedAt: new Date(),
+        lastIndexStatus: 'indexing',
+      })
+      .where(eq(collections.id, collectionId));
+
+    // Trigger async indexing
+    const result = await this.holderIndexerService.indexCollectionHolders(collectionId);
+
+    return {
+      success: result.success,
+      collection: collection.name,
+      holdersIndexed: result.holdersIndexed,
+      error: result.error,
+    };
   }
 }

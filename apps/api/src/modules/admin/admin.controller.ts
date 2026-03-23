@@ -137,6 +137,12 @@ export class AdminController {
     return this.adminService.suggestProject(id, body);
   }
 
+  @Post('collections/:id/index-holders')
+  @ApiOperation({ summary: 'Index all holders for a collection (full data)' })
+  indexCollectionHolders(@Param('id') id: string) {
+    return this.adminService.indexCollectionHolders(id);
+  }
+
   // --- Users ---
 
   @Get('users')
