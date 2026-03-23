@@ -230,4 +230,63 @@ export class CollectionsService {
 
     return created.id;
   }
+
+  async getRelatedCollections(collectionId: string, limit: number = 10) {
+    // SQL query to find collections with overlapping holders
+    // Uses wallet_holdings_snapshots to find users who hold this collection
+    // Then finds what other collections those users hold
+    const result = await this.db.execute<any>(/* sql */ `
+      WITH collection_holders AS (
+        SELECT DISTINCT user_id
+        FROM wallet_holdings_snapshots
+        WHERE collection_id = ${collectionId}
+      ),
+      other_collection_holders AS (
+        SELECT 
+          whs.collection_id,
+          COUNT(DISTINCT whs.user_id) as shared_holders
+        FROM wallet_holdings_snapshots whs
+        INNER JOIN collection_holders ch ON whs.user_id = ch.user_id
+        WHERE whs.collection_id != ${collectionId}
+        GROUP BY whs.collection_id
+      ),
+      total_collection_holders AS (
+        SELECT 
+          collection_id,
+          COUNT(DISTINCT user_id) as total_holders
+        FROM wallet_holdings_snapshots
+        WHERE collection_id IN (SELECT collection_id FROM other_collection_holders)
+        GROUP BY collection_id
+      )
+      SELECT 
+        c.id,
+        c.name,
+        c.contract_address,
+        c.chain,
+        c.image_url,
+        och.shared_holders::text,
+        tch.total_holders::text,
+        ROUND(
+          (och.shared_holders::numeric / 
+           (SELECT COUNT(DISTINCT user_id) FROM collection_holders)::numeric) * 100, 
+          1
+        )::text as overlap_percentage
+      FROM other_collection_holders och
+      INNER JOIN total_collection_holders tch ON och.collection_id = tch.collection_id
+      INNER JOIN collections c ON och.collection_id = c.id
+      ORDER BY och.shared_holders DESC, overlap_percentage DESC
+      LIMIT ${limit}
+    `);
+
+    return result.map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      contractAddress: row.contract_address,
+      chain: row.chain,
+      imageUrl: row.image_url,
+      sharedHolders: parseInt(row.shared_holders),
+      totalHolders: parseInt(row.total_holders),
+      overlapPercentage: parseFloat(row.overlap_percentage),
+    }));
+  }
 }
