@@ -336,7 +336,7 @@ export function NetworkGraphVisualization({
           ),
         )
         .sort((a, b) => {
-          // Sort by shared holders (descending)
+          // Sort by overlap percentage (weight), then by absolute count
           const edgeA = data.edges.find(
             (e) =>
               (e.source === focusedNode && e.target === a.id) ||
@@ -347,6 +347,12 @@ export function NetworkGraphVisualization({
               (e.source === focusedNode && e.target === b.id) ||
               (e.target === focusedNode && e.source === b.id),
           );
+          
+          // Primary sort: overlap percentage (weight)
+          const weightDiff = (edgeB?.weight || 0) - (edgeA?.weight || 0);
+          if (Math.abs(weightDiff) > 0.01) return weightDiff;
+          
+          // Secondary sort: absolute count (for ties)
           return (edgeB?.sharedHolders || 0) - (edgeA?.sharedHolders || 0);
         })
     : [];
@@ -450,7 +456,7 @@ export function NetworkGraphVisualization({
                         className="inline-block h-2 w-2 rounded-full"
                         style={{ backgroundColor: getChainColor(node.chain) }}
                       />{' '}
-                      {node.chain} • {edge?.sharedHolders || 0} shared
+                      {node.chain} • {Math.round((edge?.weight || 0) * 100)}% overlap ({edge?.sharedHolders || 0} holders)
                     </p>
                   </div>
                   <div className="text-xs text-purple-400">→</div>
