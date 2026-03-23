@@ -227,7 +227,7 @@ export function adminMarkCollectionAsNotSpam(collectionId: string, reason: strin
 }
 
 export function adminBulkCheckSpam(token: string) {
-  return apiFetch<{ checked: number; flagged: number; errors: number }>(
+  return apiFetch<{ status: string; message: string }>(
     `/admin/collections/bulk-check-spam`,
     { method: 'POST', token },
   );

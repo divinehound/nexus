@@ -274,7 +274,10 @@ export default function AdminCollectionsPage() {
     if (!accessToken) return;
 
     const confirmed = window.confirm(
-      'Check ALL collections for spam via Alchemy API?\n\nThis may take several minutes and will auto-flag high-confidence spam.\n\nContinue?'
+      'Check ALL collections for spam via Alchemy API?\n\n' +
+      'This runs as a background job and may take 5-10 minutes.\n' +
+      'Check server logs for progress and completion.\n\n' +
+      'Continue?'
     );
     if (!confirmed) return;
 
@@ -284,15 +287,13 @@ export default function AdminCollectionsPage() {
     try {
       const result = await adminBulkCheckSpam(accessToken);
       alert(
-        `✅ Bulk spam check complete!\n\n` +
-        `Checked: ${result.checked} collections\n` +
-        `Flagged as spam: ${result.flagged}\n` +
-        `Errors: ${result.errors}`
+        `✅ ${result.message}\n\n` +
+        'The spam check is running in the background.\n' +
+        'Refresh the page in a few minutes to see results.'
       );
-      await fetchData();
+      setBulkChecking(false);
     } catch (err: any) {
-      setError(err?.data?.message || err?.message || 'Bulk spam check failed');
-    } finally {
+      setError(err?.data?.message || err?.message || 'Failed to start bulk spam check');
       setBulkChecking(false);
     }
   };

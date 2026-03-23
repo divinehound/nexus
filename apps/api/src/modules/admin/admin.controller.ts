@@ -162,9 +162,18 @@ export class AdminController {
   }
 
   @Post('collections/bulk-check-spam')
-  @ApiOperation({ summary: 'Check all existing collections for spam via Alchemy API' })
+  @ApiOperation({ summary: 'Check all existing collections for spam via Alchemy API (background job)' })
   bulkCheckSpam() {
-    return this.adminService.bulkCheckSpam();
+    // Start background job - don't await (logs handled by SpamCheckerService)
+    this.adminService.bulkCheckSpam().catch((err) => {
+      console.error(`Bulk spam check failed: ${err.message}`);
+    });
+    
+    // Return immediately
+    return {
+      status: 'started',
+      message: 'Bulk spam check started in background. Check server logs for progress and completion.',
+    };
   }
 
   // --- Users ---
