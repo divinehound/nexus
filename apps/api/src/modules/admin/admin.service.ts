@@ -40,6 +40,27 @@ export class AdminService {
     private readonly spamCheckerService: SpamCheckerService,
   ) {}
 
+  /**
+   * Helper: Resolve collection ID from UUID or contract address
+   */
+  private async resolveCollectionId(idOrContract: string): Promise<string> {
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrContract);
+    
+    if (isUUID) {
+      return idOrContract;
+    }
+    
+    const collection = await this.db.query.collections.findFirst({
+      where: eq(collections.contractAddress, idOrContract),
+    });
+    
+    if (!collection) {
+      throw new NotFoundException('Collection not found');
+    }
+    
+    return collection.id;
+  }
+
   // --- Dashboard Stats ---
 
   async getStats() {
@@ -228,9 +249,10 @@ export class AdminService {
   // --- Collection Verification / Mapping ---
 
   async verifyCollection(
-    collectionId: string,
+    idOrContract: string,
     input: { notes?: string; projectId?: string },
   ) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
     const existing = await this.db.query.collections.findFirst({
       where: eq(collections.id, collectionId),
     });
@@ -294,7 +316,8 @@ export class AdminService {
     };
   }
 
-  async rejectCollection(collectionId: string, notes?: string) {
+  async rejectCollection(idOrContract: string, notes?: string) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
     const [updated] = await this.db
       .update(collections)
       .set({
@@ -631,13 +654,9 @@ export class AdminService {
   }
 
   async getCollectionIndexStatus(idOrContract: string) {
-    // Check if input is a valid UUID
-    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrContract);
-    
+    const collectionId = await this.resolveCollectionId(idOrContract);
     const collection = await this.db.query.collections.findFirst({
-      where: isUUID 
-        ? or(eq(collections.id, idOrContract), eq(collections.contractAddress, idOrContract))
-        : eq(collections.contractAddress, idOrContract),
+      where: eq(collections.id, collectionId),
     });
 
     if (!collection) throw new NotFoundException('Collection not found');
@@ -657,7 +676,8 @@ export class AdminService {
     return this.collectionMetricsService.refreshTrackedCollectionsMetrics();
   }
 
-  async refreshCollectionIndexing(collectionId: string) {
+  async refreshCollectionIndexing(idOrContract: string) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
     const response = await this.collectionMetricsService.refreshCollectionMetricsNow(collectionId);
     return {
       queued: response.queued,
@@ -681,7 +701,8 @@ export class AdminService {
     return this.holdingsService.refreshWalletIndexing(walletIdOrAddress);
   }
 
-  async enrichCollection(collectionId: string) {
+  async enrichCollection(idOrContract: string) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
     const collection = await this.db.query.collections.findFirst({
       where: eq(collections.id, collectionId),
     });
@@ -739,7 +760,8 @@ export class AdminService {
     return { success: true, collection: updated, metadata };
   }
 
-  async indexCollectionHolders(collectionId: string) {
+  async indexCollectionHolders(idOrContract: string) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
     const collection = await this.db.query.collections.findFirst({
       where: eq(collections.id, collectionId),
     });
@@ -768,7 +790,8 @@ export class AdminService {
     };
   }
 
-  async markCollectionAsSpam(collectionId: string, notes?: string) {
+  async markCollectionAsSpam(idOrContract: string, notes?: string) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
     const collection = await this.db.query.collections.findFirst({
       where: eq(collections.id, collectionId),
     });
@@ -793,7 +816,8 @@ export class AdminService {
     return { success: true, collection: collection.name };
   }
 
-  async markCollectionAsNotSpam(collectionId: string, reason: string) {
+  async markCollectionAsNotSpam(idOrContract: string, reason: string) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
     const collection = await this.db.query.collections.findFirst({
       where: eq(collections.id, collectionId),
     });
@@ -841,7 +865,8 @@ export class AdminService {
     }
   }
 
-  async checkSpamRaw(collectionId: string) {
+  async checkSpamRaw(idOrContract: string) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
     const collection = await this.db.query.collections.findFirst({
       where: eq(collections.id, collectionId),
     });
