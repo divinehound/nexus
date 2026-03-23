@@ -205,6 +205,13 @@ export function adminEnrichCollection(collectionId: string, token: string) {
   );
 }
 
+export function adminIndexCollectionHolders(collectionId: string, token: string) {
+  return apiFetch<{ success: boolean; collection: string; holdersIndexed: number; error?: string }>(
+    `/admin/collections/${collectionId}/index-holders`,
+    { method: 'POST', token },
+  );
+}
+
 export type IndexingJobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface AdminIndexingJobListItem {

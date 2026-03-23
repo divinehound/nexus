@@ -6,6 +6,7 @@ import {
   adminSuggestProject,
   adminVerifyCollection,
   adminEnrichCollection,
+  adminIndexCollectionHolders,
   apiFetch,
   type CollectionMappingStatus,
   type CollectionVerificationStatus,
@@ -55,6 +56,7 @@ export default function AdminCollectionsPage() {
   const [projectIdInput, setProjectIdInput] = useState<Record<string, string>>({});
   const [notesInput, setNotesInput] = useState<Record<string, string>>({});
   const [enriching, setEnriching] = useState<Record<string, boolean>>({});
+  const [indexing, setIndexing] = useState<Record<string, boolean>>({});
   const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'all'>('pending');
 
   const fetchData = async () => {
@@ -161,6 +163,38 @@ export default function AdminCollectionsPage() {
       setError(message);
     } finally {
       setEnriching((prev) => ({ ...prev, [collection.id]: false }));
+    }
+  };
+
+  const handleIndexHolders = async (collection: AdminCollection) => {
+    if (!accessToken) return;
+    
+    if (collection.chain === 'solana') {
+      setError('Solana indexing not yet supported. Only EVM chains (Ethereum, Base, Polygon, Abstract) are supported.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Index all holders for ${collection.name}?\n\nThis will fetch data from Alchemy and may take several minutes for large collections.\n\nChain: ${collection.chain}\nContract: ${collection.contractAddress}`
+    );
+    
+    if (!confirmed) return;
+
+    setIndexing((prev) => ({ ...prev, [collection.id]: true }));
+    
+    try {
+      const result = await adminIndexCollectionHolders(collection.id, accessToken);
+      if (!result.success) {
+        setError(result.error || 'Indexing failed');
+      } else {
+        alert(`✅ Successfully indexed ${result.holdersIndexed.toLocaleString()} holders for ${result.collection}!`);
+        await fetchData();
+      }
+    } catch (err: any) {
+      const message = err?.data?.message || err?.message || 'Indexing failed';
+      setError(message);
+    } finally {
+      setIndexing((prev) => ({ ...prev, [collection.id]: false }));
     }
   };
 
@@ -328,6 +362,14 @@ export default function AdminCollectionsPage() {
                   className="rounded border border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-300 hover:border-purple-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {enriching[c.id] ? 'Re-enriching...' : 'Re-enrich Metadata'}
+                </button>
+                <button
+                  onClick={() => handleIndexHolders(c)}
+                  disabled={indexing[c.id] || c.chain === 'solana'}
+                  className="rounded border border-orange-700 px-3 py-1.5 text-xs font-medium text-orange-300 hover:border-orange-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  title={c.chain === 'solana' ? 'Solana indexing not yet supported' : 'Index all holders from blockchain'}
+                >
+                  {indexing[c.id] ? 'Indexing...' : '🔍 Index Holders'}
                 </button>
               </div>
             </div>
