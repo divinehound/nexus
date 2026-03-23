@@ -1,8 +1,8 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
-import { type Database, collections, wallets, walletHoldingsSnapshots } from '@nexus/database';
+import { type Database, collections, collectionHolders } from '@nexus/database';
 
 interface AlchemyOwner {
   ownerAddress: string;
@@ -57,13 +57,12 @@ export class HolderIndexerService {
       
       this.logger.log(`Fetched ${holders.length} unique holders for ${collection.name}`);
 
-      // Upsert wallets and holdings
+      // Upsert holders
       let indexed = 0;
       for (const holder of holders) {
-        await this.upsertHolderWallet(
+        await this.upsertHolder(
           collectionId,
           collection.chain,
-          collection.contractAddress,
           holder.ownerAddress,
           holder.balance,
         );
@@ -157,57 +156,31 @@ export class HolderIndexerService {
   }
 
   /**
-   * Upsert wallet and holdings snapshot
-   * Note: This is a simplified implementation that doesn't link to users
-   * For full holder indexing, we just track the addresses
+   * Upsert holder into collection_holders table
+   * This table doesn't require userId, so we can index ALL holders
    */
-  private async upsertHolderWallet(
+  private async upsertHolder(
     collectionId: string,
     chain: string,
-    contractAddress: string,
     address: string,
-    quantity: number,
+    tokenCount: number,
   ) {
     const normalizedAddress = address.toLowerCase();
 
-    // Check if wallet exists and is linked to a user
-    const existingWallet = await this.db.query.wallets.findFirst({
-      where: and(
-        eq(wallets.chain, chain as any),
-        eq(wallets.address, normalizedAddress),
-      ),
-    });
-
-    // If wallet exists and has a user, we need the userId
-    // If it doesn't exist, we skip (walletHoldingsSnapshots requires userId)
-    // This is a limitation: we only index holders who have wallets in our system
-    // For a full implementation, we'd need a separate table that doesn't require userId
-    if (!existingWallet) {
-      // Skip wallets not in our system
-      return;
-    }
-
-    if (!existingWallet.userId) {
-      // Skip wallets without users (shouldn't happen with current schema)
-      return;
-    }
-
-    // Upsert holdings snapshot
     await this.db
-      .insert(walletHoldingsSnapshots)
+      .insert(collectionHolders)
       .values({
-        userId: existingWallet.userId,
-        walletId: existingWallet.id,
+        collectionId,
         chain: chain as any,
-        contractAddress,
-        tokenCount: quantity,
+        address: normalizedAddress,
+        tokenCount,
         firstSeenAt: new Date(),
         lastSeenAt: new Date(),
       })
       .onConflictDoUpdate({
-        target: [walletHoldingsSnapshots.walletId, walletHoldingsSnapshots.contractAddress],
+        target: [collectionHolders.collectionId, collectionHolders.address],
         set: {
-          tokenCount: quantity,
+          tokenCount,
           lastSeenAt: new Date(),
         },
       });

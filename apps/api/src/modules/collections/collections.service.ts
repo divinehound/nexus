@@ -233,28 +233,27 @@ export class CollectionsService {
 
   async getRelatedCollections(collectionId: string, limit: number = 10) {
     // SQL query to find collections with overlapping holders
-    // Uses wallet_holdings_snapshots to find users who hold this collection
-    // Then finds what other collections those users hold
+    // Uses collection_holders table (full blockchain data, not limited to NEXUS users)
     const result = await this.db.execute<any>(/* sql */ `
-      WITH collection_holders AS (
-        SELECT DISTINCT user_id
-        FROM wallet_holdings_snapshots
+      WITH target_holders AS (
+        SELECT DISTINCT address
+        FROM collection_holders
         WHERE collection_id = ${collectionId}
       ),
       other_collection_holders AS (
         SELECT 
-          whs.collection_id,
-          COUNT(DISTINCT whs.user_id) as shared_holders
-        FROM wallet_holdings_snapshots whs
-        INNER JOIN collection_holders ch ON whs.user_id = ch.user_id
-        WHERE whs.collection_id != ${collectionId}
-        GROUP BY whs.collection_id
+          ch.collection_id,
+          COUNT(DISTINCT ch.address) as shared_holders
+        FROM collection_holders ch
+        INNER JOIN target_holders th ON ch.address = th.address
+        WHERE ch.collection_id != ${collectionId}
+        GROUP BY ch.collection_id
       ),
       total_collection_holders AS (
         SELECT 
           collection_id,
-          COUNT(DISTINCT user_id) as total_holders
-        FROM wallet_holdings_snapshots
+          COUNT(DISTINCT address) as total_holders
+        FROM collection_holders
         WHERE collection_id IN (SELECT collection_id FROM other_collection_holders)
         GROUP BY collection_id
       )
@@ -268,7 +267,7 @@ export class CollectionsService {
         tch.total_holders::text,
         ROUND(
           (och.shared_holders::numeric / 
-           (SELECT COUNT(DISTINCT user_id) FROM collection_holders)::numeric) * 100, 
+           (SELECT COUNT(DISTINCT address) FROM target_holders)::numeric) * 100, 
           1
         )::text as overlap_percentage
       FROM other_collection_holders och

@@ -137,6 +137,24 @@ export const collections = pgTable(
   ],
 );
 
+export const collectionHolders = pgTable(
+  'collection_holders',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    collectionId: uuid('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    chain: chainEnum('chain').notNull(),
+    address: text('address').notNull(),
+    tokenCount: integer('token_count').default(1).notNull(),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('collection_holders_unique').on(table.collectionId, table.address),
+  ],
+);
+
 export const collectionIntakeRequests = pgTable('collection_intake_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
   chain: chainEnum('chain').notNull(),

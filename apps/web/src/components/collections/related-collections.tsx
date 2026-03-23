@@ -61,10 +61,10 @@ export function RelatedCollections({ collectionId }: RelatedCollectionsProps) {
     <section className="rounded-xl border border-gray-800 bg-gray-900 p-6">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">Related Collections</h2>
-        <span className="text-xs text-gray-500">Based on {related[0]?.sharedHolders || 0}+ NEXUS users</span>
+        <span className="text-xs text-gray-500">Based on on-chain holder data</span>
       </div>
       <p className="mt-1 text-sm text-gray-400">
-        Collections popular among holders of this collection
+        Collections with overlapping holders ({related[0]?.sharedHolders || 0}+ shared addresses)
       </p>
 
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
