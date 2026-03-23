@@ -1,1 +1,21 @@
 @import "tailwindcss";
+
+@theme {
+  --font-heading: var(--font-heading);
+  --font-body: var(--font-body);
+  
+  /* Map font families to Tailwind utilities */
+  --font-sans: var(--font-body);
+}
+
+/* Apply heading font to all headings */
+h1, h2, h3, h4, h5, h6,
+.font-heading {
+  font-family: var(--font-heading);
+  font-weight: 600;
+}
+
+/* Body uses Inter by default */
+body {
+  font-family: var(--font-body);
+}
