@@ -255,8 +255,8 @@ export class HolderIndexerService {
       ethereum: 'eth-mainnet',
       base: 'base-mainnet',
       polygon: 'polygon-mainnet',
-      abstract: 'arb-mainnet', // Abstract uses Arbitrum infra
-      apechain: 'eth-mainnet', // Fallback
+      abstract: 'abstract-mainnet',
+      apechain: 'eth-mainnet', // Fallback - no native Alchemy support
     };
     return networks[chain] || 'eth-mainnet';
   }
