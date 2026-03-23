@@ -57,7 +57,7 @@ export default function AdminCollectionsPage() {
   const [notesInput, setNotesInput] = useState<Record<string, string>>({});
   const [enriching, setEnriching] = useState<Record<string, boolean>>({});
   const [indexing, setIndexing] = useState<Record<string, boolean>>({});
-  const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'all'>('pending');
+  const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'verified' | 'all'>('pending');
 
   const fetchData = async () => {
     if (!accessToken) return;
@@ -72,9 +72,7 @@ export default function AdminCollectionsPage() {
       setProjects(data.items.map((project) => ({ id: project.id, name: project.name })));
 
       const flattened = data.items.flatMap((project) =>
-        project.collections
-          .filter((collection) => REVIEWABLE_STATUSES.has(collection.verificationStatus) || collection.mappingStatus === 'suggested')
-          .map((collection) => ({ ...collection, projectId: project.id })),
+        project.collections.map((collection) => ({ ...collection, projectId: project.id })),
       );
 
       setCollections(flattened);
@@ -95,6 +93,8 @@ export default function AdminCollectionsPage() {
       tracked: collections.filter((c) => c.verificationStatus === 'tracked_unverified').length,
       pendingClaim: collections.filter((c) => c.verificationStatus === 'pending_claim').length,
       suggested: collections.filter((c) => c.mappingStatus === 'suggested').length,
+      verified: collections.filter((c) => c.verificationStatus === 'verified').length,
+      all: collections.length,
     };
   }, [collections]);
 
@@ -104,6 +104,7 @@ export default function AdminCollectionsPage() {
       return collections.filter((c) => c.verificationStatus === 'tracked_unverified' || c.verificationStatus === 'pending_claim');
     }
     if (filter === 'suggested') return collections.filter((c) => c.mappingStatus === 'suggested');
+    if (filter === 'verified') return collections.filter((c) => c.verificationStatus === 'verified');
     return collections.filter((c) => c.verificationStatus === filter);
   }, [collections, filter]);
 
@@ -208,11 +209,12 @@ export default function AdminCollectionsPage() {
             onChange={(e) => setFilter(e.target.value as typeof filter)}
             className="rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-white"
           >
-            <option value="pending">Pending</option>
+            <option value="pending">Pending Review</option>
             <option value="tracked_unverified">Tracked Unverified</option>
             <option value="pending_claim">Pending Claim</option>
-            <option value="suggested">Suggested</option>
-            <option value="all">All</option>
+            <option value="suggested">Suggested Mapping</option>
+            <option value="verified">Verified ✓</option>
+            <option value="all">All Collections</option>
           </select>
           <button
             onClick={fetchData}
@@ -223,10 +225,12 @@ export default function AdminCollectionsPage() {
         </div>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard label="Tracked Unverified" value={queueStats.tracked} />
         <StatCard label="Pending Claim" value={queueStats.pendingClaim} />
         <StatCard label="Suggested Mapping" value={queueStats.suggested} />
+        <StatCard label="Verified" value={queueStats.verified} />
+        <StatCard label="Total" value={queueStats.all} />
       </div>
 
       {loading ? (
