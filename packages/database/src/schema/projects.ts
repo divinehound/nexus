@@ -11,6 +11,7 @@ import {
   numeric,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { users } from './users';
 
 export const collectionTypeEnum = pgEnum('collection_type', [
   'erc721',
@@ -73,6 +74,18 @@ export const holderEventTypeEnum = pgEnum('holder_event_type', [
   'exit',
 ]);
 
+export const spamDetectedByEnum = pgEnum('spam_detected_by', [
+  'alchemy',
+  'helius',
+  'manual',
+  'community',
+]);
+
+export const spamReportTypeEnum = pgEnum('spam_report_type', [
+  'spam',
+  'not_spam',
+]);
+
 export const projects = pgTable('projects', {
   id: uuid('id').primaryKey().defaultRandom(),
   name: varchar('name', { length: 255 }).notNull(),
@@ -126,6 +139,11 @@ export const collections = pgTable(
     verificationNotes: text('verification_notes'),
     trackingTier: trackingTierEnum('tracking_tier').default('lightweight').notNull(),
     indexStatus: indexStatusEnum('index_status').default('nexus_only').notNull(),
+    isSpam: boolean('is_spam').default(false),
+    spamScore: integer('spam_score').default(0),
+    spamReason: text('spam_reason'),
+    spamDetectedAt: timestamp('spam_detected_at', { withTimezone: true }),
+    spamDetectedBy: spamDetectedByEnum('spam_detected_by'),
     qualityScore: numeric('quality_score', { precision: 5, scale: 2 }),
     qualityReason: text('quality_reason'),
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).defaultNow().notNull(),
@@ -203,6 +221,30 @@ export const collectionDailyMetrics = pgTable(
     uniqueIndex('collection_daily_metrics_unique').on(table.collectionId, table.metricDate),
   ],
 );
+
+export const spamReports = pgTable('spam_reports', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  collectionId: uuid('collection_id')
+    .notNull()
+    .references(() => collections.id, { onDelete: 'cascade' }),
+  reportedByUserId: uuid('reported_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  reportType: spamReportTypeEnum('report_type').notNull(),
+  reason: text('reason'),
+  notes: text('notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const spamAllowlist = pgTable('spam_allowlist', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  collectionId: uuid('collection_id')
+    .notNull()
+    .references(() => collections.id, { onDelete: 'cascade' }),
+  addedByUserId: uuid('added_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  reason: text('reason').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex('spam_allowlist_collection_unique').on(table.collectionId),
+]);
 
 export const collectionIntakeRequests = pgTable('collection_intake_requests', {
   id: uuid('id').primaryKey().defaultRandom(),
