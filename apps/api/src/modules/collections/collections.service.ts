@@ -237,20 +237,42 @@ export class CollectionsService {
     const result = await this.db.execute<any>(sql`
       WITH target_holder_groups AS (
         -- Group target collection holders by user or address
-        -- Use lowercase address for cross-chain matching
+        -- Case-sensitive for Solana, case-insensitive for EVM
         SELECT DISTINCT
-          COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
+          COALESCE(
+            w.user_id::text,
+            CASE 
+              WHEN ch.chain = 'solana' THEN ch.address
+              ELSE LOWER(ch.address)
+            END
+          ) as holder_id
         FROM collection_holders ch
-        LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
+        LEFT JOIN wallets w ON 
+          CASE
+            WHEN ch.chain = 'solana' THEN w.address = ch.address
+            ELSE LOWER(w.address) = LOWER(ch.address)
+          END
+          AND w.chain::text = ch.chain
         WHERE ch.collection_id = ${collectionId}
       ),
       other_holder_groups AS (
         -- Group all collection holders by user or address
         SELECT 
           ch.collection_id,
-          COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
+          COALESCE(
+            w.user_id::text,
+            CASE 
+              WHEN ch.chain = 'solana' THEN ch.address
+              ELSE LOWER(ch.address)
+            END
+          ) as holder_id
         FROM collection_holders ch
-        LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
+        LEFT JOIN wallets w ON 
+          CASE
+            WHEN ch.chain = 'solana' THEN w.address = ch.address
+            ELSE LOWER(w.address) = LOWER(ch.address)
+          END
+          AND w.chain::text = ch.chain
         WHERE ch.collection_id != ${collectionId}
       ),
       other_collection_holders AS (
@@ -357,15 +379,26 @@ export class CollectionsService {
 
     // Get overlap edges (cross-chain + multi-wallet aware)
     // Same address OR addresses linked to same user = same holder
-    // Use IN clause with individual parameters
+    // Case-sensitive for Solana, case-insensitive for EVM
     const edgesResult = await this.db.execute(
       sql`
         WITH holder_groups AS (
           SELECT 
             ch.collection_id,
-            COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
+            COALESCE(
+              w.user_id::text,
+              CASE 
+                WHEN ch.chain = 'solana' THEN ch.address
+                ELSE LOWER(ch.address)
+              END
+            ) as holder_id
           FROM collection_holders ch
-          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
+          LEFT JOIN wallets w ON 
+            CASE
+              WHEN ch.chain = 'solana' THEN w.address = ch.address
+              ELSE LOWER(w.address) = LOWER(ch.address)
+            END
+            AND w.chain::text = ch.chain
           WHERE ch.collection_id IN (${sql.join(collectionIds.map(id => sql`${id}`), sql`, `)})
         )
         SELECT 
@@ -435,12 +468,14 @@ export class CollectionsService {
       const minOverlap = options?.minOverlap || 3;
 
       // Get collections user already holds
+      // Case-sensitive for Solana, case-insensitive for EVM
+      const normalizedAddress = chain === 'solana' ? userAddress : userAddress.toLowerCase();
       const userCollections = await this.db.execute(
         sql`
           SELECT DISTINCT ch.collection_id, c.name
           FROM collection_holders ch
           INNER JOIN collections c ON c.id = ch.collection_id
-          WHERE ch.address = ${userAddress.toLowerCase()}
+          WHERE ch.address = ${normalizedAddress}
             AND ch.chain = ${chain}
             AND c.is_spam = false
         `,
@@ -454,21 +489,44 @@ export class CollectionsService {
 
     // Find collections with high holder overlap (cross-chain + multi-wallet aware)
     // Addresses linked to same user = same holder
+    // Case-sensitive for Solana, case-insensitive for EVM
     const recommendations = await this.db.execute(
       sql`
         WITH user_holder_groups AS (
           SELECT DISTINCT
-            COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
+            COALESCE(
+              w.user_id::text,
+              CASE 
+                WHEN ch.chain = 'solana' THEN ch.address
+                ELSE LOWER(ch.address)
+              END
+            ) as holder_id
           FROM collection_holders ch
-          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
+          LEFT JOIN wallets w ON 
+            CASE
+              WHEN ch.chain = 'solana' THEN w.address = ch.address
+              ELSE LOWER(w.address) = LOWER(ch.address)
+            END
+            AND w.chain::text = ch.chain
           WHERE ch.collection_id IN (${sql.join(userCollectionIds.map(id => sql`${id}`), sql`, `)})
         ),
         all_holder_groups AS (
           SELECT 
             ch.collection_id,
-            COALESCE(w.user_id::text, LOWER(ch.address)) as holder_id
+            COALESCE(
+              w.user_id::text,
+              CASE 
+                WHEN ch.chain = 'solana' THEN ch.address
+                ELSE LOWER(ch.address)
+              END
+            ) as holder_id
           FROM collection_holders ch
-          LEFT JOIN wallets w ON LOWER(w.address) = LOWER(ch.address) AND w.chain::text = ch.chain
+          LEFT JOIN wallets w ON 
+            CASE
+              WHEN ch.chain = 'solana' THEN w.address = ch.address
+              ELSE LOWER(w.address) = LOWER(ch.address)
+            END
+            AND w.chain::text = ch.chain
         )
         SELECT 
           c.id,

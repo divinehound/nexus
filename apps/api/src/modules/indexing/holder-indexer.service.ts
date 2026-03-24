@@ -154,8 +154,9 @@ export class HolderIndexerService {
       }
 
       // Aggregate balances per owner
+      // Do not lowercase - addresses are case-sensitive for Solana
       for (const owner of data.owners) {
-        const address = owner.ownerAddress.toLowerCase();
+        const address = owner.ownerAddress;
         const totalBalance = owner.tokenBalances.reduce(
           (sum, tb) => sum + parseInt(tb.balance || '1'),
           0,
@@ -307,7 +308,8 @@ export class HolderIndexerService {
     address: string,
     tokenCount: number,
   ) {
-    const normalizedAddress = address.toLowerCase();
+    // Solana addresses are case-sensitive; EVM addresses should be lowercased
+    const normalizedAddress = chain === 'solana' ? address : address.toLowerCase();
 
     await this.db
       .insert(collectionHolders)
