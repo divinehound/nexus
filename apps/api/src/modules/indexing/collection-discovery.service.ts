@@ -124,14 +124,28 @@ export class CollectionDiscoveryService {
     
     for (const [key, contract] of discoveredContracts) {
       try {
-        // Rate limit: wait 100ms between API calls to avoid 429s
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Rate limit: wait 250ms between API calls to avoid 429s
+        await new Promise(resolve => setTimeout(resolve, 250));
         
-        // Fetch metadata
-        const metadata = await this.blockchainLookup.getContractMetadata(
-          contract.chain,
-          contract.address
-        );
+        // Fetch metadata with retry on 429
+        let metadata = null;
+        let retries = 0;
+        while (retries < 3 && !metadata) {
+          try {
+            metadata = await this.blockchainLookup.getContractMetadata(
+              contract.chain,
+              contract.address
+            );
+          } catch (err: any) {
+            if (err?.message?.includes('429') && retries < 2) {
+              retries++;
+              this.logger.warn(`Rate limited, waiting 5s before retry ${retries}/3...`);
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            } else {
+              throw err; // Re-throw if not 429 or out of retries
+            }
+          }
+        }
 
         const name = metadata?.name || `${contract.chain}:${contract.address.slice(0, 8)}...`;
         

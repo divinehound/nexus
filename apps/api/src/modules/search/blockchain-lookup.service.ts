@@ -169,6 +169,9 @@ export class BlockchainLookupService {
         return null;
       }
 
+      // Small delay between API calls to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       // Get supply from getAssetsByGroup
       const supplyRes = await fetch(url, {
         method: 'POST',
