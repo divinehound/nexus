@@ -124,69 +124,12 @@ export class BlockchainLookupService {
   }
 
   /**
-   * Try Magic Eden API for Solana collection metadata (more reliable than Helius)
-   */
-  private async lookupSolanaMagicEden(
-    collectionAddress: string,
-  ): Promise<BlockchainContractInfo | null> {
-    try {
-      // Magic Eden uses collection symbols, but also accepts mint addresses for some endpoints
-      // Try to get collection by treating the address as a collection symbol
-      const statsResponse = await fetch(
-        `https://api-mainnet.magiceden.dev/v2/collections/${collectionAddress}/stats`,
-        { headers: { 'Accept': 'application/json' } }
-      );
-
-      if (statsResponse.ok) {
-        const stats = await statsResponse.json();
-        
-        // Get full collection metadata
-        const collectionResponse = await fetch(
-          `https://api-mainnet.magiceden.dev/v2/collections/${collectionAddress}`,
-          { headers: { 'Accept': 'application/json' } }
-        );
-        
-        if (collectionResponse.ok) {
-          const collection = await collectionResponse.json();
-          
-          this.logger.log(`[Magic Eden] Found: ${collection.name}, supply: ${stats.listedCount || 'unknown'}`);
-          
-          return {
-            contractAddress: collectionAddress,
-            chain: Chain.SOLANA,
-            name: collection.name,
-            symbol: collection.symbol || '',
-            totalSupply: stats.volumeAll || stats.listedCount || null,
-            tokenType: 'spl',
-            imageUrl: collection.image || null,
-            deployerAddress: null,
-          };
-        }
-      }
-    } catch (err) {
-      this.logger.debug(`[Magic Eden] Lookup failed: ${err}`);
-    }
-    
-    return null;
-  }
-
-  /**
    * Query Helius DAS API for Solana collection metadata.
-   * First tries getAssetsByGroup to get collection info,
-   * falls back to getAsset for single mint lookup.
+   * Uses getAsset with showCollectionMetadata for name, getAssetsByGroup for supply.
    */
   private async lookupSolana(
     collectionAddress: string,
   ): Promise<BlockchainContractInfo | null> {
-    // Try Magic Eden first (more reliable for Solana collections)
-    this.logger.log(`[Solana Lookup] Trying Magic Eden for ${collectionAddress}`);
-    const magicEdenResult = await this.lookupSolanaMagicEden(collectionAddress);
-    if (magicEdenResult) {
-      return magicEdenResult;
-    }
-    
-    this.logger.log(`[Solana Lookup] Magic Eden failed, falling back to Helius`);
-    
     const apiKey = this.config.get<string>('helius.apiKey');
     if (!apiKey) {
       this.logger.warn('HELIUS_API_KEY not set — skipping Solana lookup');
@@ -196,95 +139,38 @@ export class BlockchainLookupService {
     const url = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
 
     try {
-      // Try searchAssets first (works with both old and new collection standards)
-      const searchRes = await fetch(url, {
+      // Get collection metadata with showCollectionMetadata option
+      const metadataRes = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jsonrpc: '2.0',
           id: 1,
-          method: 'searchAssets',
+          method: 'getAsset',
           params: {
-            grouping: ['collection', collectionAddress],
-            page: 1,
-            limit: 1,
+            id: collectionAddress,
+            displayOptions: {
+              showCollectionMetadata: true,
+            },
           },
         }),
       });
 
-      this.logger.log(`[Solana Lookup] Checking collection ${collectionAddress} via searchAssets`);
-
-      if (searchRes.ok) {
-        const searchBody = await searchRes.json();
-        const items = searchBody.result?.items;
-        const total = searchBody.result?.total;
-        
-        this.logger.log(`[Solana Lookup] searchAssets response: ${items?.length || 0} items, total: ${total || 'null'}`);
-        
-        if (items && items.length > 0 && total && total > 1) {
-          const firstItem = items[0];
-          
-          // searchAssets doesn't give us collection-level metadata
-          // Need to query the collection mint itself via getAsset
-          this.logger.log(`[Solana Lookup] searchAssets found ${total} items, querying collection mint directly for metadata`);
-          
-          const collectionAssetRes = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              jsonrpc: '2.0',
-              id: 1,
-              method: 'getAsset',
-              params: { id: collectionAddress },
-            }),
-          });
-          
-          if (collectionAssetRes.ok) {
-            const collectionAssetBody = await collectionAssetRes.json();
-            const collectionAsset = collectionAssetBody.result;
-            
-            this.logger.log(`[Solana Lookup] getAsset response for collection mint: ${JSON.stringify({
-              hasResult: !!collectionAsset,
-              hasContent: !!collectionAsset?.content,
-              hasMetadata: !!collectionAsset?.content?.metadata,
-              name: collectionAsset?.content?.metadata?.name,
-            })}`);
-            
-            if (collectionAsset?.content?.metadata?.name) {
-              this.logger.log(`[Solana Lookup] Collection mint metadata: ${collectionAsset.content.metadata.name}`);
-              
-              return {
-                contractAddress: collectionAddress,
-                chain: Chain.SOLANA,
-                name: collectionAsset.content.metadata.name,
-                symbol: collectionAsset.content.metadata.symbol || '',
-                totalSupply: total,
-                tokenType: 'spl',
-                imageUrl: collectionAsset.content?.links?.image || collectionAsset.content?.files?.[0]?.uri || firstItem.content?.links?.image || null,
-                deployerAddress: collectionAsset.authorities?.[0]?.address || null,
-              };
-            }
-          } else {
-            this.logger.warn(`[Solana Lookup] getAsset for collection mint failed with status ${collectionAssetRes.status}`);
-          }
-          
-          // Fallback if collection mint query failed
-          this.logger.warn(`[Solana Lookup] Could not get collection mint metadata, using first NFT data`);
-          return {
-            contractAddress: collectionAddress,
-            chain: Chain.SOLANA,
-            name: firstItem.content?.metadata?.name || `solana:${collectionAddress.slice(0, 8)}`,
-            symbol: firstItem.content?.metadata?.symbol || '',
-            totalSupply: total,
-            tokenType: 'spl',
-            imageUrl: firstItem.content?.links?.image || firstItem.content?.files?.[0]?.uri || null,
-            deployerAddress: firstItem.authorities?.[0]?.address || null,
-          };
-        }
+      if (!metadataRes.ok) {
+        this.logger.warn(`[Solana Lookup] getAsset failed with status ${metadataRes.status}`);
+        return null;
       }
 
-      // Try getAssetsByGroup as fallback (for certified collections)
-      const groupRes = await fetch(url, {
+      const metadataBody = await metadataRes.json();
+      const asset = metadataBody.result;
+
+      if (!asset?.content?.metadata?.name) {
+        this.logger.warn(`[Solana Lookup] No collection name found for ${collectionAddress}`);
+        return null;
+      }
+
+      // Get supply from getAssetsByGroup
+      const supplyRes = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -300,117 +186,25 @@ export class BlockchainLookupService {
         }),
       });
 
-      this.logger.log(`[Solana Lookup] Trying getAssetsByGroup as fallback`);
-
-      if (groupRes.ok) {
-        const groupBody = await groupRes.json();
-        const items = groupBody.result?.items;
-        const total = groupBody.result?.total;
-        
-        this.logger.log(`[Solana Lookup] getAssetsByGroup response: ${items?.length || 0} items, total: ${total || 'null'}`);
-        
-        if (items && items.length > 0) {
-          const firstItem = items[0];
-          
-          // Query collection mint directly for proper metadata
-          this.logger.log(`[Solana Lookup] getAssetsByGroup found ${total || 'unknown'} items, querying collection mint for metadata`);
-          
-          const collectionAssetRes = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              jsonrpc: '2.0',
-              id: 1,
-              method: 'getAsset',
-              params: { id: collectionAddress },
-            }),
-          });
-          
-          if (collectionAssetRes.ok) {
-            const collectionAssetBody = await collectionAssetRes.json();
-            const collectionAsset = collectionAssetBody.result;
-            
-            if (collectionAsset?.content?.metadata?.name) {
-              this.logger.log(`[Solana Lookup] Collection mint metadata: ${collectionAsset.content.metadata.name}`);
-              
-              return {
-                contractAddress: collectionAddress,
-                chain: Chain.SOLANA,
-                name: collectionAsset.content.metadata.name,
-                symbol: collectionAsset.content.metadata.symbol || '',
-                totalSupply: total || null,
-                tokenType: 'spl',
-                imageUrl: collectionAsset.content?.links?.image || collectionAsset.content?.files?.[0]?.uri || firstItem.content?.links?.image || null,
-                deployerAddress: collectionAsset.authorities?.[0]?.address || null,
-              };
-            }
-          }
-          
-          // Fallback to first NFT data
-          this.logger.warn(`[Solana Lookup] Could not get collection mint metadata, using first NFT data`);
-          return {
-            contractAddress: collectionAddress,
-            chain: Chain.SOLANA,
-            name: firstItem.content?.metadata?.name || `solana:${collectionAddress.slice(0, 8)}`,
-            symbol: firstItem.content?.metadata?.symbol || '',
-            totalSupply: total || null,
-            tokenType: 'spl',
-            imageUrl: firstItem.content?.links?.image || firstItem.content?.files?.[0]?.uri || null,
-            deployerAddress: firstItem.authorities?.[0]?.address || null,
-          };
-        } else {
-          this.logger.warn(`[Solana Lookup] getAssetsByGroup returned no items for ${collectionAddress}`);
-        }
-      } else {
-        this.logger.warn(`[Solana Lookup] getAssetsByGroup failed with status ${groupRes.status}`);
+      let totalSupply = null;
+      if (supplyRes.ok) {
+        const supplyBody = await supplyRes.json();
+        totalSupply = supplyBody.result?.total || null;
       }
 
-      // Fall back to getAsset (treats address as single mint)
-      this.logger.log(`[Solana Lookup] Falling back to getAsset for ${collectionAddress}`);
+      const name = asset.content.metadata.name;
       
-      const assetRes = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getAsset',
-          params: { id: collectionAddress },
-        }),
-      });
-
-      if (!assetRes.ok) {
-        this.logger.warn(`[Solana Lookup] getAsset failed with status ${assetRes.status}`);
-        return null;
-      }
-
-      const assetBody = (await assetRes.json()) as HeliusGetAssetResponse;
-      const asset = assetBody.result;
-      if (!asset) {
-        this.logger.warn(`[Solana Lookup] getAsset returned no result for ${collectionAddress}`);
-        return null;
-      }
-
-      // If this is part of a collection, try to get collection name
-      const collectionGroup = asset.grouping?.find((g: any) => g.group_key === 'collection');
-      const collectionMint = collectionGroup?.group_value;
-      const supply = asset.supply?.print_max_supply ?? null;
-      
-      this.logger.log(`[Solana Lookup] getAsset fallback: name=${asset.content?.metadata?.name}, supply=${supply}, is part of collection=${!!collectionGroup}`);
-      
-      if (collectionGroup?.group_value) {
-        this.logger.warn(`[Solana Lookup] Address ${collectionAddress} is an NFT mint, not a collection. The collection address is: ${collectionGroup.group_value}. Use that address instead for accurate supply.`);
-      }
+      this.logger.log(`[Solana Lookup] Found: ${name}, supply: ${totalSupply || 'unknown'}`);
 
       return {
         contractAddress: collectionAddress,
         chain: Chain.SOLANA,
-        name: asset.content?.metadata?.name || `solana:${collectionAddress.slice(0, 8)}`,
+        name,
         symbol: asset.content?.metadata?.symbol || '',
-        totalSupply: supply,
+        totalSupply,
         tokenType: 'spl',
         imageUrl: asset.content?.links?.image || asset.content?.files?.[0]?.uri || null,
-        deployerAddress: asset.authorities?.[0]?.address ?? null,
+        deployerAddress: asset.authorities?.[0]?.address || null,
       };
     } catch (err) {
       this.logger.error(`Solana blockchain lookup failed for ${collectionAddress}: ${err}`);
