@@ -222,6 +222,10 @@ export class BlockchainLookupService {
       const supply = asset.supply?.print_max_supply ?? null;
       
       this.logger.log(`[Solana Lookup] getAsset fallback: name=${asset.content?.metadata?.name}, supply=${supply}, is part of collection=${!!collectionGroup}`);
+      
+      if (collectionGroup?.group_value) {
+        this.logger.warn(`[Solana Lookup] Address ${collectionAddress} is an NFT mint, not a collection. The collection address is: ${collectionGroup.group_value}. Use that address instead for accurate supply.`);
+      }
 
       return {
         contractAddress: collectionAddress,
