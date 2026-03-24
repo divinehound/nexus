@@ -80,9 +80,11 @@ function DiscoverContent() {
           Explore how NFT communities are connected through shared collectors
         </p>
         <NetworkGraphVisualization 
-          strategy="connected-traverse"
+          strategy="user-network"
           maxNodes={40} 
-          minSharedHolders={5} 
+          minSharedHolders={3}
+          userAddress={address}
+          userChain="ethereum"
         />
       </section>
 

@@ -17,11 +17,13 @@ export class CollectionsController {
   @Get('network/graph')
   @ApiOperation({ summary: 'Get collection network graph data for visualization' })
   getNetworkGraph(
-    @Query('strategy') strategy?: 'top-collections' | 'connected-traverse',
+    @Query('strategy') strategy?: 'top-collections' | 'connected-traverse' | 'user-network',
     @Query('minSharedHolders') minSharedHolders?: string,
     @Query('maxNodes') maxNodes?: string,
     @Query('chains') chains?: string,
     @Query('focusCollectionId') focusCollectionId?: string,
+    @Query('userAddress') userAddress?: string,
+    @Query('userChain') userChain?: string,
   ) {
     return this.collectionsService.getNetworkGraph({
       strategy,
@@ -29,6 +31,8 @@ export class CollectionsController {
       maxNodes: maxNodes ? parseInt(maxNodes) : undefined,
       chains: chains ? chains.split(',') : undefined,
       focusCollectionId,
+      userAddress,
+      userChain,
     });
   }
 

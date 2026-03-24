@@ -538,11 +538,13 @@ export interface NetworkGraph {
 }
 
 export function getNetworkGraph(options?: {
-  strategy?: 'top-collections' | 'connected-traverse';
+  strategy?: 'top-collections' | 'connected-traverse' | 'user-network';
   minSharedHolders?: number;
   maxNodes?: number;
   chains?: string[];
   focusCollectionId?: string;
+  userAddress?: string;
+  userChain?: string;
 }): Promise<NetworkGraph> {
   const params = new URLSearchParams();
   if (options?.strategy) params.set('strategy', options.strategy);
@@ -550,6 +552,8 @@ export function getNetworkGraph(options?: {
   if (options?.maxNodes) params.set('maxNodes', options.maxNodes.toString());
   if (options?.chains?.length) params.set('chains', options.chains.join(','));
   if (options?.focusCollectionId) params.set('focusCollectionId', options.focusCollectionId);
+  if (options?.userAddress) params.set('userAddress', options.userAddress);
+  if (options?.userChain) params.set('userChain', options.userChain);
   
   return apiFetch<NetworkGraph>(`/collections/network/graph?${params.toString()}`);
 }

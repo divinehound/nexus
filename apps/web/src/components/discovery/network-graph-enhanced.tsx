@@ -6,12 +6,14 @@ import Link from 'next/link';
 import * as d3 from 'd3';
 
 interface NetworkGraphProps {
-  strategy?: 'top-collections' | 'connected-traverse';
+  strategy?: 'top-collections' | 'connected-traverse' | 'user-network';
   maxNodes?: number;
   minSharedHolders?: number;
   chains?: string[];
   height?: number;
   initialFocusedNodeId?: string;
+  userAddress?: string;
+  userChain?: string;
 }
 
 const CHAIN_COLORS: Record<string, string> = {
@@ -45,6 +47,8 @@ export function NetworkGraphVisualization({
   chains,
   height = 600,
   initialFocusedNodeId,
+  userAddress,
+  userChain,
 }: NetworkGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const simulationRef = useRef<d3.Simulation<SimulationNode, SimulationLink> | null>(null);
@@ -61,7 +65,7 @@ export function NetworkGraphVisualization({
 
   useEffect(() => {
     loadData();
-  }, [strategy, maxNodes, minSharedHolders, chains, initialFocusedNodeId]);
+  }, [strategy, maxNodes, minSharedHolders, chains, initialFocusedNodeId, userAddress, userChain]);
 
   const loadData = async () => {
     setLoading(true);
@@ -73,6 +77,8 @@ export function NetworkGraphVisualization({
         minSharedHolders, 
         chains,
         focusCollectionId: initialFocusedNodeId,
+        userAddress,
+        userChain,
       });
       setData(graph);
     } catch (err: any) {
@@ -192,8 +198,16 @@ export function NetworkGraphVisualization({
     node.append('circle')
       .attr('r', d => Math.sqrt(d.holderCount || 0) / 3 + 12)
       .attr('fill', d => getChainColor(d.chain))
-      .attr('stroke', d => expandedNodes.has(d.id) ? '#10b981' : '#1f2937')
-      .attr('stroke-width', d => focusedNode === d.id ? 4 : 2)
+      .attr('stroke', d => {
+        if ((d as any).isUserHolding) return '#fbbf24'; // Gold for user holdings
+        if (expandedNodes.has(d.id)) return '#10b981'; // Green for expanded
+        return '#1f2937'; // Dark gray default
+      })
+      .attr('stroke-width', d => {
+        if ((d as any).isUserHolding) return 3;
+        if (focusedNode === d.id) return 4;
+        return 2;
+      })
       .attr('opacity', d => {
         if (!focusedNode) return 1;
         if (d.id === focusedNode) return 1;

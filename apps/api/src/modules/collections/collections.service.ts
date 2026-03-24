@@ -92,6 +92,36 @@ export class CollectionsService {
   }
 
   /**
+   * Get user's holdings as graph nodes
+   */
+  private async getUserHoldingsAsNodes(userAddress: string, chain: string, limit: number = 10): Promise<any[]> {
+    const normalizedAddress = chain === 'solana' ? userAddress : userAddress.toLowerCase();
+    
+    const holdings = await this.db.execute(
+      sql`
+        SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, c.holder_count
+        FROM collection_holders ch
+        INNER JOIN collections c ON c.id = ch.collection_id
+        WHERE ch.address = ${normalizedAddress}
+          AND ch.chain = ${chain}
+          AND c.is_spam = false
+        ORDER BY c.holder_count DESC
+        LIMIT ${limit}
+      `
+    );
+
+    return holdings.map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      chain: row.chain,
+      contractAddress: row.contract_address,
+      imageUrl: row.image_url,
+      holderCount: parseInt(row.holder_count || '0'),
+      isUserHolding: true, // Mark as user's collection
+    }));
+  }
+
+  /**
    * Build network graph via BFS traversal from seed nodes
    */
   private async buildConnectedTraverse(options: {
@@ -475,20 +505,26 @@ export class CollectionsService {
    * Returns nodes (collections) and edges (shared holders)
    */
   async getNetworkGraph(options?: {
-    strategy?: 'top-collections' | 'connected-traverse';
+    strategy?: 'top-collections' | 'connected-traverse' | 'user-network';
     minSharedHolders?: number;
     maxNodes?: number;
     chains?: string[];
     focusCollectionId?: string;
+    userAddress?: string;
+    userChain?: string;
   }) {
     const strategy = options?.strategy || 'connected-traverse';
     const minShared = options?.minSharedHolders || 5;
     const maxNodes = options?.maxNodes || 50;
     const chains = options?.chains || [];
     const focusId = options?.focusCollectionId;
+    const userAddress = options?.userAddress;
+    const userChain = options?.userChain;
 
-    // Check cache first
-    const cacheKey = this.getNetworkGraphCacheKey({ strategy, chains, maxNodes, minSharedHolders: minShared, focusCollectionId: focusId });
+    // Check cache first (skip cache for user-network since it's personalized)
+    const cacheKey = strategy === 'user-network' 
+      ? `user-network_${userAddress}_${minShared}_${maxNodes}`
+      : this.getNetworkGraphCacheKey({ strategy, chains, maxNodes, minSharedHolders: minShared, focusCollectionId: focusId });
     const cached = this.getCachedNetworkGraph(cacheKey);
     if (cached) {
       return cached;
@@ -498,7 +534,42 @@ export class CollectionsService {
       let nodes: any[];
       let collectionMap: Map<string, any> | undefined;
       
-      if (focusId) {
+      if (strategy === 'user-network' && userAddress && userChain) {
+        // User network mode: start with user's holdings, expand from there
+        const userHoldings = await this.getUserHoldingsAsNodes(userAddress, userChain, 10);
+        
+        if (userHoldings.length === 0) {
+          return { nodes: [], edges: [] };
+        }
+
+        // Get overlapping collections for each holding
+        const allOverlaps = await Promise.all(
+          userHoldings.slice(0, 5).map(h => // Top 5 holdings to keep it manageable
+            this.getRelatedCollections(h.id, Math.floor(maxNodes / 5))
+          )
+        );
+
+        // Flatten and dedupe
+        const overlapMap = new Map<string, any>();
+        userHoldings.forEach(h => overlapMap.set(h.id, h)); // Add user holdings first
+        
+        allOverlaps.forEach(overlaps => {
+          overlaps.forEach(o => {
+            if (!overlapMap.has(o.id) && o.sharedHolders >= minShared) {
+              overlapMap.set(o.id, {
+                id: o.id,
+                name: o.name,
+                chain: o.chain,
+                contractAddress: o.contractAddress,
+                imageUrl: o.imageUrl,
+                holderCount: o.totalHolders,
+              });
+            }
+          });
+        });
+
+        nodes = Array.from(overlapMap.values());
+      } else if (focusId) {
         // Focus mode: get the focused collection + its related collections
         const focusedCollection = await this.db.query.collections.findFirst({
           where: eq(collections.id, focusId),
