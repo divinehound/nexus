@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
 import { apiFetch } from '@/lib/api';
-import { NetworkGraphVisualization } from '@/components/discovery/network-graph';
+import { NetworkGraphVisualization } from '@/components/discovery/network-graph-enhanced';
 import { PersonalizedRecommendations } from '@/components/discovery/recommendations';
 
 interface Recommendation {

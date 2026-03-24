@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { RelatedCollections } from './related-collections';
-import { NetworkGraphVisualization } from '../discovery/network-graph';
+import { NetworkGraphVisualization } from '../discovery/network-graph-enhanced';
 
 interface CollectionTabsProps {
   collectionId: string;

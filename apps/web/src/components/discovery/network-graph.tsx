@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { getNetworkGraph, getCollectionConnections, type NetworkGraph, type NetworkGraphNode } from '@/lib/api';
 import Link from 'next/link';
+import * as d3 from 'd3';
 
 interface NetworkGraphProps {
   strategy?: 'top-collections' | 'connected-traverse';
