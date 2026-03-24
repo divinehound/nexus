@@ -157,6 +157,10 @@ export class BlockchainLookupService {
       });
 
       if (!metadataRes.ok) {
+        if (metadataRes.status === 429) {
+          this.logger.warn(`[Solana Lookup] Rate limited on getAsset for ${collectionAddress}`);
+          throw new Error('Rate limit hit (429)');
+        }
         this.logger.warn(`[Solana Lookup] getAsset failed with status ${metadataRes.status}`);
         return null;
       }

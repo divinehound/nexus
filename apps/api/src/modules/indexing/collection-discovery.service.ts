@@ -147,7 +147,13 @@ export class CollectionDiscoveryService {
           }
         }
 
-        const name = metadata?.name || `${contract.chain}:${contract.address.slice(0, 8)}...`;
+        // Skip if no metadata or no name (invalid/fake collection)
+        if (!metadata?.name) {
+          this.logger.debug(`Skipping ${contract.chain}:${contract.address} - no collection name found`);
+          continue;
+        }
+
+        const name = metadata.name;
         
         // Check for spam BEFORE adding to database
         const spamCheck = await this.spamChecker.checkCollection(contract.chain, contract.address, name);
