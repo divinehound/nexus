@@ -1166,4 +1166,23 @@ export class AdminService {
       total: collectionIds.length,
     };
   }
+
+  async bulkEnrichCollections(collectionIds: string[]) {
+    const results = { success: 0, failed: 0, errors: [] as string[] };
+
+    for (const collectionId of collectionIds) {
+      try {
+        await this.enrichCollection(collectionId);
+        results.success++;
+      } catch (err: any) {
+        results.failed++;
+        results.errors.push(`${collectionId}: ${err?.message || 'unknown error'}`);
+      }
+    }
+
+    return {
+      ...results,
+      total: collectionIds.length,
+    };
+  }
 }

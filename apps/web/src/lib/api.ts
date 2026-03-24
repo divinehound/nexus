@@ -330,6 +330,17 @@ export function adminBulkMarkSpam(collectionIds: string[], token: string) {
   );
 }
 
+export function adminBulkEnrich(collectionIds: string[], token: string) {
+  return apiFetch<{ success: number; failed: number; total: number; errors: string[] }>(
+    `/admin/collections/bulk-enrich`,
+    {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ collectionIds }),
+    }
+  );
+}
+
 export type IndexingJobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface AdminIndexingJobListItem {

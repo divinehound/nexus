@@ -16,6 +16,7 @@ import {
   adminBulkMarkSpam,
   adminBulkVerify,
   adminBulkLinkProject,
+  adminBulkEnrich,
   apiFetch,
   type CollectionMappingStatus,
   type CollectionVerificationStatus,
@@ -663,6 +664,39 @@ export default function AdminCollectionsPage() {
     });
   };
 
+  const handleBulkEnrich = async () => {
+    if (!accessToken || selectedIds.size === 0) return;
+
+    setConfirmModal({
+      isOpen: true,
+      title: 'Refresh Metadata',
+      message: `Re-fetch blockchain metadata for ${selectedIds.size} collection(s)?`,
+      confirmText: 'Refresh',
+      variant: 'default',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setBulkActionInProgress(true);
+        
+        try {
+          const result = await adminBulkEnrich(Array.from(selectedIds), accessToken);
+          
+          toast.success(`Refreshed ${result.success} collections`);
+          if (result.failed > 0) {
+            toast.error(`${result.failed} failed: ${result.errors.slice(0, 3).join(', ')}`);
+          }
+          
+          setSelectedIds(new Set());
+          await fetchData();
+        } catch (err: any) {
+          toast.error(err?.message || 'Bulk enrich failed');
+        } finally {
+          setBulkActionInProgress(false);
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        }
+      },
+    });
+  };
+
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -876,6 +910,14 @@ export default function AdminCollectionsPage() {
                 className="rounded bg-green-700 px-3 py-1 text-sm font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 ✓ Verify
+              </button>
+
+              <button
+                onClick={handleBulkEnrich}
+                disabled={bulkActionInProgress}
+                className="rounded bg-blue-600 px-3 py-1 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                🔄 Refresh Metadata
               </button>
 
               <button

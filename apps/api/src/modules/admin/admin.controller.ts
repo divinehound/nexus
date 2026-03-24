@@ -320,6 +320,12 @@ export class AdminController {
     return this.adminService.enrichCollection(id);
   }
 
+  @Post('collections/bulk-enrich')
+  @ApiOperation({ summary: 'Re-fetch blockchain metadata for multiple collections' })
+  bulkEnrichCollections(@Body() body: { collectionIds: string[] }) {
+    return this.adminService.bulkEnrichCollections(body.collectionIds);
+  }
+
   @Post('collections/:id/discover')
   @ApiOperation({ summary: 'Discover new collections from this collection\'s holders (async)' })
   discoverCollections(
