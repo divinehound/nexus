@@ -88,7 +88,7 @@ export class HolderIndexerService {
       this.logger.log(`[Supply Calculation] Will set supply to: ${newSupply}`);
       
       // Update collection status
-      await this.db
+      const [updated] = await this.db
         .update(collections)
         .set({
           holderCount: holders.length,
@@ -98,8 +98,10 @@ export class HolderIndexerService {
           lastIndexFinishedAt: new Date(),
           lastIndexStatus: 'success',
         })
-        .where(eq(collections.id, collectionId));
+        .where(eq(collections.id, collectionId))
+        .returning();
 
+      this.logger.log(`[Supply Calculation] UPDATE executed. Returned supply: ${updated?.supply}`);
       this.logger.log(`Completed indexing ${indexed} holders for collection ${collectionId}`);
 
       return { success: true, holdersIndexed: indexed };
