@@ -33,12 +33,13 @@ WORKDIR /app
 COPY --from=build /app/out .
 COPY --from=build /app/apps/api/dist ./dist
 
-# Copy migration files (needed by runMigrations)
-# Path: node_modules/@nexus/database/dist/../drizzle
-COPY --from=build /app/packages/database/drizzle ./node_modules/@nexus/database/drizzle
+# Copy migration files from source (pnpm deploy doesn't include them)
+# The resolved path in production will be node_modules/.pnpm/@nexus+database@.../drizzle
+# But we need to copy them to where migrate.ts can find them
+COPY --from=build /app/packages/database/drizzle ./drizzle-migrations
 
 # Verify migrations were copied
-RUN ls -la ./node_modules/@nexus/database/drizzle/ && echo "✅ Migration files copied"
+RUN ls -la ./drizzle-migrations/ && echo "✅ Migration files: $(ls ./drizzle-migrations/*.sql | wc -l) found"
 
 ENV NODE_ENV=production
 EXPOSE 4000

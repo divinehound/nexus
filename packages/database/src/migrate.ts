@@ -6,9 +6,15 @@ import postgres from 'postgres';
 export async function runMigrations(connectionString: string) {
   const sql = postgres(connectionString, { max: 1 });
   const db = drizzle(sql);
-  const migrationsFolder = path.resolve(__dirname, '../drizzle');
+  
+  // In production, migrations are copied to /app/drizzle-migrations
+  // In development, they're in ../drizzle
+  const migrationsFolder = process.env.NODE_ENV === 'production' 
+    ? path.resolve(process.cwd(), 'drizzle-migrations')
+    : path.resolve(__dirname, '../drizzle');
   
   console.log(`📁 Migrations folder: ${migrationsFolder}`);
+  console.log(`📁 Files in folder: ${require('fs').readdirSync(migrationsFolder).join(', ')}`);
   
   try {
     await migrate(db, { migrationsFolder });
