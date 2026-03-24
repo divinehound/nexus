@@ -33,6 +33,10 @@ WORKDIR /app
 COPY --from=build /app/out .
 COPY --from=build /app/apps/api/dist ./dist
 
+# Copy migration files (needed by runMigrations)
+# Path: node_modules/@nexus/database/dist/../drizzle
+COPY --from=build /app/packages/database/drizzle ./node_modules/@nexus/database/drizzle
+
 ENV NODE_ENV=production
 EXPOSE 4000
 CMD ["node", "dist/main"]
