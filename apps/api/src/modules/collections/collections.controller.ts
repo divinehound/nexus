@@ -56,6 +56,19 @@ export class CollectionsController {
     return this.collectionsService.getRelatedCollections(id, limit ? parseInt(limit) : 10);
   }
 
+  @Get(':id/connections')
+  @ApiOperation({ summary: 'Get network connections for a specific collection (for incremental graph building)' })
+  getCollectionConnections(
+    @Param('id') id: string,
+    @Query('minSharedHolders') minSharedHolders?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.collectionsService.getCollectionConnections(id, {
+      minSharedHolders: minSharedHolders ? parseInt(minSharedHolders) : 5,
+      limit: limit ? parseInt(limit) : 10,
+    });
+  }
+
   @Get(':chain/:contract')
   @ApiOperation({ summary: 'Get collection by chain and contract address' })
   getByChainAndContract(

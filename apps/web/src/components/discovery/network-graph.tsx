@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { getNetworkGraph, type NetworkGraph, type NetworkGraphNode } from '@/lib/api';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { getNetworkGraph, getCollectionConnections, type NetworkGraph, type NetworkGraphNode } from '@/lib/api';
 import Link from 'next/link';
 
 interface NetworkGraphProps {
@@ -45,6 +45,8 @@ export function NetworkGraphVisualization({
   const [error, setError] = useState<string | null>(null);
   const [focusedNode, setFocusedNode] = useState<string | null>(initialFocusedNodeId || null);
   const [navigationStack, setNavigationStack] = useState<string[]>([]);
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  const [expandingNode, setExpandingNode] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -69,10 +71,54 @@ export function NetworkGraphVisualization({
     }
   };
 
+  const expandNode = useCallback(async (nodeId: string) => {
+    if (expandedNodes.has(nodeId) || expandingNode === nodeId) {
+      return; // Already expanded or currently expanding
+    }
+
+    setExpandingNode(nodeId);
+    
+    try {
+      const { nodes: newNodes, edges: newEdges } = await getCollectionConnections(nodeId, {
+        minSharedHolders,
+        limit: 10,
+      });
+
+      setData(prevData => {
+        if (!prevData) return { nodes: newNodes, edges: newEdges };
+
+        // Merge nodes (avoid duplicates)
+        const existingNodeIds = new Set(prevData.nodes.map(n => n.id));
+        const nodesToAdd = newNodes.filter(n => !existingNodeIds.has(n.id));
+
+        // Merge edges (avoid duplicates)
+        const existingEdgeKeys = new Set(
+          prevData.edges.map(e => `${e.source}-${e.target}`)
+        );
+        const edgesToAdd = newEdges.filter(e => {
+          const key = `${e.source}-${e.target}`;
+          const reverseKey = `${e.target}-${e.source}`;
+          return !existingEdgeKeys.has(key) && !existingEdgeKeys.has(reverseKey);
+        });
+
+        return {
+          nodes: [...prevData.nodes, ...nodesToAdd],
+          edges: [...prevData.edges, ...edgesToAdd],
+        };
+      });
+
+      setExpandedNodes(prev => new Set([...prev, nodeId]));
+    } catch (err) {
+      console.error('Failed to expand node:', err);
+    } finally {
+      setExpandingNode(null);
+    }
+  }, [minSharedHolders, expandedNodes, expandingNode]);
+
   const handleNodeClick = (nodeId: string) => {
     if (focusedNode === nodeId) {
-      // Double-click behavior: go back
-      handleGoBack();
+      // Double-click behavior: expand connections
+      expandNode(nodeId);
     } else {
       // First click: zoom to node
       if (focusedNode) {

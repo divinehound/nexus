@@ -666,6 +666,132 @@ export class CollectionsService {
   }
 
   /**
+   * Get connections for a specific collection (for incremental graph building)
+   * Returns the source collection + connected collections + edges between them
+   */
+  async getCollectionConnections(collectionId: string, options?: {
+    minSharedHolders?: number;
+    limit?: number;
+  }) {
+    const minShared = options?.minSharedHolders || 5;
+    const limit = options?.limit || 10;
+
+    try {
+      // Get the source collection
+      const sourceCollection = await this.db.query.collections.findFirst({
+        where: eq(collections.id, collectionId),
+      });
+
+      if (!sourceCollection) {
+        return { nodes: [], edges: [] };
+      }
+
+      // Get related collections
+      const related = await this.getRelatedCollections(collectionId, limit);
+      
+      // Filter by minSharedHolders
+      const filteredRelated = related.filter(r => r.sharedHolders >= minShared);
+
+      // Build nodes array (source + related)
+      const nodes = [
+        {
+          id: sourceCollection.id,
+          name: sourceCollection.name,
+          chain: sourceCollection.chain,
+          contractAddress: sourceCollection.contractAddress,
+          imageUrl: sourceCollection.imageUrl,
+          holderCount: sourceCollection.holderCount || 0,
+        },
+        ...filteredRelated.map(r => ({
+          id: r.id,
+          name: r.name,
+          chain: r.chain,
+          contractAddress: r.contractAddress,
+          imageUrl: r.imageUrl,
+          holderCount: r.totalHolders,
+        })),
+      ];
+
+      // Build edges array (source → related connections)
+      const edges = filteredRelated.map(r => {
+        const smallerCount = Math.min(sourceCollection.holderCount || 0, r.totalHolders);
+        const weight = smallerCount > 0 ? Math.min(r.sharedHolders / smallerCount, 1) : 0;
+        
+        return {
+          source: collectionId,
+          target: r.id,
+          sharedHolders: r.sharedHolders,
+          weight,
+          holderDataReliable: smallerCount >= r.sharedHolders && smallerCount > 0,
+        };
+      });
+
+      // Also check for edges BETWEEN the related collections (if they overlap with each other)
+      if (filteredRelated.length > 1) {
+        const relatedIds = filteredRelated.map(r => r.id);
+        const crossEdgesResult = await this.db.execute(
+          sql`
+            WITH holder_groups AS (
+              SELECT 
+                ch.collection_id,
+                COALESCE(
+                  w.user_id::text,
+                  CASE 
+                    WHEN ch.chain = 'solana' THEN ch.address
+                    ELSE LOWER(ch.address)
+                  END
+                ) as holder_id
+              FROM collection_holders ch
+              LEFT JOIN wallets w ON 
+                CASE
+                  WHEN ch.chain = 'solana' THEN w.address = ch.address
+                  ELSE LOWER(w.address) = LOWER(ch.address)
+                END
+                AND w.chain::text = ch.chain
+              WHERE ch.collection_id IN (${sql.join(relatedIds.map(id => sql`${id}`), sql`, `)})
+            )
+            SELECT 
+              a.collection_id as source_id,
+              b.collection_id as target_id,
+              COUNT(DISTINCT a.holder_id) as shared_holders
+            FROM holder_groups a
+            INNER JOIN holder_groups b 
+              ON a.holder_id = b.holder_id
+              AND a.collection_id < b.collection_id
+            GROUP BY a.collection_id, b.collection_id
+            HAVING COUNT(DISTINCT a.holder_id) >= ${minShared}
+          `,
+        );
+
+        // Add cross edges
+        for (const row of crossEdgesResult) {
+          const sharedHolders = parseInt(row.shared_holders as string);
+          const sourceNode = nodes.find(n => n.id === row.source_id);
+          const targetNode = nodes.find(n => n.id === row.target_id);
+          
+          if (sourceNode && targetNode) {
+            const smallerCount = Math.min(sourceNode.holderCount, targetNode.holderCount);
+            const weight = smallerCount > 0 ? Math.min(sharedHolders / smallerCount, 1) : 0;
+            
+            edges.push({
+              source: row.source_id as string,
+              target: row.target_id as string,
+              sharedHolders,
+              weight,
+              holderDataReliable: smallerCount >= sharedHolders && smallerCount > 0,
+            });
+          }
+        }
+      }
+
+      return { nodes, edges };
+    } catch (error) {
+      console.error('Error fetching collection connections:', error);
+      return { nodes: [], edges: [] };
+    }
+  }
+
+  /**
    * Get personalized collection recommendations based on user's holdings
    */
   async getRecommendations(userAddress: string, chain: string, options?: {

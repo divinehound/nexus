@@ -554,6 +554,17 @@ export function getNetworkGraph(options?: {
   return apiFetch<NetworkGraph>(`/collections/network/graph?${params.toString()}`);
 }
 
+export function getCollectionConnections(
+  collectionId: string,
+  options?: { minSharedHolders?: number; limit?: number }
+): Promise<NetworkGraph> {
+  const params = new URLSearchParams();
+  if (options?.minSharedHolders) params.set('minSharedHolders', options.minSharedHolders.toString());
+  if (options?.limit) params.set('limit', options.limit.toString());
+  
+  return apiFetch<NetworkGraph>(`/collections/${collectionId}/connections?${params.toString()}`);
+}
+
 export interface Recommendation {
   collection: {
     id: string;
