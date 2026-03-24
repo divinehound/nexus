@@ -37,6 +37,9 @@ COPY --from=build /app/apps/api/dist ./dist
 # Path: node_modules/@nexus/database/dist/../drizzle
 COPY --from=build /app/packages/database/drizzle ./node_modules/@nexus/database/drizzle
 
+# Verify migrations were copied
+RUN ls -la ./node_modules/@nexus/database/drizzle/ && echo "✅ Migration files copied"
+
 ENV NODE_ENV=production
 EXPOSE 4000
 CMD ["node", "dist/main"]

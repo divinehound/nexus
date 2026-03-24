@@ -8,7 +8,16 @@ async function bootstrap() {
   const shouldRunMigrations = (process.env.RUN_MIGRATIONS_ON_BOOT ?? 'true') === 'true';
 
   if (shouldRunMigrations && process.env.DATABASE_URL) {
-    await runMigrations(process.env.DATABASE_URL);
+    console.log('🔄 Running database migrations...');
+    try {
+      await runMigrations(process.env.DATABASE_URL);
+      console.log('✅ Database migrations completed successfully');
+    } catch (error) {
+      console.error('❌ Migration failed:', error);
+      throw error; // Don't start the server if migrations fail
+    }
+  } else {
+    console.log('⚠️  Skipping migrations:', { shouldRunMigrations, hasDatabaseUrl: !!process.env.DATABASE_URL });
   }
 
   const app = await NestFactory.create(AppModule);
