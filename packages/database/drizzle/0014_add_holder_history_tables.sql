@@ -2,7 +2,7 @@
 -- Enables community growth analytics, retention tracking, and timeline features
 
 -- Track individual holder changes over time
-CREATE TABLE collection_holder_history (
+CREATE TABLE IF NOT EXISTS collection_holder_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   collection_id UUID NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
   address TEXT NOT NULL,
@@ -13,15 +13,15 @@ CREATE TABLE collection_holder_history (
   CONSTRAINT collection_holder_history_unique UNIQUE (collection_id, address, snapshot_date)
 );
 
-CREATE INDEX idx_holder_history_collection ON collection_holder_history(collection_id, snapshot_date DESC);
-CREATE INDEX idx_holder_history_address ON collection_holder_history(address);
-CREATE INDEX idx_holder_history_event ON collection_holder_history(collection_id, event_type, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_holder_history_collection ON collection_holder_history(collection_id, snapshot_date DESC);
+CREATE INDEX IF NOT EXISTS idx_holder_history_address ON collection_holder_history(address);
+CREATE INDEX IF NOT EXISTS idx_holder_history_event ON collection_holder_history(collection_id, event_type, snapshot_date);
 
 COMMENT ON TABLE collection_holder_history IS 'Daily snapshots of holder token counts for historical analysis';
 COMMENT ON COLUMN collection_holder_history.event_type IS 'Change type: join (new holder), increase (bought more), decrease (sold some), exit (sold all)';
 
 -- Aggregate daily metrics per collection
-CREATE TABLE collection_daily_metrics (
+CREATE TABLE IF NOT EXISTS collection_daily_metrics (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   collection_id UUID NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
   metric_date DATE NOT NULL,
@@ -34,7 +34,7 @@ CREATE TABLE collection_daily_metrics (
   CONSTRAINT collection_daily_metrics_unique UNIQUE (collection_id, metric_date)
 );
 
-CREATE INDEX idx_daily_metrics_collection ON collection_daily_metrics(collection_id, metric_date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_metrics_collection ON collection_daily_metrics(collection_id, metric_date DESC);
 
 COMMENT ON TABLE collection_daily_metrics IS 'Daily aggregate metrics for collection holder analytics';
 COMMENT ON COLUMN collection_daily_metrics.new_holders IS 'Number of addresses that joined this day (first token received)';
