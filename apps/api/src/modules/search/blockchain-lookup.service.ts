@@ -160,10 +160,13 @@ export class BlockchainLookupService {
       if (groupRes.ok) {
         const groupBody = await groupRes.json();
         const items = groupBody.result?.items;
+        const total = groupBody.result?.total;
         
         if (items && items.length > 0) {
           const firstItem = items[0];
           const collectionInfo = firstItem.grouping?.find((g: any) => g.group_key === 'collection');
+          
+          this.logger.debug(`Solana collection ${collectionAddress}: found ${total || 'unknown'} total items`);
           
           // Use collection metadata from first item
           return {
@@ -171,11 +174,13 @@ export class BlockchainLookupService {
             chain: Chain.SOLANA,
             name: firstItem.content?.metadata?.name || collectionInfo?.group_value || `solana:${collectionAddress.slice(0, 8)}`,
             symbol: firstItem.content?.metadata?.symbol || '',
-            totalSupply: groupBody.result?.total || null,
+            totalSupply: total || null, // Use the total count from getAssetsByGroup
             tokenType: 'spl',
             imageUrl: firstItem.content?.links?.image || firstItem.content?.files?.[0]?.uri || null,
             deployerAddress: firstItem.authorities?.[0]?.address || null,
           };
+        } else {
+          this.logger.debug(`Solana collection ${collectionAddress}: getAssetsByGroup returned no items`);
         }
       }
 

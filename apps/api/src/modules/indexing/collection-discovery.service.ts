@@ -145,9 +145,9 @@ export class CollectionDiscoveryService {
         const collectionType = metadata?.tokenType?.toLowerCase() === 'erc1155' ? 'erc1155' : 'erc721';
         
         await this.db.execute(sql`
-          INSERT INTO collections (chain, contract_address, name, image_url, collection_type, verification_status, mapping_status, last_seen_at, is_spam)
+          INSERT INTO collections (chain, contract_address, name, image_url, supply, collection_type, verification_status, mapping_status, last_seen_at, is_spam)
           VALUES (${contract.chain}, ${contract.address}, ${name}, 
-                  ${metadata?.imageUrl || null}, ${collectionType}, 
+                  ${metadata?.imageUrl || null}, ${metadata?.totalSupply || null}, ${collectionType}, 
                   'tracked_unverified', 'unmapped', NOW(), false)
           ON CONFLICT (chain, contract_address) DO NOTHING
         `);
