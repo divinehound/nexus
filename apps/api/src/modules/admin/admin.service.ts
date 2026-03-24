@@ -1034,6 +1034,7 @@ export class AdminService {
       websiteUrl?: string;
       telegramUrl?: string;
       externalUrl?: string;
+      supply?: number;
     }
   ) {
     const collectionId = await this.resolveCollectionId(idOrContract);
