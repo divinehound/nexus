@@ -97,6 +97,8 @@ export class CollectionsService {
   private async getUserHoldingsAsNodes(userAddress: string, chain: string, limit: number = 10): Promise<any[]> {
     const normalizedAddress = chain === 'solana' ? userAddress : userAddress.toLowerCase();
     
+    console.log(`Fetching holdings for address: ${normalizedAddress} on chain: ${chain}`);
+    
     const holdings = await this.db.execute(
       sql`
         SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, c.holder_count
@@ -109,6 +111,8 @@ export class CollectionsService {
         LIMIT ${limit}
       `
     );
+
+    console.log(`Found ${holdings.length} holdings for ${normalizedAddress}`);
 
     return holdings.map((row: any) => ({
       id: row.id,
@@ -539,36 +543,44 @@ export class CollectionsService {
         const userHoldings = await this.getUserHoldingsAsNodes(userAddress, userChain, 10);
         
         if (userHoldings.length === 0) {
-          return { nodes: [], edges: [] };
-        }
-
-        // Get overlapping collections for each holding
-        const allOverlaps = await Promise.all(
-          userHoldings.slice(0, 5).map(h => // Top 5 holdings to keep it manageable
-            this.getRelatedCollections(h.id, Math.floor(maxNodes / 5))
-          )
-        );
-
-        // Flatten and dedupe
-        const overlapMap = new Map<string, any>();
-        userHoldings.forEach(h => overlapMap.set(h.id, h)); // Add user holdings first
-        
-        allOverlaps.forEach(overlaps => {
-          overlaps.forEach(o => {
-            if (!overlapMap.has(o.id) && o.sharedHolders >= minShared) {
-              overlapMap.set(o.id, {
-                id: o.id,
-                name: o.name,
-                chain: o.chain,
-                contractAddress: o.contractAddress,
-                imageUrl: o.imageUrl,
-                holderCount: o.totalHolders,
-              });
-            }
+          // Fallback: user has no indexed holdings, use connected-traverse instead
+          console.log(`No holdings found for ${userAddress} on ${userChain}, falling back to connected-traverse`);
+          const traverseResult = await this.buildConnectedTraverse({
+            maxNodes,
+            minSharedHolders: minShared,
+            chains,
           });
-        });
+          nodes = Array.from(traverseResult.collectionMap.values());
+        } else {
 
-        nodes = Array.from(overlapMap.values());
+          // Get overlapping collections for each holding
+          const allOverlaps = await Promise.all(
+            userHoldings.slice(0, 5).map(h => // Top 5 holdings to keep it manageable
+              this.getRelatedCollections(h.id, Math.floor(maxNodes / 5))
+            )
+          );
+
+          // Flatten and dedupe
+          const overlapMap = new Map<string, any>();
+          userHoldings.forEach(h => overlapMap.set(h.id, h)); // Add user holdings first
+          
+          allOverlaps.forEach(overlaps => {
+            overlaps.forEach(o => {
+              if (!overlapMap.has(o.id) && o.sharedHolders >= minShared) {
+                overlapMap.set(o.id, {
+                  id: o.id,
+                  name: o.name,
+                  chain: o.chain,
+                  contractAddress: o.contractAddress,
+                  imageUrl: o.imageUrl,
+                  holderCount: o.totalHolders,
+                });
+              }
+            });
+          });
+
+          nodes = Array.from(overlapMap.values());
+        }
       } else if (focusId) {
         // Focus mode: get the focused collection + its related collections
         const focusedCollection = await this.db.query.collections.findFirst({
