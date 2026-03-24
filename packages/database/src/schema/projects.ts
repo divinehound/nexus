@@ -114,9 +114,7 @@ export const collections = pgTable(
   'collections',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    projectId: uuid('project_id')
-      .notNull()
-      .references(() => projects.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
     contractAddress: varchar('contract_address', { length: 255 }).notNull(),
     chain: chainEnum('chain').notNull(),
     name: varchar('name', { length: 255 }).notNull(),

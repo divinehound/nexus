@@ -46,7 +46,7 @@ export class WalletsService {
 
     for (const h of held) {
       const col = collectionMap.get(h.collectionId);
-      if (!col) continue;
+      if (!col || !col.project) continue; // Skip collections not mapped to projects
       const proj = col.project;
       if (!projectMap.has(proj.id)) {
         projectMap.set(proj.id, { project: proj, collections: [] });
@@ -98,6 +98,6 @@ export class WalletsService {
       where: inArray(collections.id, collectionIds),
     });
 
-    return [...new Set(cols.map((c) => c.projectId))];
+    return [...new Set(cols.map((c) => c.projectId).filter((id): id is string => id !== null))];
   }
 }

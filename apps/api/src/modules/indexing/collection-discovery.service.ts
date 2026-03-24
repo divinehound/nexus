@@ -80,7 +80,11 @@ export class CollectionDiscoveryService {
 
         // Check which contracts we haven't seen before
         for (const nft of nfts) {
-          const key = `${nft.chain}:${nft.contractAddress.toLowerCase()}`;
+          // Preserve case for Solana (base58), lowercase for EVM (hex)
+          const normalizedAddress = nft.chain === 'solana' 
+            ? nft.contractAddress 
+            : nft.contractAddress.toLowerCase();
+          const key = `${nft.chain}:${normalizedAddress}`;
           
           if (discoveredContracts.has(key)) continue;
           
@@ -88,7 +92,10 @@ export class CollectionDiscoveryService {
           const existsResult = await this.db.execute(sql`
             SELECT id FROM collections 
             WHERE chain = ${nft.chain} 
-              AND LOWER(contract_address) = ${nft.contractAddress.toLowerCase()}
+              AND CASE 
+                WHEN chain = 'solana' THEN contract_address = ${normalizedAddress}
+                ELSE LOWER(contract_address) = ${normalizedAddress}
+              END
             LIMIT 1
           `);
           const exists = existsResult.length > 0;
@@ -96,7 +103,7 @@ export class CollectionDiscoveryService {
           if (!exists) {
             discoveredContracts.set(key, {
               chain: nft.chain,
-              address: nft.contractAddress.toLowerCase(),
+              address: normalizedAddress,
             });
           }
         }

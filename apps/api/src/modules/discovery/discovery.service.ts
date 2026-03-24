@@ -26,7 +26,7 @@ export class DiscoveryService {
       where: inArray(collections.id, collectionIds),
     });
 
-    const heldProjectIds = [...new Set(cols.map((c) => c.projectId))];
+    const heldProjectIds = [...new Set(cols.map((c) => c.projectId).filter((id): id is string => id !== null))];
     if (heldProjectIds.length === 0) return [];
 
     // Find projects with high holder overlap via projectAffinity
@@ -75,9 +75,9 @@ export class DiscoveryService {
       where: inArray(collections.id, collectionIds),
     });
 
-    const heldProjectIds = [...new Set(cols.map((c) => c.projectId))];
+    const heldProjectIds = [...new Set(cols.map((c) => c.projectId).filter((id): id is string => id !== null))];
     const heldProjects = await this.db.query.projects.findMany({
-      where: inArray(projects.id, heldProjectIds),
+      where: heldProjectIds.length > 0 ? inArray(projects.id, heldProjectIds) : undefined,
     });
 
     const clusterIds = heldProjects

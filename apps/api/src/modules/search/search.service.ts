@@ -48,7 +48,7 @@ export class SearchService {
         .from(collections)
         .where(eq(collections.chain, chain as any));
 
-      const ids = projectIdsOnChain.map((r) => r.projectId);
+      const ids = projectIdsOnChain.map((r) => r.projectId).filter((id): id is string => id !== null);
       if (ids.length > 0) {
         projectResults = await this.db.query.projects.findMany({
           where: and(projectNameOrSlug, inArray(projects.id, ids)),

@@ -112,8 +112,8 @@ export class WebhooksService {
       }
     }
 
-    // Record in activity feed
-    if (transfer.price && transfer.price > 0) {
+    // Record in activity feed (only for collections mapped to projects)
+    if (transfer.price && transfer.price > 0 && collection.projectId) {
       await this.db.insert(activityFeed).values({
         projectId: collection.projectId,
         activityType: 'sale',
