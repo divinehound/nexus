@@ -832,6 +832,13 @@ export default function AdminCollectionsPage() {
                 >
                   {indexing[c.id] ? 'Indexing...' : '🔍 Index Holders'}
                 </button>
+                <button
+                  onClick={() => handleDiscoverCollections(c.id)}
+                  className="rounded bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600"
+                  title="Discover new collections via holder overlap"
+                >
+                  🔍 Discover
+                </button>
                 {c.isSpam ? (
                   <button
                     onClick={() => handleMarkNotSpam(c)}
