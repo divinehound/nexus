@@ -124,10 +124,12 @@ export class BlockchainLookupService {
   }
 
   /**
-   * Query Helius DAS API for Solana asset metadata.
+   * Query Helius DAS API for Solana collection metadata.
+   * First tries getAssetsByGroup to get collection info,
+   * falls back to getAsset for single mint lookup.
    */
   private async lookupSolana(
-    mintAddress: string,
+    collectionAddress: string,
   ): Promise<BlockchainContractInfo | null> {
     const apiKey = this.config.get<string>('helius.apiKey');
     if (!apiKey) {
@@ -138,35 +140,79 @@ export class BlockchainLookupService {
     const url = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
 
     try {
-      const res = await fetch(url, {
+      // Try getAssetsByGroup first (for verified collections)
+      const groupRes = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getAssetsByGroup',
+          params: {
+            groupKey: 'collection',
+            groupValue: collectionAddress,
+            page: 1,
+            limit: 1,
+          },
+        }),
+      });
+
+      if (groupRes.ok) {
+        const groupBody = await groupRes.json();
+        const items = groupBody.result?.items;
+        
+        if (items && items.length > 0) {
+          const firstItem = items[0];
+          const collectionInfo = firstItem.grouping?.find((g: any) => g.group_key === 'collection');
+          
+          // Use collection metadata from first item
+          return {
+            contractAddress: collectionAddress,
+            chain: Chain.SOLANA,
+            name: firstItem.content?.metadata?.name || collectionInfo?.group_value || `solana:${collectionAddress.slice(0, 8)}`,
+            symbol: firstItem.content?.metadata?.symbol || '',
+            totalSupply: groupBody.result?.total || null,
+            tokenType: 'spl',
+            imageUrl: firstItem.content?.links?.image || firstItem.content?.files?.[0]?.uri || null,
+            deployerAddress: firstItem.authorities?.[0]?.address || null,
+          };
+        }
+      }
+
+      // Fall back to getAsset (treats address as single mint)
+      const assetRes = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jsonrpc: '2.0',
           id: 1,
           method: 'getAsset',
-          params: { id: mintAddress },
+          params: { id: collectionAddress },
         }),
       });
 
-      if (!res.ok) return null;
+      if (!assetRes.ok) return null;
 
-      const body = (await res.json()) as HeliusGetAssetResponse;
-      const asset = body.result;
+      const assetBody = (await assetRes.json()) as HeliusGetAssetResponse;
+      const asset = assetBody.result;
       if (!asset) return null;
 
+      // If this is part of a collection, try to get collection name
+      const collectionGroup = asset.grouping?.find((g: any) => g.group_key === 'collection');
+      const collectionMint = collectionGroup?.group_value;
+
       return {
-        contractAddress: mintAddress,
+        contractAddress: collectionAddress,
         chain: Chain.SOLANA,
-        name: asset.content?.metadata?.name || `Unknown (${mintAddress.slice(0, 8)}...)`,
+        name: asset.content?.metadata?.name || `solana:${collectionAddress.slice(0, 8)}`,
         symbol: asset.content?.metadata?.symbol || '',
         totalSupply: asset.supply?.print_max_supply ?? null,
         tokenType: 'spl',
-        imageUrl: asset.content?.links?.image ?? null,
+        imageUrl: asset.content?.links?.image || asset.content?.files?.[0]?.uri || null,
         deployerAddress: asset.authorities?.[0]?.address ?? null,
       };
     } catch (err) {
-      this.logger.error(`Solana blockchain lookup failed: ${err}`);
+      this.logger.error(`Solana blockchain lookup failed for ${collectionAddress}: ${err}`);
       return null;
     }
   }
@@ -299,8 +345,10 @@ interface HeliusGetAssetResponse {
     content?: {
       metadata?: { name?: string; symbol?: string };
       links?: { image?: string };
+      files?: { uri?: string }[];
     };
     supply?: { print_max_supply?: number };
     authorities?: { address: string }[];
+    grouping?: Array<{ group_key: string; group_value: string }>;
   };
 }
