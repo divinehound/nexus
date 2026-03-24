@@ -541,11 +541,13 @@ export function getNetworkGraph(options?: {
   minSharedHolders?: number;
   maxNodes?: number;
   chains?: string[];
+  focusCollectionId?: string;
 }): Promise<NetworkGraph> {
   const params = new URLSearchParams();
   if (options?.minSharedHolders) params.set('minSharedHolders', options.minSharedHolders.toString());
   if (options?.maxNodes) params.set('maxNodes', options.maxNodes.toString());
   if (options?.chains?.length) params.set('chains', options.chains.join(','));
+  if (options?.focusCollectionId) params.set('focusCollectionId', options.focusCollectionId);
   
   return apiFetch<NetworkGraph>(`/collections/network/graph?${params.toString()}`);
 }

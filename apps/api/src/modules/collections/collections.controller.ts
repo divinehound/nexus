@@ -20,11 +20,13 @@ export class CollectionsController {
     @Query('minSharedHolders') minSharedHolders?: string,
     @Query('maxNodes') maxNodes?: string,
     @Query('chains') chains?: string,
+    @Query('focusCollectionId') focusCollectionId?: string,
   ) {
     return this.collectionsService.getNetworkGraph({
       minSharedHolders: minSharedHolders ? parseInt(minSharedHolders) : undefined,
       maxNodes: maxNodes ? parseInt(maxNodes) : undefined,
       chains: chains ? chains.split(',') : undefined,
+      focusCollectionId,
     });
   }
 

@@ -46,13 +46,18 @@ export function NetworkGraphVisualization({
 
   useEffect(() => {
     loadData();
-  }, [maxNodes, minSharedHolders, chains]);
+  }, [maxNodes, minSharedHolders, chains, initialFocusedNodeId]);
 
   const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
-      const graph = await getNetworkGraph({ maxNodes, minSharedHolders, chains });
+      const graph = await getNetworkGraph({ 
+        maxNodes, 
+        minSharedHolders, 
+        chains,
+        focusCollectionId: initialFocusedNodeId,
+      });
       setData(graph);
     } catch (err: any) {
       setError(err.message || 'Failed to load network graph');

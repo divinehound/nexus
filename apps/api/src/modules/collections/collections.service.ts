@@ -331,45 +331,82 @@ export class CollectionsService {
     minSharedHolders?: number;
     maxNodes?: number;
     chains?: string[];
+    focusCollectionId?: string;
   }) {
     const minShared = options?.minSharedHolders || 5;
     const maxNodes = options?.maxNodes || 50;
     const chains = options?.chains || [];
+    const focusId = options?.focusCollectionId;
 
     try {
-      // Get collections with indexed holders
-      const collectionsResult = await this.db.execute(
-        chains.length > 0
-          ? sql`
-              SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
-              FROM collections c
-              INNER JOIN collection_holders ch ON ch.collection_id = c.id
-              WHERE c.is_spam = false AND c.chain IN (${sql.join(chains.map(chain => sql`${chain}`), sql`, `)})
-              GROUP BY c.id
-              HAVING COUNT(ch.address) > 0
-              ORDER BY holder_count DESC
-              LIMIT ${maxNodes}
-            `
-          : sql`
-              SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
-              FROM collections c
-              INNER JOIN collection_holders ch ON ch.collection_id = c.id
-              WHERE c.is_spam = false
-              GROUP BY c.id
-              HAVING COUNT(ch.address) > 0
-              ORDER BY holder_count DESC
-              LIMIT ${maxNodes}
-            `,
-      );
+      let nodes: any[];
+      
+      if (focusId) {
+        // Focus mode: get the focused collection + its related collections
+        const focusedCollection = await this.db.query.collections.findFirst({
+          where: eq(collections.id, focusId),
+        });
+        
+        if (!focusedCollection) {
+          return { nodes: [], edges: [] };
+        }
+        
+        const related = await this.getRelatedCollections(focusId, maxNodes - 1);
+        
+        // Include the focused collection itself
+        nodes = [
+          {
+            id: focusedCollection.id,
+            name: focusedCollection.name,
+            chain: focusedCollection.chain,
+            contractAddress: focusedCollection.contractAddress,
+            imageUrl: focusedCollection.imageUrl,
+            holderCount: focusedCollection.holderCount || 0,
+          },
+          ...related.map((r: any) => ({
+            id: r.id,
+            name: r.name,
+            chain: r.chain,
+            contractAddress: r.contractAddress,
+            imageUrl: r.imageUrl,
+            holderCount: r.totalHolders,
+          })),
+        ];
+      } else {
+        // Global mode: top N collections by holder count
+        const collectionsResult = await this.db.execute(
+          chains.length > 0
+            ? sql`
+                SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
+                FROM collections c
+                INNER JOIN collection_holders ch ON ch.collection_id = c.id
+                WHERE c.is_spam = false AND c.chain IN (${sql.join(chains.map(chain => sql`${chain}`), sql`, `)})
+                GROUP BY c.id
+                HAVING COUNT(ch.address) > 0
+                ORDER BY holder_count DESC
+                LIMIT ${maxNodes}
+              `
+            : sql`
+                SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
+                FROM collections c
+                INNER JOIN collection_holders ch ON ch.collection_id = c.id
+                WHERE c.is_spam = false
+                GROUP BY c.id
+                HAVING COUNT(ch.address) > 0
+                ORDER BY holder_count DESC
+                LIMIT ${maxNodes}
+              `,
+        );
 
-    const nodes = collectionsResult.map((row: any) => ({
-      id: row.id,
-      name: row.name,
-      chain: row.chain,
-      contractAddress: row.contract_address,
-      imageUrl: row.image_url,
-      holderCount: parseInt(row.holder_count),
-    }));
+        nodes = collectionsResult.map((row: any) => ({
+          id: row.id,
+          name: row.name,
+          chain: row.chain,
+          contractAddress: row.contract_address,
+          imageUrl: row.image_url,
+          holderCount: parseInt(row.holder_count),
+        }));
+      }
 
     const collectionIds = nodes.map((n) => n.id);
 
