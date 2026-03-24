@@ -79,6 +79,14 @@ export class HolderIndexerService {
       // Calculate total supply by summing all holder balances
       const totalSupply = holders.reduce((sum, holder) => sum + holder.balance, 0);
       
+      this.logger.log(`[Supply Calculation] Collection: ${collection.name}`);
+      this.logger.log(`[Supply Calculation] Current supply in DB: ${collection.supply}`);
+      this.logger.log(`[Supply Calculation] Calculated total from holders: ${totalSupply}`);
+      this.logger.log(`[Supply Calculation] Unique holders: ${holders.length}`);
+      
+      const newSupply = collection.supply === null || collection.supply === 1 ? totalSupply : collection.supply;
+      this.logger.log(`[Supply Calculation] Will set supply to: ${newSupply}`);
+      
       // Update collection status
       await this.db
         .update(collections)
@@ -86,7 +94,7 @@ export class HolderIndexerService {
           holderCount: holders.length,
           // If supply is null or 1 (likely wrong), use summed token count
           // This gives accurate supply based on actual on-chain ownership
-          supply: collection.supply === null || collection.supply === 1 ? totalSupply : collection.supply,
+          supply: newSupply,
           lastIndexFinishedAt: new Date(),
           lastIndexStatus: 'success',
         })
