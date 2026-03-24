@@ -81,6 +81,9 @@ export class HolderIndexerService {
         .update(collections)
         .set({
           holderCount: holders.length,
+          // If supply is null or 1 (likely wrong), use total holders as estimate
+          // This helps with Solana collections where metadata APIs fail
+          supply: collection.supply === null || collection.supply === 1 ? holders.length : collection.supply,
           lastIndexFinishedAt: new Date(),
           lastIndexStatus: 'success',
         })
