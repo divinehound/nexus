@@ -140,7 +140,50 @@ export class BlockchainLookupService {
     const url = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
 
     try {
-      // Try getAssetsByGroup first (for verified collections)
+      // Try searchAssets first (works with both old and new collection standards)
+      const searchRes = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'searchAssets',
+          params: {
+            grouping: ['collection', collectionAddress],
+            page: 1,
+            limit: 1,
+          },
+        }),
+      });
+
+      this.logger.log(`[Solana Lookup] Checking collection ${collectionAddress} via searchAssets`);
+
+      if (searchRes.ok) {
+        const searchBody = await searchRes.json();
+        const items = searchBody.result?.items;
+        const total = searchBody.result?.total;
+        
+        this.logger.log(`[Solana Lookup] searchAssets response: ${items?.length || 0} items, total: ${total || 'null'}`);
+        
+        if (items && items.length > 0 && total && total > 1) {
+          const firstItem = items[0];
+          
+          this.logger.log(`[Solana Lookup] Collection ${collectionAddress}: found ${total} total items via searchAssets, name: ${firstItem.content?.metadata?.name}`);
+          
+          return {
+            contractAddress: collectionAddress,
+            chain: Chain.SOLANA,
+            name: firstItem.content?.metadata?.name || `solana:${collectionAddress.slice(0, 8)}`,
+            symbol: firstItem.content?.metadata?.symbol || '',
+            totalSupply: total,
+            tokenType: 'spl',
+            imageUrl: firstItem.content?.links?.image || firstItem.content?.files?.[0]?.uri || null,
+            deployerAddress: firstItem.authorities?.[0]?.address || null,
+          };
+        }
+      }
+
+      // Try getAssetsByGroup as fallback (for certified collections)
       const groupRes = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -157,7 +200,7 @@ export class BlockchainLookupService {
         }),
       });
 
-      this.logger.log(`[Solana Lookup] Checking collection ${collectionAddress} via getAssetsByGroup`);
+      this.logger.log(`[Solana Lookup] Trying getAssetsByGroup as fallback`);
 
       if (groupRes.ok) {
         const groupBody = await groupRes.json();
