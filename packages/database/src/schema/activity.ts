@@ -20,9 +20,7 @@ export const activityTypeEnum = pgEnum('activity_type', [
 
 export const activityFeed = pgTable('activity_feed', {
   id: uuid('id').primaryKey().defaultRandom(),
-  projectId: uuid('project_id')
-    .notNull()
-    .references(() => projects.id, { onDelete: 'cascade' }),
+  projectId: uuid('project_id').references(() => projects.id, { onDelete: 'cascade' }),
   activityType: activityTypeEnum('activity_type').notNull(),
   walletAddress: varchar('wallet_address', { length: 255 }),
   collectionId: uuid('collection_id').references(() => collections.id, { onDelete: 'set null' }),

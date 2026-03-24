@@ -11,6 +11,7 @@ import {
   numeric,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import { users } from './users';
 
 export const collectionTypeEnum = pgEnum('collection_type', [
   'erc721',
@@ -150,6 +151,13 @@ export const collections = pgTable(
     lastIndexStatus: varchar('last_index_status', { length: 16 }),
     lastIndexError: text('last_index_error'),
     lastIndexJobId: varchar('last_index_job_id', { length: 64 }),
+    // Collection metadata (social links, description)
+    description: text('description'),
+    discordUrl: text('discord_url'),
+    twitterUrl: text('twitter_url'),
+    websiteUrl: text('website_url'),
+    telegramUrl: text('telegram_url'),
+    externalUrl: text('external_url'),
   },
   (table) => [
     uniqueIndex('collections_chain_contract_unique').on(
@@ -253,4 +261,17 @@ export const collectionIntakeRequests = pgTable('collection_intake_requests', {
   errorMessage: text('error_message'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   processedAt: timestamp('processed_at', { withTimezone: true }),
+});
+
+export const collectionWiki = pgTable('collection_wiki', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  collectionId: uuid('collection_id')
+    .notNull()
+    .references(() => collections.id, { onDelete: 'cascade' })
+    .unique(),
+  content: text('content').notNull().default(''),
+  lastEditedBy: uuid('last_edited_by').references(() => users.id, { onDelete: 'set null' }),
+  lastEditedAt: timestamp('last_edited_at', { withTimezone: true }).defaultNow().notNull(),
+  version: integer('version').default(1).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
