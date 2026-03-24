@@ -293,12 +293,25 @@ export class AdminController {
   }
 
   @Get('collections/search')
-  @ApiOperation({ summary: 'Search collections by name or contract address' })
+  @ApiOperation({ summary: 'Search/filter collections' })
   searchCollections(
-    @Query('q') query: string,
+    @Query('q') query?: string,
     @Query('limit') limit?: string,
+    @Query('hasProject') hasProject?: string,
+    @Query('verified') verified?: string,
+    @Query('indexed') indexed?: string,
+    @Query('spam') spam?: string,
+    @Query('chain') chain?: string,
   ) {
-    return this.adminService.searchCollections(query, limit ? parseInt(limit) : 20);
+    return this.adminService.searchCollections({
+      query,
+      limit: limit ? parseInt(limit) : 100,
+      hasProject: hasProject === 'true' ? true : hasProject === 'false' ? false : undefined,
+      verified: verified === 'true' ? true : verified === 'false' ? false : undefined,
+      indexed: indexed === 'true',
+      spam: spam === 'true' ? true : spam === 'false' ? false : undefined,
+      chain,
+    });
   }
 
   @Post('collections/:id/enrich')
@@ -314,5 +327,51 @@ export class AdminController {
     @Body() body?: { maxHolders?: number; maxCollectionsPerHolder?: number }
   ) {
     return this.adminService.discoverCollections(id, body);
+  }
+
+  @Patch('collections/:id/update')
+  @ApiOperation({ summary: 'Update collection metadata (description, social links)' })
+  updateCollection(
+    @Param('id') id: string,
+    @Body() body: {
+      name?: string;
+      description?: string;
+      discordUrl?: string;
+      twitterUrl?: string;
+      websiteUrl?: string;
+      telegramUrl?: string;
+      externalUrl?: string;
+    }
+  ) {
+    return this.adminService.updateCollection(id, body);
+  }
+
+  @Patch('collections/:id/link-project')
+  @ApiOperation({ summary: 'Link/unlink collection to a project' })
+  linkCollectionToProject(
+    @Param('id') id: string,
+    @Body() body: { projectId: string | null }
+  ) {
+    return this.adminService.linkCollectionToProject(id, body.projectId);
+  }
+
+  @Post('collections/bulk-link-project')
+  @ApiOperation({ summary: 'Link multiple collections to a project' })
+  bulkLinkProject(
+    @Body() body: { collectionIds: string[]; projectId: string }
+  ) {
+    return this.adminService.bulkLinkProject(body.collectionIds, body.projectId);
+  }
+
+  @Post('collections/bulk-verify')
+  @ApiOperation({ summary: 'Verify multiple collections' })
+  bulkVerify(@Body() body: { collectionIds: string[] }) {
+    return this.adminService.bulkVerify(body.collectionIds);
+  }
+
+  @Post('collections/bulk-mark-spam')
+  @ApiOperation({ summary: 'Mark multiple collections as spam' })
+  bulkMarkSpam(@Body() body: { collectionIds: string[] }) {
+    return this.adminService.bulkMarkSpam(body.collectionIds);
   }
 }

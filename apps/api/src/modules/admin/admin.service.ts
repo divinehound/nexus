@@ -147,19 +147,67 @@ export class AdminService {
 
   // --- Collections Search ---
 
-  async searchCollections(query: string, limit: number = 20) {
-    if (!query || query.trim().length < 2) {
-      throw new BadRequestException('Search query must be at least 2 characters');
+  async searchCollections(filters: {
+    query?: string;
+    limit?: number;
+    hasProject?: boolean;
+    verified?: boolean;
+    indexed?: boolean;
+    spam?: boolean;
+    chain?: string;
+  }) {
+    const { query, limit = 100, hasProject, verified, indexed, spam, chain } = filters;
+
+    const conditions = [];
+
+    // Text search
+    if (query && query.trim().length >= 2) {
+      const lowerQuery = query.toLowerCase();
+      conditions.push(
+        or(
+          sql`LOWER(${collections.name}) LIKE ${`%${lowerQuery}%`}`,
+          sql`LOWER(${collections.contractAddress}) LIKE ${`%${lowerQuery}%`}`,
+        )
+      );
     }
 
-    const lowerQuery = query.toLowerCase();
+    // Has/no project filter
+    if (hasProject === true) {
+      conditions.push(sql`${collections.projectId} IS NOT NULL`);
+    } else if (hasProject === false) {
+      conditions.push(sql`${collections.projectId} IS NULL`);
+    }
+
+    // Verified filter
+    if (verified === true) {
+      conditions.push(eq(collections.verificationStatus, 'verified'));
+    } else if (verified === false) {
+      conditions.push(sql`${collections.verificationStatus} != 'verified'`);
+    }
+
+    // Indexed filter (has holders)
+    if (indexed) {
+      conditions.push(sql`${collections.holderCount} > 0`);
+    }
+
+    // Spam filter
+    if (spam === true) {
+      conditions.push(eq(collections.isSpam, true));
+    } else if (spam === false) {
+      conditions.push(eq(collections.isSpam, false));
+    }
+
+    // Chain filter
+    if (chain) {
+      conditions.push(eq(collections.chain, chain as any));
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
     const results = await this.db.query.collections.findMany({
-      where: or(
-        sql`LOWER(${collections.name}) LIKE ${`%${lowerQuery}%`}`,
-        sql`LOWER(${collections.contractAddress}) LIKE ${`%${lowerQuery}%`}`,
-      ),
+      where: whereClause,
       limit,
+      orderBy: [desc(collections.lastSeenAt)],
       with: {
         project: {
           columns: {
@@ -182,6 +230,10 @@ export class AdminService {
       mappingStatus: c.mappingStatus,
       isSpam: c.isSpam,
       spamScore: c.spamScore,
+      description: c.description,
+      discordUrl: c.discordUrl,
+      twitterUrl: c.twitterUrl,
+      websiteUrl: c.websiteUrl,
       project: c.project,
     }));
   }
@@ -948,6 +1000,170 @@ export class AdminService {
       status: 'started',
       collectionId,
       message: 'Collection discovery started in background. Check server logs for progress.',
+    };
+  }
+
+  /**
+   * Update collection metadata (description, social links)
+   */
+  async updateCollection(
+    idOrContract: string,
+    updates: {
+      name?: string;
+      description?: string;
+      discordUrl?: string;
+      twitterUrl?: string;
+      websiteUrl?: string;
+      telegramUrl?: string;
+      externalUrl?: string;
+    }
+  ) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
+
+    await this.db
+      .update(collections)
+      .set({
+        ...updates,
+        lastSeenAt: new Date(),
+      })
+      .where(eq(collections.id, collectionId));
+
+    return { success: true, collectionId };
+  }
+
+  /**
+   * Link or unlink collection to a project
+   */
+  async linkCollectionToProject(idOrContract: string, projectId: string | null) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
+
+    // If linking, verify project exists
+    if (projectId) {
+      const project = await this.db.query.projects.findFirst({
+        where: eq(projects.id, projectId),
+      });
+
+      if (!project) {
+        throw new NotFoundException(`Project ${projectId} not found`);
+      }
+    }
+
+    await this.db
+      .update(collections)
+      .set({
+        projectId,
+        mappingStatus: projectId ? 'mapped' : 'unmapped',
+        lastSeenAt: new Date(),
+      })
+      .where(eq(collections.id, collectionId));
+
+    return { 
+      success: true, 
+      collectionId,
+      projectId,
+      action: projectId ? 'linked' : 'unlinked'
+    };
+  }
+
+  /**
+   * Bulk link collections to a project
+   */
+  async bulkLinkProject(collectionIds: string[], projectId: string) {
+    // Verify project exists
+    const project = await this.db.query.projects.findFirst({
+      where: eq(projects.id, projectId),
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project ${projectId} not found`);
+    }
+
+    const results = { success: 0, failed: 0, errors: [] as string[] };
+
+    for (const collectionId of collectionIds) {
+      try {
+        await this.db
+          .update(collections)
+          .set({
+            projectId,
+            mappingStatus: 'mapped',
+            lastSeenAt: new Date(),
+          })
+          .where(eq(collections.id, collectionId));
+
+        results.success++;
+      } catch (err: any) {
+        results.failed++;
+        results.errors.push(`${collectionId}: ${err?.message || 'unknown error'}`);
+      }
+    }
+
+    return {
+      ...results,
+      total: collectionIds.length,
+      projectId,
+      projectName: project.name,
+    };
+  }
+
+  /**
+   * Bulk verify collections
+   */
+  async bulkVerify(collectionIds: string[]) {
+    const results = { success: 0, failed: 0, errors: [] as string[] };
+
+    for (const collectionId of collectionIds) {
+      try {
+        await this.db
+          .update(collections)
+          .set({
+            verificationStatus: 'verified',
+            lastSeenAt: new Date(),
+          })
+          .where(eq(collections.id, collectionId));
+
+        results.success++;
+      } catch (err: any) {
+        results.failed++;
+        results.errors.push(`${collectionId}: ${err?.message || 'unknown error'}`);
+      }
+    }
+
+    return {
+      ...results,
+      total: collectionIds.length,
+    };
+  }
+
+  /**
+   * Bulk mark collections as spam
+   */
+  async bulkMarkSpam(collectionIds: string[]) {
+    const results = { success: 0, failed: 0, errors: [] as string[] };
+
+    for (const collectionId of collectionIds) {
+      try {
+        await this.db
+          .update(collections)
+          .set({
+            isSpam: true,
+            spamScore: 100,
+            spamDetectedBy: 'manual',
+            spamDetectedAt: new Date(),
+            lastSeenAt: new Date(),
+          })
+          .where(eq(collections.id, collectionId));
+
+        results.success++;
+      } catch (err: any) {
+        results.failed++;
+        results.errors.push(`${collectionId}: ${err?.message || 'unknown error'}`);
+      }
+    }
+
+    return {
+      ...results,
+      total: collectionIds.length,
     };
   }
 }
