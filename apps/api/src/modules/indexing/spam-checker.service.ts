@@ -182,6 +182,56 @@ export class SpamCheckerService {
   /**
    * Debug endpoint: Return raw Alchemy response for a collection
    */
+  /**
+   * Check a single collection for spam (used during discovery)
+   * Returns spam status without storing in database
+   */
+  async checkCollection(
+    chain: string,
+    contractAddress: string,
+    name?: string
+  ): Promise<{ isSpam: boolean; score: number; reason?: string }> {
+    const apiKey = this.config.get<string>('alchemy.apiKey');
+    
+    // If no API key or Solana (not supported), use heuristic only
+    if (!apiKey || chain === 'solana') {
+      return this.checkHeuristics(name || '', '');
+    }
+
+    const result = await this.checkCollectionSpam(chain, contractAddress, apiKey);
+    
+    if (result) {
+      return result;
+    }
+    
+    // Fallback to heuristic if API fails
+    return this.checkHeuristics(name || '', '');
+  }
+
+  /**
+   * Heuristic spam detection based on name/symbol patterns
+   */
+  private checkHeuristics(name: string, symbol: string): { isSpam: boolean; score: number; reason?: string } {
+    const lowerName = name.toLowerCase();
+    const lowerSymbol = symbol.toLowerCase();
+
+    const spamKeywords = [
+      'claim', 'reward', 'airdrop', 'bonus', 'free', 'gift',
+      'visit', 'http', '.com', '.org', '.net', '.io', '.xyz',
+      '10bnb', '100eth', '1000usdt', 'rewards.', 'claimit',
+    ];
+
+    const hasSpamKeyword = spamKeywords.some(
+      (keyword) => lowerName.includes(keyword) || lowerSymbol.includes(keyword),
+    );
+
+    if (hasSpamKeyword) {
+      return { isSpam: true, score: 90, reason: 'spam_keywords_in_name' };
+    }
+
+    return { isSpam: false, score: 0 };
+  }
+
   async checkCollectionRaw(chain: string, contractAddress: string) {
     const apiKey = this.config.get<string>('alchemy.apiKey');
     if (!apiKey) {

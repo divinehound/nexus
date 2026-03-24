@@ -3,6 +3,7 @@ import { eq, sql, and, inArray } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, collections, collectionHolders } from '@nexus/database';
 import { BlockchainLookupService } from '../search/blockchain-lookup.service';
+import { SpamCheckerService } from './spam-checker.service';
 
 interface DiscoveryResult {
   collectionId: string;
@@ -24,6 +25,7 @@ export class CollectionDiscoveryService {
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly blockchainLookup: BlockchainLookupService,
+    private readonly spamChecker: SpamCheckerService,
   ) {}
 
   /**
@@ -116,8 +118,9 @@ export class CollectionDiscoveryService {
       }
     }
 
-    // Add discovered collections to database
+    // Add discovered collections to database (after spam filtering)
     const newCollections: Array<{ chain: string; contractAddress: string; name: string }> = [];
+    let spamFiltered = 0;
     
     for (const [key, contract] of discoveredContracts) {
       try {
@@ -127,15 +130,25 @@ export class CollectionDiscoveryService {
           contract.address
         );
 
-        // Add to database as unverified
-        const collectionType = metadata?.tokenType?.toLowerCase() === 'erc1155' ? 'erc1155' : 'erc721';
         const name = metadata?.name || `${contract.chain}:${contract.address.slice(0, 8)}...`;
         
+        // Check for spam BEFORE adding to database
+        const spamCheck = await this.spamChecker.checkCollection(contract.chain, contract.address, name);
+        
+        if (spamCheck.isSpam) {
+          spamFiltered++;
+          this.logger.log(`Filtered spam: ${name} - ${spamCheck.reason}`);
+          continue; // Skip this collection
+        }
+
+        // Add to database as unverified (not spam)
+        const collectionType = metadata?.tokenType?.toLowerCase() === 'erc1155' ? 'erc1155' : 'erc721';
+        
         await this.db.execute(sql`
-          INSERT INTO collections (chain, contract_address, name, image_url, collection_type, verification_status, mapping_status, last_seen_at)
+          INSERT INTO collections (chain, contract_address, name, image_url, collection_type, verification_status, mapping_status, last_seen_at, is_spam)
           VALUES (${contract.chain}, ${contract.address}, ${name}, 
                   ${metadata?.imageUrl || null}, ${collectionType}, 
-                  'tracked_unverified', 'unmapped', NOW())
+                  'tracked_unverified', 'unmapped', NOW(), false)
           ON CONFLICT (chain, contract_address) DO NOTHING
         `);
 
@@ -145,7 +158,7 @@ export class CollectionDiscoveryService {
           name: name,
         });
 
-        this.logger.log(`Added new collection: ${metadata?.name || contract.address}`);
+        this.logger.log(`Added new collection: ${name}`);
       } catch (err: any) {
         this.logger.error(`Failed to add collection ${contract.address}: ${err?.message || 'unknown error'}`);
       }
@@ -154,7 +167,7 @@ export class CollectionDiscoveryService {
     const processingTime = Date.now() - startTime;
 
     this.logger.log(
-      `Discovery complete: ${newCollections.length} new collections added in ${processingTime}ms`
+      `Discovery complete: ${newCollections.length} new collections added, ${spamFiltered} filtered as spam, in ${processingTime}ms`
     );
 
     return {
