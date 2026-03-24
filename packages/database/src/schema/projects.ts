@@ -11,7 +11,6 @@ import {
   numeric,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { users } from './users';
 
 export const collectionTypeEnum = pgEnum('collection_type', [
   'erc721',
@@ -270,7 +269,7 @@ export const collectionWiki = pgTable('collection_wiki', {
     .references(() => collections.id, { onDelete: 'cascade' })
     .unique(),
   content: text('content').notNull().default(''),
-  lastEditedBy: uuid('last_edited_by').references(() => users.id, { onDelete: 'set null' }),
+  lastEditedBy: uuid('last_edited_by'), // References users.id (FK in migration SQL)
   lastEditedAt: timestamp('last_edited_at', { withTimezone: true }).defaultNow().notNull(),
   version: integer('version').default(1).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
