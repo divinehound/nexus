@@ -168,22 +168,47 @@ export class BlockchainLookupService {
         if (items && items.length > 0 && total && total > 1) {
           const firstItem = items[0];
           
-          // Try to get collection name from grouping metadata, fallback to deriving from NFT name
-          const collectionGroup = firstItem.grouping?.find((g: any) => g.group_key === 'collection');
-          let collectionName = firstItem.content?.metadata?.name || '';
+          // searchAssets doesn't give us collection-level metadata
+          // Need to query the collection mint itself via getAsset
+          this.logger.log(`[Solana Lookup] searchAssets found ${total} items, querying collection mint directly for metadata`);
           
-          // If the name looks like "Collection Name #1234", extract just "Collection Name"
-          const numberSuffixMatch = collectionName.match(/^(.+?)\s*#\d+$/);
-          if (numberSuffixMatch) {
-            collectionName = numberSuffixMatch[1].trim();
+          const collectionAssetRes = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'getAsset',
+              params: { id: collectionAddress },
+            }),
+          });
+          
+          if (collectionAssetRes.ok) {
+            const collectionAssetBody = await collectionAssetRes.json();
+            const collectionAsset = collectionAssetBody.result;
+            
+            if (collectionAsset?.content?.metadata?.name) {
+              this.logger.log(`[Solana Lookup] Collection mint metadata: ${collectionAsset.content.metadata.name}`);
+              
+              return {
+                contractAddress: collectionAddress,
+                chain: Chain.SOLANA,
+                name: collectionAsset.content.metadata.name,
+                symbol: collectionAsset.content.metadata.symbol || '',
+                totalSupply: total,
+                tokenType: 'spl',
+                imageUrl: collectionAsset.content?.links?.image || collectionAsset.content?.files?.[0]?.uri || firstItem.content?.links?.image || null,
+                deployerAddress: collectionAsset.authorities?.[0]?.address || null,
+              };
+            }
           }
           
-          this.logger.log(`[Solana Lookup] Collection ${collectionAddress}: found ${total} total items via searchAssets, derived name: ${collectionName}`);
-          
+          // Fallback if collection mint query failed
+          this.logger.warn(`[Solana Lookup] Could not get collection mint metadata, using first NFT data`);
           return {
             contractAddress: collectionAddress,
             chain: Chain.SOLANA,
-            name: collectionName || `solana:${collectionAddress.slice(0, 8)}`,
+            name: firstItem.content?.metadata?.name || `solana:${collectionAddress.slice(0, 8)}`,
             symbol: firstItem.content?.metadata?.symbol || '',
             totalSupply: total,
             tokenType: 'spl',
@@ -221,24 +246,49 @@ export class BlockchainLookupService {
         
         if (items && items.length > 0) {
           const firstItem = items[0];
-          const collectionInfo = firstItem.grouping?.find((g: any) => g.group_key === 'collection');
           
-          // Derive collection name from first NFT, removing #number suffix
-          let collectionName = firstItem.content?.metadata?.name || '';
-          const numberSuffixMatch = collectionName.match(/^(.+?)\s*#\d+$/);
-          if (numberSuffixMatch) {
-            collectionName = numberSuffixMatch[1].trim();
+          // Query collection mint directly for proper metadata
+          this.logger.log(`[Solana Lookup] getAssetsByGroup found ${total || 'unknown'} items, querying collection mint for metadata`);
+          
+          const collectionAssetRes = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'getAsset',
+              params: { id: collectionAddress },
+            }),
+          });
+          
+          if (collectionAssetRes.ok) {
+            const collectionAssetBody = await collectionAssetRes.json();
+            const collectionAsset = collectionAssetBody.result;
+            
+            if (collectionAsset?.content?.metadata?.name) {
+              this.logger.log(`[Solana Lookup] Collection mint metadata: ${collectionAsset.content.metadata.name}`);
+              
+              return {
+                contractAddress: collectionAddress,
+                chain: Chain.SOLANA,
+                name: collectionAsset.content.metadata.name,
+                symbol: collectionAsset.content.metadata.symbol || '',
+                totalSupply: total || null,
+                tokenType: 'spl',
+                imageUrl: collectionAsset.content?.links?.image || collectionAsset.content?.files?.[0]?.uri || firstItem.content?.links?.image || null,
+                deployerAddress: collectionAsset.authorities?.[0]?.address || null,
+              };
+            }
           }
           
-          this.logger.log(`[Solana Lookup] Collection ${collectionAddress}: found ${total || 'unknown'} total items, derived name: ${collectionName}`);
-          
-          // Use collection metadata from first item
+          // Fallback to first NFT data
+          this.logger.warn(`[Solana Lookup] Could not get collection mint metadata, using first NFT data`);
           return {
             contractAddress: collectionAddress,
             chain: Chain.SOLANA,
-            name: collectionName || `solana:${collectionAddress.slice(0, 8)}`,
+            name: firstItem.content?.metadata?.name || `solana:${collectionAddress.slice(0, 8)}`,
             symbol: firstItem.content?.metadata?.symbol || '',
-            totalSupply: total || null, // Use the total count from getAssetsByGroup
+            totalSupply: total || null,
             tokenType: 'spl',
             imageUrl: firstItem.content?.links?.image || firstItem.content?.files?.[0]?.uri || null,
             deployerAddress: firstItem.authorities?.[0]?.address || null,
