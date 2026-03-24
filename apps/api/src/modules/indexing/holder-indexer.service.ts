@@ -76,14 +76,17 @@ export class HolderIndexerService {
         }
       }
 
-      // Update collection status (indexStatus field will be added in migration)
+      // Calculate total supply by summing all holder balances
+      const totalSupply = holders.reduce((sum, holder) => sum + holder.balance, 0);
+      
+      // Update collection status
       await this.db
         .update(collections)
         .set({
           holderCount: holders.length,
-          // If supply is null or 1 (likely wrong), use total holders as estimate
-          // This helps with Solana collections where metadata APIs fail
-          supply: collection.supply === null || collection.supply === 1 ? holders.length : collection.supply,
+          // If supply is null or 1 (likely wrong), use summed token count
+          // This gives accurate supply based on actual on-chain ownership
+          supply: collection.supply === null || collection.supply === 1 ? totalSupply : collection.supply,
           lastIndexFinishedAt: new Date(),
           lastIndexStatus: 'success',
         })
