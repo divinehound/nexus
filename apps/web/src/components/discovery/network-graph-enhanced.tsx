@@ -88,45 +88,28 @@ export function NetworkGraphVisualization({
     }
   };
 
-  const expandNode = useCallback(async (nodeId: string) => {
-    if (expandedNodes.has(nodeId) || expandingNode === nodeId) return;
+  const focusOnNode = useCallback(async (nodeId: string) => {
+    if (expandingNode === nodeId) return;
 
     setExpandingNode(nodeId);
+    setFocusedNode(nodeId);
     
     try {
+      // Fetch ONLY this node + its connections (clear everything else)
       const { nodes: newNodes, edges: newEdges } = await getCollectionConnections(nodeId, {
         minSharedHolders,
-        limit: 10,
+        limit: 15, // Show more connections since we're focusing
       });
 
-      setData(prevData => {
-        if (!prevData) return { nodes: newNodes, edges: newEdges };
-
-        const existingNodeIds = new Set(prevData.nodes.map(n => n.id));
-        const nodesToAdd = newNodes.filter(n => !existingNodeIds.has(n.id));
-
-        const existingEdgeKeys = new Set(
-          prevData.edges.map(e => `${e.source}-${e.target}`)
-        );
-        const edgesToAdd = newEdges.filter(e => {
-          const key = `${e.source}-${e.target}`;
-          const reverseKey = `${e.target}-${e.source}`;
-          return !existingEdgeKeys.has(key) && !existingEdgeKeys.has(reverseKey);
-        });
-
-        return {
-          nodes: [...prevData.nodes, ...nodesToAdd],
-          edges: [...prevData.edges, ...edgesToAdd],
-        };
-      });
-
-      setExpandedNodes(prev => new Set([...prev, nodeId]));
+      // Replace the entire graph (don't accumulate)
+      setData({ nodes: newNodes, edges: newEdges });
+      setExpandedNodes(new Set([nodeId]));
     } catch (err) {
-      console.error('Failed to expand node:', err);
+      console.error('Failed to focus node:', err);
     } finally {
       setExpandingNode(null);
     }
-  }, [minSharedHolders, expandedNodes, expandingNode]);
+  }, [minSharedHolders, expandingNode]);
 
   // D3 Force Simulation Rendering
   useEffect(() => {
@@ -167,9 +150,34 @@ export function NetworkGraphVisualization({
       .selectAll('line')
       .data(links)
       .join('line')
-      .attr('stroke', '#4b5563')
-      .attr('stroke-width', d => 1 + d.weight * 4)
-      .attr('stroke-opacity', 0.6)
+      .attr('stroke', d => {
+        // Highlight edges connected to focused node
+        if (!focusedNode) return '#4b5563';
+        const sourceId = (d.source as any).id || d.source;
+        const targetId = (d.target as any).id || d.target;
+        if (sourceId === focusedNode || targetId === focusedNode) {
+          return '#8b5cf6'; // Purple for focused connections
+        }
+        return '#4b5563'; // Gray for others
+      })
+      .attr('stroke-width', d => {
+        if (!focusedNode) return 1 + d.weight * 4;
+        const sourceId = (d.source as any).id || d.source;
+        const targetId = (d.target as any).id || d.target;
+        if (sourceId === focusedNode || targetId === focusedNode) {
+          return 2 + d.weight * 5; // Thicker for focused
+        }
+        return 1 + d.weight * 3;
+      })
+      .attr('stroke-opacity', d => {
+        if (!focusedNode) return 0.6;
+        const sourceId = (d.source as any).id || d.source;
+        const targetId = (d.target as any).id || d.target;
+        if (sourceId === focusedNode || targetId === focusedNode) {
+          return 0.8; // More visible
+        }
+        return 0.2; // Dim others
+      })
       .attr('class', 'transition-all duration-200');
 
     // Draw nodes
@@ -185,11 +193,8 @@ export function NetworkGraphVisualization({
         .on('end', dragended) as any
       )
       .on('click', (_event, d) => {
-        if (focusedNode === d.id) {
-          expandNode(d.id);
-        } else {
-          setFocusedNode(d.id);
-        }
+        // Single click: clear graph and refocus on this node
+        focusOnNode(d.id);
       })
       .on('mouseenter', (_event, d) => setHoveredNode(d.id))
       .on('mouseleave', () => setHoveredNode(null));
@@ -284,7 +289,7 @@ export function NetworkGraphVisualization({
     return () => {
       simulation.stop();
     };
-  }, [data, focusedNode, expandedNodes, expandNode]);
+  }, [data, focusedNode, expandedNodes, focusOnNode]);
 
   if (loading) {
     return (
@@ -329,15 +334,15 @@ export function NetworkGraphVisualization({
             {data.nodes.length} Collections · {data.edges.length} Connections
           </h3>
           <p className="mt-1 text-xs text-gray-500">
-            Click to focus · Double-click to expand · Drag to reposition · Scroll to zoom
+            Click node to explore · Drag to reposition · Scroll to zoom · Purple lines = connections
           </p>
         </div>
         {focusedNode && (
           <button
-            onClick={() => setFocusedNode(null)}
+            onClick={loadData}
             className="rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600"
           >
-            Reset Focus
+            ← Back to Your Network
           </button>
         )}
       </div>
