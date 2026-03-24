@@ -124,6 +124,53 @@ export class BlockchainLookupService {
   }
 
   /**
+   * Try Magic Eden API for Solana collection metadata (more reliable than Helius)
+   */
+  private async lookupSolanaMagicEden(
+    collectionAddress: string,
+  ): Promise<BlockchainContractInfo | null> {
+    try {
+      // Magic Eden uses collection symbols, but also accepts mint addresses for some endpoints
+      // Try to get collection by treating the address as a collection symbol
+      const statsResponse = await fetch(
+        `https://api-mainnet.magiceden.dev/v2/collections/${collectionAddress}/stats`,
+        { headers: { 'Accept': 'application/json' } }
+      );
+
+      if (statsResponse.ok) {
+        const stats = await statsResponse.json();
+        
+        // Get full collection metadata
+        const collectionResponse = await fetch(
+          `https://api-mainnet.magiceden.dev/v2/collections/${collectionAddress}`,
+          { headers: { 'Accept': 'application/json' } }
+        );
+        
+        if (collectionResponse.ok) {
+          const collection = await collectionResponse.json();
+          
+          this.logger.log(`[Magic Eden] Found: ${collection.name}, supply: ${stats.listedCount || 'unknown'}`);
+          
+          return {
+            contractAddress: collectionAddress,
+            chain: Chain.SOLANA,
+            name: collection.name,
+            symbol: collection.symbol || '',
+            totalSupply: stats.volumeAll || stats.listedCount || null,
+            tokenType: 'spl',
+            imageUrl: collection.image || null,
+            deployerAddress: null,
+          };
+        }
+      }
+    } catch (err) {
+      this.logger.debug(`[Magic Eden] Lookup failed: ${err}`);
+    }
+    
+    return null;
+  }
+
+  /**
    * Query Helius DAS API for Solana collection metadata.
    * First tries getAssetsByGroup to get collection info,
    * falls back to getAsset for single mint lookup.
@@ -131,6 +178,15 @@ export class BlockchainLookupService {
   private async lookupSolana(
     collectionAddress: string,
   ): Promise<BlockchainContractInfo | null> {
+    // Try Magic Eden first (more reliable for Solana collections)
+    this.logger.log(`[Solana Lookup] Trying Magic Eden for ${collectionAddress}`);
+    const magicEdenResult = await this.lookupSolanaMagicEden(collectionAddress);
+    if (magicEdenResult) {
+      return magicEdenResult;
+    }
+    
+    this.logger.log(`[Solana Lookup] Magic Eden failed, falling back to Helius`);
+    
     const apiKey = this.config.get<string>('helius.apiKey');
     if (!apiKey) {
       this.logger.warn('HELIUS_API_KEY not set — skipping Solana lookup');
