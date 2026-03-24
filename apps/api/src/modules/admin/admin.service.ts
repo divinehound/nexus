@@ -150,13 +150,14 @@ export class AdminService {
   async searchCollections(filters: {
     query?: string;
     limit?: number;
+    page?: number;
     hasProject?: boolean;
     verified?: boolean;
     indexed?: boolean;
     spam?: boolean;
     chain?: string;
   }) {
-    const { query, limit = 100, hasProject, verified, indexed, spam, chain } = filters;
+    const { query, limit = 100, page = 1, hasProject, verified, indexed, spam, chain } = filters;
 
     const conditions = [];
 
@@ -204,9 +205,20 @@ export class AdminService {
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
+    // Calculate offset for pagination
+    const offset = (page - 1) * limit;
+
+    // Get total count for pagination
+    const countResult = await this.db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(collections)
+      .where(whereClause);
+    const total = countResult[0]?.count || 0;
+
     const results = await this.db.query.collections.findMany({
       where: whereClause,
       limit,
+      offset,
       orderBy: [desc(collections.lastSeenAt)],
       with: {
         project: {
@@ -219,7 +231,8 @@ export class AdminService {
       },
     });
 
-    return results.map((c) => ({
+    return {
+      items: results.map((c) => ({
       id: c.id,
       name: c.name,
       chain: c.chain,
@@ -235,7 +248,12 @@ export class AdminService {
       twitterUrl: c.twitterUrl,
       websiteUrl: c.websiteUrl,
       project: c.project,
-    }));
+    })),
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
   // --- Wiki Suggestions ---

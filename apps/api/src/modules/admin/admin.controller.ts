@@ -297,6 +297,7 @@ export class AdminController {
   searchCollections(
     @Query('q') query?: string,
     @Query('limit') limit?: string,
+    @Query('page') page?: string,
     @Query('hasProject') hasProject?: string,
     @Query('verified') verified?: string,
     @Query('indexed') indexed?: string,
@@ -306,6 +307,7 @@ export class AdminController {
     return this.adminService.searchCollections({
       query,
       limit: limit ? parseInt(limit) : 100,
+      page: page ? parseInt(page) : 1,
       hasProject: hasProject === 'true' ? true : hasProject === 'false' ? false : undefined,
       verified: verified === 'true' ? true : verified === 'false' ? false : undefined,
       indexed: indexed === 'true',

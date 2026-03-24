@@ -77,6 +77,9 @@ export default function AdminCollectionsPage() {
   const [indexing, setIndexing] = useState<Record<string, boolean>>({});
   const [bulkChecking, setBulkChecking] = useState(false);
   const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'verified' | 'spam' | 'all'>('all');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(200);
+  const [totalResults, setTotalResults] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkActionInProgress, setBulkActionInProgress] = useState(false);
@@ -117,7 +120,8 @@ export default function AdminCollectionsPage() {
         params.set('q', searchQuery);
       }
       
-      params.set('limit', '200');
+      params.set('limit', pageSize.toString());
+      params.set('page', page.toString());
       
       // Apply filters
       if (hasProjectFilter === 'has') params.set('hasProject', 'true');
@@ -134,12 +138,19 @@ export default function AdminCollectionsPage() {
       if (filter === 'verified') params.set('verified', 'true');
       else if (filter !== 'all') params.set('verified', 'false');
 
-      const results = await apiFetch<AdminCollection[]>(
+      const results = await apiFetch<{
+        items: AdminCollection[];
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+      }>(
         `/admin/collections/search?${params.toString()}`,
         { token: accessToken }
       );
       
-      setCollections(results.map(c => ({ ...c, projectId: c.project?.id || '' })));
+      setCollections(results.items.map(c => ({ ...c, projectId: c.project?.id || '' })));
+      setTotalResults(results.total);
       
       // Load projects for dropdown
       const projectsData = await apiFetch<ProjectListResponse>('/admin/projects?page=1&limit=200', {
@@ -172,7 +183,7 @@ export default function AdminCollectionsPage() {
 
   useEffect(() => {
     fetchData();
-  }, [accessToken, filter, hasProjectFilter, chainFilter, indexedFilter, showSpam, searchQuery]);
+  }, [accessToken, filter, hasProjectFilter, chainFilter, indexedFilter, showSpam, searchQuery, page, pageSize]);
 
   const handleSearch = () => {
     fetchData();
@@ -956,6 +967,62 @@ export default function AdminCollectionsPage() {
         <p className="text-gray-500">No collections in this queue state.</p>
       ) : (
         <>
+          {/* Pagination Controls */}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-800 bg-gray-900/50 p-3">
+            <div className="flex items-center gap-3 text-sm text-gray-300">
+              <span>
+                Showing {filteredCollections.length} of {totalResults.toLocaleString()} total
+              </span>
+              <select
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(parseInt(e.target.value));
+                  setPage(1);
+                }}
+                className="rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-white"
+              >
+                <option value="50">50 per page</option>
+                <option value="100">100 per page</option>
+                <option value="200">200 per page</option>
+                <option value="500">500 per page</option>
+              </select>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage(1)}
+                disabled={page === 1}
+                className="rounded bg-gray-800 px-3 py-1 text-sm text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                First
+              </button>
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="rounded bg-gray-800 px-3 py-1 text-sm text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                ← Prev
+              </button>
+              <span className="px-3 text-sm text-gray-300">
+                Page {page} of {Math.ceil(totalResults / pageSize)}
+              </span>
+              <button
+                onClick={() => setPage(p => p + 1)}
+                disabled={page >= Math.ceil(totalResults / pageSize)}
+                className="rounded bg-gray-800 px-3 py-1 text-sm text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next →
+              </button>
+              <button
+                onClick={() => setPage(Math.ceil(totalResults / pageSize))}
+                disabled={page >= Math.ceil(totalResults / pageSize)}
+                className="rounded bg-gray-800 px-3 py-1 text-sm text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Last
+              </button>
+            </div>
+          </div>
+
           {/* Select All */}
           <div className="mb-3 flex items-center gap-2 text-sm text-gray-300">
             <input
@@ -964,7 +1031,7 @@ export default function AdminCollectionsPage() {
               onChange={handleSelectAll}
               className="rounded border-gray-700 bg-gray-900 text-purple-600 focus:ring-purple-500"
             />
-            <label>Select all {filteredCollections.length} visible collections</label>
+            <label>Select all {filteredCollections.length} on this page</label>
           </div>
 
           <div className="space-y-3">
