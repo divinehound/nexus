@@ -5,6 +5,7 @@ import { getNetworkGraph, type NetworkGraph, type NetworkGraphNode } from '@/lib
 import Link from 'next/link';
 
 interface NetworkGraphProps {
+  strategy?: 'top-collections' | 'connected-traverse';
   maxNodes?: number;
   minSharedHolders?: number;
   chains?: string[];
@@ -31,6 +32,7 @@ function getChainColor(chain: string): string {
 }
 
 export function NetworkGraphVisualization({
+  strategy,
   maxNodes = 50,
   minSharedHolders = 5,
   chains,
@@ -46,13 +48,14 @@ export function NetworkGraphVisualization({
 
   useEffect(() => {
     loadData();
-  }, [maxNodes, minSharedHolders, chains, initialFocusedNodeId]);
+  }, [strategy, maxNodes, minSharedHolders, chains, initialFocusedNodeId]);
 
   const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
       const graph = await getNetworkGraph({ 
+        strategy,
         maxNodes, 
         minSharedHolders, 
         chains,

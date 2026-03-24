@@ -79,7 +79,11 @@ function DiscoverContent() {
         <p className="mb-4 text-sm text-gray-400">
           Explore how NFT communities are connected through shared collectors
         </p>
-        <NetworkGraphVisualization maxNodes={40} minSharedHolders={5} />
+        <NetworkGraphVisualization 
+          strategy="connected-traverse"
+          maxNodes={40} 
+          minSharedHolders={5} 
+        />
       </section>
 
       {/* Personalized Recommendations */}

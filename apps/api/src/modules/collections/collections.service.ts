@@ -25,12 +25,159 @@ const SUPPORTED_CHAINS = [
 
 type SupportedChain = (typeof SUPPORTED_CHAINS)[number];
 
+interface CachedNetworkGraph {
+  data: { nodes: any[]; edges: any[] };
+  timestamp: number;
+  ttl: number;
+}
+
 @Injectable()
 export class CollectionsService {
+  private networkGraphCache = new Map<string, CachedNetworkGraph>();
+  private readonly DEFAULT_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly collectionMetricsService: CollectionMetricsService,
   ) {}
+
+  /**
+   * Generate cache key for network graph
+   */
+  private getNetworkGraphCacheKey(options: {
+    strategy?: string;
+    chains?: string[];
+    maxNodes?: number;
+    minSharedHolders?: number;
+    focusCollectionId?: string;
+  }): string {
+    const { strategy = 'top-collections', chains = [], maxNodes = 50, minSharedHolders = 5, focusCollectionId } = options;
+    const chainKey = chains.sort().join(',') || 'all';
+    const focusKey = focusCollectionId || 'global';
+    return `${strategy}_${chainKey}_${maxNodes}_${minSharedHolders}_${focusKey}`;
+  }
+
+  /**
+   * Get cached network graph if valid
+   */
+  private getCachedNetworkGraph(cacheKey: string): { nodes: any[]; edges: any[] } | null {
+    const cached = this.networkGraphCache.get(cacheKey);
+    if (!cached) return null;
+
+    const now = Date.now();
+    if (now - cached.timestamp > cached.ttl) {
+      this.networkGraphCache.delete(cacheKey);
+      return null;
+    }
+
+    return cached.data;
+  }
+
+  /**
+   * Cache network graph result
+   */
+  private cacheNetworkGraph(cacheKey: string, data: { nodes: any[]; edges: any[] }, ttl?: number): void {
+    this.networkGraphCache.set(cacheKey, {
+      data,
+      timestamp: Date.now(),
+      ttl: ttl || this.DEFAULT_CACHE_TTL,
+    });
+  }
+
+  /**
+   * Clear network graph cache (call when collections re-indexed)
+   */
+  clearNetworkGraphCache(): void {
+    this.networkGraphCache.clear();
+  }
+
+  /**
+   * Build network graph via BFS traversal from seed nodes
+   */
+  private async buildConnectedTraverse(options: {
+    maxNodes: number;
+    minSharedHolders: number;
+    chains: string[];
+  }): Promise<{ collectionIds: string[]; collectionMap: Map<string, any> }> {
+    const { maxNodes, minSharedHolders, chains } = options;
+    const visited = new Set<string>();
+    const collectionMap = new Map<string, any>();
+    const queue: { id: string; depth: number }[] = [];
+
+    // Step 1: Get seed nodes (top collections per chain or overall)
+    const seedsPerChain = Math.max(3, Math.floor(maxNodes / 10));
+    const seedsResult = await this.db.execute(
+      chains.length > 0
+        ? sql`
+            (SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
+             FROM collections c
+             INNER JOIN collection_holders ch ON ch.collection_id = c.id
+             WHERE c.is_spam = false AND c.chain IN (${sql.join(chains.map(chain => sql`${chain}`), sql`, `)})
+             GROUP BY c.id, c.chain
+             HAVING COUNT(ch.address) > 0
+             ORDER BY holder_count DESC
+             LIMIT ${seedsPerChain})
+          `
+        : sql`
+            SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
+            FROM collections c
+            INNER JOIN collection_holders ch ON ch.collection_id = c.id
+            WHERE c.is_spam = false
+            GROUP BY c.id
+            HAVING COUNT(ch.address) > 0
+            ORDER BY holder_count DESC
+            LIMIT ${seedsPerChain}
+          `,
+    );
+
+    // Add seeds to queue and map
+    for (const row of seedsResult) {
+      const id = row.id as string;
+      visited.add(id);
+      collectionMap.set(id, {
+        id,
+        name: row.name,
+        chain: row.chain,
+        contractAddress: row.contract_address,
+        imageUrl: row.image_url,
+        holderCount: parseInt(row.holder_count as string),
+      });
+      queue.push({ id, depth: 0 });
+    }
+
+    // Step 2: BFS traverse to find connected collections
+    while (queue.length > 0 && collectionMap.size < maxNodes) {
+      const { id, depth } = queue.shift()!;
+      
+      // Limit depth to prevent exponential explosion
+      if (depth >= 2) continue;
+      
+      // Get related collections for this node
+      const related = await this.getRelatedCollections(id, 10);
+      
+      // Determine how many to add based on depth
+      const limitAtDepth = depth === 0 ? 10 : 5;
+      
+      for (const rel of related.slice(0, limitAtDepth)) {
+        if (collectionMap.size >= maxNodes) break;
+        if (visited.has(rel.id)) continue;
+        if (rel.sharedHolders < minSharedHolders) continue;
+        
+        visited.add(rel.id);
+        collectionMap.set(rel.id, {
+          id: rel.id,
+          name: rel.name,
+          chain: rel.chain,
+          contractAddress: rel.contractAddress,
+          imageUrl: rel.imageUrl,
+          holderCount: rel.totalHolders,
+        });
+        queue.push({ id: rel.id, depth: depth + 1 });
+      }
+    }
+
+    return { collectionIds: Array.from(visited), collectionMap };
+  }
 
   async findById(id: string) {
     return this.db.query.collections.findFirst({
@@ -328,18 +475,28 @@ export class CollectionsService {
    * Returns nodes (collections) and edges (shared holders)
    */
   async getNetworkGraph(options?: {
+    strategy?: 'top-collections' | 'connected-traverse';
     minSharedHolders?: number;
     maxNodes?: number;
     chains?: string[];
     focusCollectionId?: string;
   }) {
+    const strategy = options?.strategy || 'connected-traverse';
     const minShared = options?.minSharedHolders || 5;
     const maxNodes = options?.maxNodes || 50;
     const chains = options?.chains || [];
     const focusId = options?.focusCollectionId;
 
+    // Check cache first
+    const cacheKey = this.getNetworkGraphCacheKey({ strategy, chains, maxNodes, minSharedHolders: minShared, focusCollectionId: focusId });
+    const cached = this.getCachedNetworkGraph(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     try {
       let nodes: any[];
+      let collectionMap: Map<string, any> | undefined;
       
       if (focusId) {
         // Focus mode: get the focused collection + its related collections
@@ -372,8 +529,18 @@ export class CollectionsService {
             holderCount: r.totalHolders,
           })),
         ];
+      } else if (strategy === 'connected-traverse') {
+        // Connected traverse strategy: BFS from seed nodes
+        const traverseResult = await this.buildConnectedTraverse({
+          maxNodes,
+          minSharedHolders: minShared,
+          chains,
+        });
+        
+        collectionMap = traverseResult.collectionMap;
+        nodes = Array.from(collectionMap.values());
       } else {
-        // Global mode: top N collections by holder count
+        // Top collections strategy: top N by holder count
         const collectionsResult = await this.db.execute(
           chains.length > 0
             ? sql`
@@ -485,7 +652,12 @@ export class CollectionsService {
       };
     });
 
-      return { nodes, edges };
+      const result = { nodes, edges };
+      
+      // Cache the result
+      this.cacheNetworkGraph(cacheKey, result);
+      
+      return result;
     } catch (error) {
       console.error('Error generating network graph:', error);
       // Return empty graph on error rather than crashing

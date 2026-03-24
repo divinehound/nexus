@@ -17,12 +17,14 @@ export class CollectionsController {
   @Get('network/graph')
   @ApiOperation({ summary: 'Get collection network graph data for visualization' })
   getNetworkGraph(
+    @Query('strategy') strategy?: 'top-collections' | 'connected-traverse',
     @Query('minSharedHolders') minSharedHolders?: string,
     @Query('maxNodes') maxNodes?: string,
     @Query('chains') chains?: string,
     @Query('focusCollectionId') focusCollectionId?: string,
   ) {
     return this.collectionsService.getNetworkGraph({
+      strategy,
       minSharedHolders: minSharedHolders ? parseInt(minSharedHolders) : undefined,
       maxNodes: maxNodes ? parseInt(maxNodes) : undefined,
       chains: chains ? chains.split(',') : undefined,
