@@ -302,8 +302,15 @@ export class BlockchainLookupService {
       const contracts = new Set<string>();
 
       data.result?.items?.forEach((item: any) => {
-        if (item.grouping?.[0]?.group_value) {
-          contracts.add(item.grouping[0].group_value);
+        // Look for 'collection' grouping specifically (not just first grouping)
+        const collectionGroup = item.grouping?.find((g: any) => g.group_key === 'collection');
+        
+        if (collectionGroup?.group_value) {
+          contracts.add(collectionGroup.group_value);
+        } else if (item.id) {
+          // Fallback: if no collection grouping, this is an individual mint
+          // We'll skip these to avoid treating mints as collections
+          this.logger.debug(`Skipping ungrouped Solana NFT: ${item.id}`);
         }
       });
 
