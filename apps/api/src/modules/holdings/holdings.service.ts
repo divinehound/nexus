@@ -125,10 +125,12 @@ export class HoldingsService {
     }
     
     if (!wallet) {
-      // Try finding by address (case-insensitive for EVM, exact for Solana)
-      const normalized = walletIdOrAddress.toLowerCase();
+      // Try finding by address (case-sensitive for Solana, case-insensitive for EVM)
       wallet = await this.db.query.wallets.findFirst({
-        where: sql`lower(${wallets.address}) = ${normalized}`,
+        where: sql`
+          (${wallets.chain}::text = 'solana' AND ${wallets.address} = ${walletIdOrAddress})
+          OR (${wallets.chain}::text != 'solana' AND LOWER(${wallets.address}) = ${walletIdOrAddress.toLowerCase()})
+        `,
       });
     }
 
