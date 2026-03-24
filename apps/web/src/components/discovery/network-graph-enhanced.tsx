@@ -131,16 +131,18 @@ export function NetworkGraphVisualization({
       holderDataReliable: e.holderDataReliable,
     }));
 
-    // Create force simulation
+    // Create force simulation with reduced movement
     const simulation = d3.forceSimulation(nodes)
       .force('link', d3.forceLink<SimulationNode, SimulationLink>(links)
         .id(d => d.id)
-        .distance(d => 150 - (d.weight * 100)) // Closer for stronger connections
-        .strength(d => d.weight * 0.5)
+        .distance(d => 150 - (d.weight * 80)) // Slightly less variation
+        .strength(d => d.weight * 0.3) // Weaker links = less pulling
       )
-      .force('charge', d3.forceManyBody().strength(-800))
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(d => Math.sqrt(d.holderCount || 0) / 3 + 20));
+      .force('charge', d3.forceManyBody().strength(-600)) // Less repulsion
+      .force('center', d3.forceCenter(width / 2, height / 2).strength(0.05)) // Weaker centering
+      .force('collision', d3.forceCollide().radius(d => Math.sqrt(d.holderCount || 0) / 3 + 22))
+      .velocityDecay(0.6) // Faster decay = settles quicker
+      .alphaDecay(0.05); // Faster cooldown
 
     simulationRef.current = simulation;
 

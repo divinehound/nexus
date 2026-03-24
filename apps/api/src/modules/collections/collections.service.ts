@@ -92,27 +92,63 @@ export class CollectionsService {
   }
 
   /**
-   * Get user's holdings as graph nodes
+   * Get user's holdings as graph nodes (checks ALL linked wallets)
    */
   private async getUserHoldingsAsNodes(userAddress: string, chain: string, limit: number = 10): Promise<any[]> {
     const normalizedAddress = chain === 'solana' ? userAddress : userAddress.toLowerCase();
     
-    console.log(`Fetching holdings for address: ${normalizedAddress} on chain: ${chain}`);
+    console.log(`Fetching holdings for address: ${normalizedAddress}`);
     
-    const holdings = await this.db.execute(
-      sql`
-        SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, c.holder_count
-        FROM collection_holders ch
-        INNER JOIN collections c ON c.id = ch.collection_id
-        WHERE ch.address = ${normalizedAddress}
-          AND ch.chain = ${chain}
-          AND c.is_spam = false
-        ORDER BY c.holder_count DESC
-        LIMIT ${limit}
-      `
-    );
+    // First, find the user_id for this address
+    const wallet = await this.db.query.wallets.findFirst({
+      where: sql`CASE 
+        WHEN ${chain} = 'solana' THEN address = ${userAddress}
+        ELSE LOWER(address) = ${normalizedAddress}
+      END`,
+    });
 
-    console.log(`Found ${holdings.length} holdings for ${normalizedAddress}`);
+    let holdings: any[];
+
+    if (wallet?.userId) {
+      // User has linked wallets - check ALL their addresses across ALL chains
+      console.log(`Found user_id ${wallet.userId}, checking all linked wallets`);
+      
+      holdings = await this.db.execute(
+        sql`
+          SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, c.holder_count
+          FROM collection_holders ch
+          INNER JOIN collections c ON c.id = ch.collection_id
+          INNER JOIN wallets w ON 
+            CASE
+              WHEN ch.chain = 'solana' THEN w.address = ch.address
+              ELSE LOWER(w.address) = LOWER(ch.address)
+            END
+            AND w.chain::text = ch.chain
+          WHERE w.user_id = ${wallet.userId}
+            AND c.is_spam = false
+          ORDER BY c.holder_count DESC
+          LIMIT ${limit}
+        `
+      );
+    } else {
+      // No user_id - just check this single address on this chain
+      console.log(`No user_id found, checking single address on ${chain}`);
+      
+      holdings = await this.db.execute(
+        sql`
+          SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, c.holder_count
+          FROM collection_holders ch
+          INNER JOIN collections c ON c.id = ch.collection_id
+          WHERE ch.address = ${normalizedAddress}
+            AND ch.chain = ${chain}
+            AND c.is_spam = false
+          ORDER BY c.holder_count DESC
+          LIMIT ${limit}
+        `
+      );
+    }
+
+    console.log(`Found ${holdings.length} holdings across all linked wallets`);
 
     return holdings.map((row: any) => ({
       id: row.id,
@@ -121,7 +157,7 @@ export class CollectionsService {
       contractAddress: row.contract_address,
       imageUrl: row.image_url,
       holderCount: parseInt(row.holder_count || '0'),
-      isUserHolding: true, // Mark as user's collection
+      isUserHolding: true,
     }));
   }
 
