@@ -255,6 +255,81 @@ export function adminDiscoverCollections(
   );
 }
 
+export function adminUpdateCollection(
+  collectionId: string,
+  updates: {
+    name?: string;
+    description?: string;
+    discordUrl?: string;
+    twitterUrl?: string;
+    websiteUrl?: string;
+    telegramUrl?: string;
+    externalUrl?: string;
+  },
+  token: string
+) {
+  return apiFetch<{ success: boolean; collectionId: string }>(
+    `/admin/collections/${collectionId}/update`,
+    {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify(updates),
+    }
+  );
+}
+
+export function adminLinkCollectionToProject(
+  collectionId: string,
+  projectId: string | null,
+  token: string
+) {
+  return apiFetch<{ success: boolean; collectionId: string; projectId: string | null; action: string }>(
+    `/admin/collections/${collectionId}/link-project`,
+    {
+      method: 'PATCH',
+      token,
+      body: JSON.stringify({ projectId }),
+    }
+  );
+}
+
+export function adminBulkLinkProject(
+  collectionIds: string[],
+  projectId: string,
+  token: string
+) {
+  return apiFetch<{ success: number; failed: number; total: number; errors: string[]; projectId: string; projectName: string }>(
+    `/admin/collections/bulk-link-project`,
+    {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ collectionIds, projectId }),
+    }
+  );
+}
+
+export function adminBulkVerify(collectionIds: string[], token: string) {
+  return apiFetch<{ success: number; failed: number; total: number; errors: string[] }>(
+    `/admin/collections/bulk-verify`,
+    {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ collectionIds }),
+    }
+  );
+}
+
+export function adminBulkMarkSpam(collectionIds: string[], token: string) {
+  return apiFetch<{ success: number; failed: number; total: number; errors: string[] }>(
+    `/admin/collections/bulk-mark-spam`,
+    {
+      method: 'POST',
+      token,
+      body: JSON.stringify({ collectionIds }),
+    }
+  );
+}
+
 export type IndexingJobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface AdminIndexingJobListItem {

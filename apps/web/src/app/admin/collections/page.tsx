@@ -72,11 +72,14 @@ export default function AdminCollectionsPage() {
   const [enriching, setEnriching] = useState<Record<string, boolean>>({});
   const [indexing, setIndexing] = useState<Record<string, boolean>>({});
   const [bulkChecking, setBulkChecking] = useState(false);
-  const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'verified' | 'spam' | 'all'>('pending');
+  const [filter, setFilter] = useState<'pending' | 'tracked_unverified' | 'pending_claim' | 'suggested' | 'verified' | 'spam' | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkActionInProgress, setBulkActionInProgress] = useState(false);
   const [showSpam, setShowSpam] = useState(false);
+  const [hasProjectFilter, setHasProjectFilter] = useState<'all' | 'has' | 'none'>('all');
+  const [chainFilter, setChainFilter] = useState<string>('all');
+  const [indexedFilter, setIndexedFilter] = useState(false);
   const [directLookup, setDirectLookup] = useState({ chain: 'solana', address: '' });
   const [lookupResult, setLookupResult] = useState<AdminCollection | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
@@ -103,30 +106,44 @@ export default function AdminCollectionsPage() {
     setError(null);
 
     try {
-      // If search query exists and is long enough, use search endpoint
+      // Build search params
+      const params = new URLSearchParams();
+      
       if (searchQuery.trim().length >= 2) {
-        const results = await apiFetch<AdminCollection[]>(
-          `/admin/collections/search?q=${encodeURIComponent(searchQuery)}&limit=100`,
-          { token: accessToken }
-        );
-        setCollections(results.map(c => ({ ...c, projectId: c.project?.id || '' })));
-        setProjects([]);
-      } else {
-        // Otherwise load via projects endpoint
-        const data = await apiFetch<ProjectListResponse>('/admin/projects?page=1&limit=200', {
-          token: accessToken,
-        });
-
-        setProjects(data.items.map((project) => ({ id: project.id, name: project.name })));
-
-        const flattened = data.items.flatMap((project) =>
-          project.collections.map((collection) => ({ ...collection, projectId: project.id })),
-        );
-
-        setCollections(flattened);
+        params.set('q', searchQuery);
       }
+      
+      params.set('limit', '200');
+      
+      // Apply filters
+      if (hasProjectFilter === 'has') params.set('hasProject', 'true');
+      if (hasProjectFilter === 'none') params.set('hasProject', 'false');
+      
+      if (chainFilter !== 'all') params.set('chain', chainFilter);
+      
+      if (indexedFilter) params.set('indexed', 'true');
+      
+      if (showSpam) params.set('spam', 'true');
+      else params.set('spam', 'false');
+      
+      // Verification status filter
+      if (filter === 'verified') params.set('verified', 'true');
+      else if (filter !== 'all') params.set('verified', 'false');
+
+      const results = await apiFetch<AdminCollection[]>(
+        `/admin/collections/search?${params.toString()}`,
+        { token: accessToken }
+      );
+      
+      setCollections(results.map(c => ({ ...c, projectId: c.project?.id || '' })));
+      
+      // Load projects for dropdown
+      const projectsData = await apiFetch<ProjectListResponse>('/admin/projects?page=1&limit=200', {
+        token: accessToken,
+      });
+      setProjects(projectsData.items.map((p) => ({ id: p.id, name: p.name })));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load review queue');
+      setError(err instanceof Error ? err.message : 'Failed to load collections');
       setCollections([]);
     } finally {
       setLoading(false);
@@ -151,7 +168,7 @@ export default function AdminCollectionsPage() {
 
   useEffect(() => {
     fetchData();
-  }, [accessToken]);
+  }, [accessToken, filter, hasProjectFilter, chainFilter, indexedFilter, showSpam, searchQuery]);
 
   const handleSearch = () => {
     fetchData();
@@ -528,6 +545,121 @@ export default function AdminCollectionsPage() {
     await fetchData();
   };
 
+  const [linkProjectId, setLinkProjectId] = useState('');
+  const [showLinkModal, setShowLinkModal] = useState(false);
+
+  const handleBulkLinkProject = async () => {
+    if (!accessToken || !linkProjectId || selectedIds.size === 0) return;
+
+    setConfirmModal({
+      isOpen: true,
+      title: 'Link Collections to Project',
+      message: (
+        <div>
+          <p>Link {selectedIds.size} collection(s) to this project?</p>
+          <p className="mt-2 text-sm text-gray-400">
+            Project: {projects.find(p => p.id === linkProjectId)?.name || linkProjectId}
+          </p>
+        </div>
+      ),
+      confirmText: 'Link',
+      variant: 'default',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setBulkActionInProgress(true);
+        
+        try {
+          const result = await adminBulkLinkProject(
+            Array.from(selectedIds),
+            linkProjectId,
+            accessToken
+          );
+          
+          toast.success(`Linked ${result.success} collections to ${result.projectName}`);
+          if (result.failed > 0) {
+            toast.error(`${result.failed} failed: ${result.errors.slice(0, 3).join(', ')}`);
+          }
+          
+          setSelectedIds(new Set());
+          setLinkProjectId('');
+          setShowLinkModal(false);
+          await fetchData();
+        } catch (err: any) {
+          toast.error(err?.message || 'Bulk link failed');
+        } finally {
+          setBulkActionInProgress(false);
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        }
+      },
+    });
+  };
+
+  const handleBulkVerifyNew = async () => {
+    if (!accessToken || selectedIds.size === 0) return;
+
+    setConfirmModal({
+      isOpen: true,
+      title: 'Verify Collections',
+      message: `Verify ${selectedIds.size} collection(s)?`,
+      confirmText: 'Verify',
+      variant: 'default',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setBulkActionInProgress(true);
+        
+        try {
+          const result = await adminBulkVerify(Array.from(selectedIds), accessToken);
+          
+          toast.success(`Verified ${result.success} collections`);
+          if (result.failed > 0) {
+            toast.error(`${result.failed} failed`);
+          }
+          
+          setSelectedIds(new Set());
+          await fetchData();
+        } catch (err: any) {
+          toast.error(err?.message || 'Bulk verify failed');
+        } finally {
+          setBulkActionInProgress(false);
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        }
+      },
+    });
+  };
+
+  const handleBulkSpamNew = async () => {
+    if (!accessToken || selectedIds.size === 0) return;
+
+    setConfirmModal({
+      isOpen: true,
+      title: 'Mark as Spam',
+      message: `Mark ${selectedIds.size} collection(s) as spam?`,
+      confirmText: 'Mark Spam',
+      variant: 'danger',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setBulkActionInProgress(true);
+        
+        try {
+          const result = await adminBulkMarkSpam(Array.from(selectedIds), accessToken);
+          
+          toast.success(`Marked ${result.success} collections as spam`);
+          if (result.failed > 0) {
+            toast.error(`${result.failed} failed`);
+          }
+          
+          setSelectedIds(new Set());
+          await fetchData();
+        } catch (err: any) {
+          toast.error(err?.message || 'Bulk spam failed');
+        } finally {
+          setBulkActionInProgress(false);
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        }
+      },
+    });
+  };
+
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -561,18 +693,53 @@ export default function AdminCollectionsPage() {
             )}
           </div>
           <select
+            value={hasProjectFilter}
+            onChange={(e) => setHasProjectFilter(e.target.value as typeof hasProjectFilter)}
+            className="rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-white"
+          >
+            <option value="all">All Collections</option>
+            <option value="has">✓ Has Project</option>
+            <option value="none">⚠️ No Project</option>
+          </select>
+
+          <select
+            value={chainFilter}
+            onChange={(e) => setChainFilter(e.target.value)}
+            className="rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-white"
+          >
+            <option value="all">All Chains</option>
+            <option value="ethereum">Ethereum</option>
+            <option value="base">Base</option>
+            <option value="polygon">Polygon</option>
+            <option value="solana">Solana</option>
+            <option value="abstract">Abstract</option>
+            <option value="apechain">ApeChain</option>
+            <option value="arbitrum">Arbitrum</option>
+            <option value="optimism">Optimism</option>
+            <option value="avalanche">Avalanche</option>
+          </select>
+
+          <select
             value={filter}
             onChange={(e) => setFilter(e.target.value as typeof filter)}
             className="rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-white"
           >
+            <option value="all">All Status</option>
+            <option value="verified">✓ Verified</option>
+            <option value="tracked_unverified">Unverified</option>
             <option value="pending">Pending Review</option>
-            <option value="tracked_unverified">Tracked Unverified</option>
-            <option value="pending_claim">Pending Claim</option>
-            <option value="suggested">Suggested Mapping</option>
-            <option value="verified">Verified ✓</option>
-            <option value="spam">🚫 Spam Only</option>
-            <option value="all">All Collections</option>
           </select>
+
+          <label className="flex items-center gap-2 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={indexedFilter}
+              onChange={(e) => setIndexedFilter(e.target.checked)}
+              className="rounded border-gray-700 bg-gray-900 text-purple-600 focus:ring-purple-500"
+            />
+            Indexed only
+          </label>
+
           <label className="flex items-center gap-2 text-sm text-gray-300">
             <input
               type="checkbox"
@@ -666,30 +833,54 @@ export default function AdminCollectionsPage() {
 
         {/* Bulk Actions Bar */}
         {selectedIds.size > 0 && (
-          <div className="flex items-center justify-between rounded-xl border border-purple-900/50 bg-purple-950/30 p-3">
-            <span className="text-sm font-medium text-purple-200">
-              {selectedIds.size} collection{selectedIds.size !== 1 ? 's' : ''} selected
-            </span>
-            <div className="flex gap-2">
-              <button
-                onClick={handleBulkMarkSpam}
-                disabled={bulkActionInProgress}
-                className="rounded bg-red-700 px-3 py-1 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {bulkActionInProgress ? '⏳ Processing...' : '🚫 Mark as Spam'}
-              </button>
-              <button
-                onClick={handleBulkMarkNotSpam}
-                disabled={bulkActionInProgress}
-                className="rounded bg-green-700 px-3 py-1 text-sm font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {bulkActionInProgress ? '⏳ Processing...' : '✓ Mark as NOT Spam'}
-              </button>
+          <div className="flex flex-col gap-3 rounded-xl border border-purple-900/50 bg-purple-950/30 p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-purple-200">
+                {selectedIds.size} collection{selectedIds.size !== 1 ? 's' : ''} selected
+              </span>
               <button
                 onClick={() => setSelectedIds(new Set())}
                 className="rounded border border-gray-700 px-3 py-1 text-sm text-gray-300 hover:text-white"
               >
-                Clear
+                Clear All
+              </button>
+            </div>
+            
+            <div className="flex flex-wrap gap-2">
+              <div className="flex gap-2">
+                <select
+                  value={linkProjectId}
+                  onChange={(e) => setLinkProjectId(e.target.value)}
+                  className="rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-white"
+                >
+                  <option value="">Select Project...</option>
+                  {projects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleBulkLinkProject}
+                  disabled={bulkActionInProgress || !linkProjectId}
+                  className="rounded bg-blue-700 px-3 py-1 text-sm font-medium text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Link to Project
+                </button>
+              </div>
+
+              <button
+                onClick={handleBulkVerifyNew}
+                disabled={bulkActionInProgress}
+                className="rounded bg-green-700 px-3 py-1 text-sm font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                ✓ Verify
+              </button>
+
+              <button
+                onClick={handleBulkSpamNew}
+                disabled={bulkActionInProgress}
+                className="rounded bg-red-700 px-3 py-1 text-sm font-medium text-white hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                🚫 Mark Spam
               </button>
             </div>
           </div>
