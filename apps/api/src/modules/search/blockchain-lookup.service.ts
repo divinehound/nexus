@@ -157,16 +157,20 @@ export class BlockchainLookupService {
         }),
       });
 
+      this.logger.log(`[Solana Lookup] Checking collection ${collectionAddress} via getAssetsByGroup`);
+
       if (groupRes.ok) {
         const groupBody = await groupRes.json();
         const items = groupBody.result?.items;
         const total = groupBody.result?.total;
         
+        this.logger.log(`[Solana Lookup] getAssetsByGroup response: ${items?.length || 0} items, total: ${total || 'null'}`);
+        
         if (items && items.length > 0) {
           const firstItem = items[0];
           const collectionInfo = firstItem.grouping?.find((g: any) => g.group_key === 'collection');
           
-          this.logger.debug(`Solana collection ${collectionAddress}: found ${total || 'unknown'} total items`);
+          this.logger.log(`[Solana Lookup] Collection ${collectionAddress}: found ${total || 'unknown'} total items, name: ${firstItem.content?.metadata?.name}`);
           
           // Use collection metadata from first item
           return {
@@ -180,11 +184,15 @@ export class BlockchainLookupService {
             deployerAddress: firstItem.authorities?.[0]?.address || null,
           };
         } else {
-          this.logger.debug(`Solana collection ${collectionAddress}: getAssetsByGroup returned no items`);
+          this.logger.warn(`[Solana Lookup] getAssetsByGroup returned no items for ${collectionAddress}`);
         }
+      } else {
+        this.logger.warn(`[Solana Lookup] getAssetsByGroup failed with status ${groupRes.status}`);
       }
 
       // Fall back to getAsset (treats address as single mint)
+      this.logger.log(`[Solana Lookup] Falling back to getAsset for ${collectionAddress}`);
+      
       const assetRes = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -196,22 +204,31 @@ export class BlockchainLookupService {
         }),
       });
 
-      if (!assetRes.ok) return null;
+      if (!assetRes.ok) {
+        this.logger.warn(`[Solana Lookup] getAsset failed with status ${assetRes.status}`);
+        return null;
+      }
 
       const assetBody = (await assetRes.json()) as HeliusGetAssetResponse;
       const asset = assetBody.result;
-      if (!asset) return null;
+      if (!asset) {
+        this.logger.warn(`[Solana Lookup] getAsset returned no result for ${collectionAddress}`);
+        return null;
+      }
 
       // If this is part of a collection, try to get collection name
       const collectionGroup = asset.grouping?.find((g: any) => g.group_key === 'collection');
       const collectionMint = collectionGroup?.group_value;
+      const supply = asset.supply?.print_max_supply ?? null;
+      
+      this.logger.log(`[Solana Lookup] getAsset fallback: name=${asset.content?.metadata?.name}, supply=${supply}, is part of collection=${!!collectionGroup}`);
 
       return {
         contractAddress: collectionAddress,
         chain: Chain.SOLANA,
         name: asset.content?.metadata?.name || `solana:${collectionAddress.slice(0, 8)}`,
         symbol: asset.content?.metadata?.symbol || '',
-        totalSupply: asset.supply?.print_max_supply ?? null,
+        totalSupply: supply,
         tokenType: 'spl',
         imageUrl: asset.content?.links?.image || asset.content?.files?.[0]?.uri || null,
         deployerAddress: asset.authorities?.[0]?.address ?? null,
