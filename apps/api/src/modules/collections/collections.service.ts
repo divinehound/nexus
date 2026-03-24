@@ -322,7 +322,7 @@ export class CollectionsService {
               SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
               FROM collections c
               INNER JOIN collection_holders ch ON ch.collection_id = c.id
-              WHERE c.is_spam = false AND c.chain = ANY(${chains})
+              WHERE c.is_spam = false AND c.chain IN (${sql.join(chains.map(chain => sql`${chain}`), sql`, `)})
               GROUP BY c.id
               HAVING COUNT(ch.address) > 0
               ORDER BY holder_count DESC

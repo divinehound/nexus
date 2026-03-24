@@ -47,7 +47,6 @@ export function CollectionTabs({ collectionId, chain }: CollectionTabsProps) {
           <NetworkGraphVisualization
             maxNodes={30}
             minSharedHolders={3}
-            chains={[chain]}
             initialFocusedNodeId={collectionId}
           />
         )}
