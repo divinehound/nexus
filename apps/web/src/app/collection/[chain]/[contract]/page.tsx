@@ -210,7 +210,7 @@ export default function CollectionPage() {
         </section>
       )}
 
-      {collection && <CollectionTabs collectionId={collection.id} />}
+      {collection && <CollectionTabs collectionId={collection.id} chain={collection.chain} />}
     </main>
   );
 }

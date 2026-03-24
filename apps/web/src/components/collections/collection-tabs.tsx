@@ -6,9 +6,10 @@ import { NetworkGraphVisualization } from '../discovery/network-graph';
 
 interface CollectionTabsProps {
   collectionId: string;
+  chain: string;
 }
 
-export function CollectionTabs({ collectionId }: CollectionTabsProps) {
+export function CollectionTabs({ collectionId, chain }: CollectionTabsProps) {
   const [activeTab, setActiveTab] = useState<'related' | 'overlap'>('related');
 
   return (
@@ -46,6 +47,7 @@ export function CollectionTabs({ collectionId }: CollectionTabsProps) {
           <NetworkGraphVisualization
             maxNodes={30}
             minSharedHolders={3}
+            chains={[chain]}
             initialFocusedNodeId={collectionId}
           />
         )}
