@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
 import {
   adminRejectCollection,
   adminSuggestProject,
@@ -18,6 +19,7 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
 import { truncateAddress } from '@/lib/utils';
+import { ConfirmModal } from '@/components/ui/confirm-modal';
 
 interface AdminProject {
   id: string;
@@ -78,6 +80,22 @@ export default function AdminCollectionsPage() {
   const [directLookup, setDirectLookup] = useState({ chain: 'solana', address: '' });
   const [lookupResult, setLookupResult] = useState<AdminCollection | null>(null);
   const [lookupError, setLookupError] = useState<string | null>(null);
+  
+  // Modal states
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: React.ReactNode;
+    onConfirm: () => void;
+    variant?: 'default' | 'danger' | 'warning';
+    confirmText?: string;
+    loading?: boolean;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
 
   const fetchData = async () => {
     if (!accessToken) return;
@@ -247,51 +265,94 @@ export default function AdminCollectionsPage() {
     if (!accessToken) return;
 
     const apiSource = collection.chain === 'solana' ? 'Helius' : 'Alchemy';
-    const confirmed = window.confirm(
-      `Index all holders for ${collection.name}?\n\nThis will fetch data from ${apiSource} and may take several minutes for large collections.\n\nChain: ${collection.chain}\n${collection.chain === 'solana' ? 'Collection' : 'Contract'}: ${collection.contractAddress}`
-    );
     
-    if (!confirmed) return;
-
-    setIndexing((prev) => ({ ...prev, [collection.id]: true }));
-    
-    try {
-      const result = await adminIndexCollectionHolders(collection.id, accessToken);
-      if (!result.success) {
-        setError(result.error || 'Indexing failed');
-      } else {
-        alert(`✅ Successfully indexed ${result.holdersIndexed.toLocaleString()} holders for ${result.collection}!`);
-        await fetchData();
-      }
-    } catch (err: any) {
-      const message = err?.data?.message || err?.message || 'Indexing failed';
-      setError(message);
-    } finally {
-      setIndexing((prev) => ({ ...prev, [collection.id]: false }));
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Index Holders',
+      message: (
+        <div className="space-y-3">
+          <p>Index all holders for <strong className="text-white">{collection.name}</strong>?</p>
+          <p className="text-sm text-gray-400">
+            This will fetch data from {apiSource} and may take several minutes for large collections.
+          </p>
+          <dl className="space-y-1 text-sm">
+            <div className="flex gap-2">
+              <dt className="text-gray-500 min-w-[80px]">Chain:</dt>
+              <dd className="text-white">{collection.chain}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="text-gray-500 min-w-[80px]">{collection.chain === 'solana' ? 'Collection:' : 'Contract:'}</dt>
+              <dd className="font-mono text-xs text-white break-all">{collection.contractAddress}</dd>
+            </div>
+          </dl>
+        </div>
+      ),
+      confirmText: 'Index Holders',
+      variant: 'default',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        setIndexing((prev) => ({ ...prev, [collection.id]: true }));
+        
+        try {
+          const result = await adminIndexCollectionHolders(collection.id, accessToken);
+          if (!result.success) {
+            toast.error(result.error || 'Indexing failed');
+          } else {
+            toast.success(`Successfully indexed ${result.holdersIndexed.toLocaleString()} holders for ${result.collection}`);
+            await fetchData();
+          }
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        } catch (err: any) {
+          const message = err?.data?.message || err?.message || 'Indexing failed';
+          toast.error(message);
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        } finally {
+          setIndexing((prev) => ({ ...prev, [collection.id]: false }));
+        }
+      },
+    });
   };
 
   const handleDiscoverCollections = async (collectionId: string) => {
     if (!accessToken) return;
 
-    const confirmed = window.confirm(
-      `Discover new collections via holder overlap?\n\nThis will:\n- Check what NFTs this collection's holders own\n- Add any new collections to the database as unverified\n- Run in the background (check server logs for progress)\n\nContinue?`
-    );
-    
-    if (!confirmed) return;
-
-    try {
-      const result = await adminDiscoverCollections(
-        collectionId,
-        { maxHolders: 100, maxCollectionsPerHolder: 50 },
-        accessToken
-      );
-      
-      alert(`✅ ${result.message}\n\nCheck server logs for progress and results.`);
-    } catch (err: any) {
-      const message = err?.data?.message || err?.message || 'Discovery failed';
-      setError(message);
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Discover Collections',
+      message: (
+        <div className="space-y-3">
+          <p>Discover new collections via holder overlap?</p>
+          <div className="space-y-2 text-sm text-gray-400">
+            <p>This will:</p>
+            <ul className="list-disc list-inside space-y-1 ml-2">
+              <li>Check what NFTs this collection's holders own</li>
+              <li>Add any new collections to the database as unverified</li>
+              <li>Run in the background (check server logs for progress)</li>
+            </ul>
+          </div>
+        </div>
+      ),
+      confirmText: 'Discover',
+      variant: 'default',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        
+        try {
+          const result = await adminDiscoverCollections(
+            collectionId,
+            { maxHolders: 100, maxCollectionsPerHolder: 50 },
+            accessToken
+          );
+          
+          toast.success(result.message + ' Check server logs for progress.');
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        } catch (err: any) {
+          const message = err?.data?.message || err?.message || 'Discovery failed';
+          toast.error(message);
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        }
+      },
+    });
   };
 
   const handleMarkSpam = async (collection: AdminCollection) => {
@@ -877,6 +938,17 @@ export default function AdminCollectionsPage() {
           </option>
         ))}
       </datalist>
+
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmText={confirmModal.confirmText}
+        variant={confirmModal.variant}
+        loading={confirmModal.loading}
+      />
     </div>
   );
 }
