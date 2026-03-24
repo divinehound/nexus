@@ -670,27 +670,28 @@ export default function AdminCollectionsPage() {
     setConfirmModal({
       isOpen: true,
       title: 'Refresh Metadata',
-      message: `Re-fetch blockchain metadata for ${selectedIds.size} collection(s)?`,
-      confirmText: 'Refresh',
+      message: (
+        <div>
+          <p>Re-fetch blockchain metadata for {selectedIds.size} collection(s)?</p>
+          <p className="mt-2 text-sm text-gray-400">
+            This runs in the background. Check server logs for progress.
+          </p>
+        </div>
+      ),
+      confirmText: 'Start Refresh',
       variant: 'default',
       onConfirm: async () => {
         setConfirmModal(prev => ({ ...prev, loading: true }));
-        setBulkActionInProgress(true);
         
         try {
           const result = await adminBulkEnrich(Array.from(selectedIds), accessToken);
           
-          toast.success(`Refreshed ${result.success} collections`);
-          if (result.failed > 0) {
-            toast.error(`${result.failed} failed: ${result.errors.slice(0, 3).join(', ')}`);
-          }
+          toast.success(`${result.message} Refresh the page in a few minutes to see updated metadata.`);
           
           setSelectedIds(new Set());
-          await fetchData();
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
         } catch (err: any) {
-          toast.error(err?.message || 'Bulk enrich failed');
-        } finally {
-          setBulkActionInProgress(false);
+          toast.error(err?.message || 'Failed to start bulk enrich');
           setConfirmModal(prev => ({ ...prev, isOpen: false }));
         }
       },

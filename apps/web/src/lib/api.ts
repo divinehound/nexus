@@ -331,7 +331,7 @@ export function adminBulkMarkSpam(collectionIds: string[], token: string) {
 }
 
 export function adminBulkEnrich(collectionIds: string[], token: string) {
-  return apiFetch<{ success: number; failed: number; total: number; errors: string[] }>(
+  return apiFetch<{ status: string; count: number; message: string }>(
     `/admin/collections/bulk-enrich`,
     {
       method: 'POST',

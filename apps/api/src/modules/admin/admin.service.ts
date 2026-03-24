@@ -1168,18 +1168,26 @@ export class AdminService {
   }
 
   async bulkEnrichCollections(collectionIds: string[]) {
+    this.logger.log(`[Bulk Enrich] Starting for ${collectionIds.length} collections`);
     const results = { success: 0, failed: 0, errors: [] as string[] };
 
     for (const collectionId of collectionIds) {
       try {
         await this.enrichCollection(collectionId);
         results.success++;
+        
+        if (results.success % 10 === 0) {
+          this.logger.log(`[Bulk Enrich] Progress: ${results.success}/${collectionIds.length} completed`);
+        }
       } catch (err: any) {
         results.failed++;
         results.errors.push(`${collectionId}: ${err?.message || 'unknown error'}`);
+        this.logger.warn(`[Bulk Enrich] Failed for ${collectionId}: ${err?.message}`);
       }
     }
 
+    this.logger.log(`[Bulk Enrich] Complete: ${results.success} success, ${results.failed} failed out of ${collectionIds.length} total`);
+    
     return {
       ...results,
       total: collectionIds.length,

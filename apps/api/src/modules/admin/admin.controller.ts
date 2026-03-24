@@ -321,9 +321,21 @@ export class AdminController {
   }
 
   @Post('collections/bulk-enrich')
-  @ApiOperation({ summary: 'Re-fetch blockchain metadata for multiple collections' })
+  @ApiOperation({ summary: 'Re-fetch blockchain metadata for multiple collections (background job)' })
   bulkEnrichCollections(@Body() body: { collectionIds: string[] }) {
-    return this.adminService.bulkEnrichCollections(body.collectionIds);
+    const { collectionIds } = body;
+    
+    // Start background job - don't await
+    this.adminService.bulkEnrichCollections(collectionIds).catch((err) => {
+      console.error(`Bulk enrich failed: ${err.message}`);
+    });
+    
+    // Return immediately
+    return {
+      status: 'started',
+      count: collectionIds.length,
+      message: `Bulk metadata refresh started for ${collectionIds.length} collection(s). Check server logs for progress.`,
+    };
   }
 
   @Post('collections/:id/discover')
