@@ -11,6 +11,7 @@ import {
   adminMarkCollectionAsNotSpam,
   adminBulkCheckSpam,
   adminCheckSpamRaw,
+  adminDiscoverCollections,
   apiFetch,
   type CollectionMappingStatus,
   type CollectionVerificationStatus,
@@ -267,6 +268,29 @@ export default function AdminCollectionsPage() {
       setError(message);
     } finally {
       setIndexing((prev) => ({ ...prev, [collection.id]: false }));
+    }
+  };
+
+  const handleDiscoverCollections = async (collectionId: string) => {
+    if (!accessToken) return;
+
+    const confirmed = window.confirm(
+      `Discover new collections via holder overlap?\n\nThis will:\n- Check what NFTs this collection's holders own\n- Add any new collections to the database as unverified\n- Run in the background (check server logs for progress)\n\nContinue?`
+    );
+    
+    if (!confirmed) return;
+
+    try {
+      const result = await adminDiscoverCollections(
+        collectionId,
+        { maxHolders: 100, maxCollectionsPerHolder: 50 },
+        accessToken
+      );
+      
+      alert(`✅ ${result.message}\n\nCheck server logs for progress and results.`);
+    } catch (err: any) {
+      const message = err?.data?.message || err?.message || 'Discovery failed';
+      setError(message);
     }
   };
 
@@ -559,13 +583,22 @@ export default function AdminCollectionsPage() {
                   <img src={lookupResult.imageUrl} alt={lookupResult.name} className="h-12 w-12 rounded border border-gray-700 object-cover" />
                 )}
               </div>
-              <button
-                onClick={() => handleIndexHolders(lookupResult)}
-                disabled={indexing[lookupResult.id]}
-                className="mt-2 rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600 disabled:opacity-50"
-              >
-                {indexing[lookupResult.id] ? '⏳ Indexing...' : '🔄 Index Holders'}
-              </button>
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => handleIndexHolders(lookupResult)}
+                  disabled={indexing[lookupResult.id]}
+                  className="rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600 disabled:opacity-50"
+                >
+                  {indexing[lookupResult.id] ? '⏳ Indexing...' : '🔄 Index Holders'}
+                </button>
+                <button
+                  onClick={() => handleDiscoverCollections(lookupResult.id)}
+                  className="rounded bg-green-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-green-600"
+                  title="Find new collections via holder overlap"
+                >
+                  🔍 Discover
+                </button>
+              </div>
             </div>
           )}
         </div>

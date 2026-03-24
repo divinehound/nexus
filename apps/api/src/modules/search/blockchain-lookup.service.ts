@@ -170,9 +170,117 @@ export class BlockchainLookupService {
       return null;
     }
   }
+
+  /**
+   * Get NFTs owned by a holder (for collection discovery)
+   */
+  async getHolderNFTs(
+    chain: string,
+    holderAddress: string,
+    limit: number = 50
+  ): Promise<Array<{ chain: string; contractAddress: string }>> {
+    if (chain === 'solana') {
+      return this.getSolanaNFTs(holderAddress, limit);
+    } else {
+      return this.getEvmNFTs(chain as Chain, holderAddress, limit);
+    }
+  }
+
+  private async getEvmNFTs(
+    chain: Chain,
+    holderAddress: string,
+    limit: number
+  ): Promise<Array<{ chain: string; contractAddress: string }>> {
+    const alchemyKey = this.config.get<string>('ALCHEMY_API_KEY');
+    if (!alchemyKey) return [];
+
+    const meta = CHAIN_META[chain];
+    if (!meta?.alchemySubdomain) return [];
+
+    try {
+      const response = await fetch(
+        `https://${meta.alchemySubdomain}.g.alchemy.com/nft/v3/${alchemyKey}/getNFTsForOwner?owner=${holderAddress}&withMetadata=false&pageSize=${limit}`,
+        { method: 'GET' }
+      );
+
+      if (!response.ok) return [];
+
+      const data = await response.json();
+      const contracts = new Set<string>();
+
+      data.ownedNfts?.forEach((nft: any) => {
+        if (nft.contract?.address) {
+          contracts.add(nft.contract.address.toLowerCase());
+        }
+      });
+
+      return Array.from(contracts).map(address => ({
+        chain,
+        contractAddress: address,
+      }));
+    } catch (err: any) {
+      this.logger.error(`Failed to fetch EVM NFTs for ${holderAddress}: ${err?.message || 'unknown error'}`);
+      return [];
+    }
+  }
+
+  private async getSolanaNFTs(
+    holderAddress: string,
+    limit: number
+  ): Promise<Array<{ chain: string; contractAddress: string }>> {
+    const heliusKey = this.config.get<string>('HELIUS_API_KEY');
+    if (!heliusKey) return [];
+
+    try {
+      const response = await fetch(
+        `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'discover',
+            method: 'getAssetsByOwner',
+            params: {
+              ownerAddress: holderAddress,
+              page: 1,
+              limit,
+            },
+          }),
+        }
+      );
+
+      if (!response.ok) return [];
+
+      const data = await response.json();
+      const contracts = new Set<string>();
+
+      data.result?.items?.forEach((item: any) => {
+        if (item.grouping?.[0]?.group_value) {
+          contracts.add(item.grouping[0].group_value);
+        }
+      });
+
+      return Array.from(contracts).map(address => ({
+        chain: 'solana',
+        contractAddress: address,
+      }));
+    } catch (err: any) {
+      this.logger.error(`Failed to fetch Solana NFTs for ${holderAddress}: ${err?.message || 'unknown error'}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get contract metadata (for newly discovered contracts)
+   */
+  async getContractMetadata(chain: string, contractAddress: string) {
+    const result = await this.lookupOnChain(contractAddress, chain as Chain);
+    return result || null;
+  }
 }
 
-interface AlchemyContractMetadata {
+interface AlchemyContractMetadata{
   name?: string;
   symbol?: string;
   totalSupply?: string;

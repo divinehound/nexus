@@ -306,4 +306,13 @@ export class AdminController {
   enrichCollection(@Param('id') id: string) {
     return this.adminService.enrichCollection(id);
   }
+
+  @Post('collections/:id/discover')
+  @ApiOperation({ summary: 'Discover new collections from this collection\'s holders (async)' })
+  discoverCollections(
+    @Param('id') id: string,
+    @Body() body?: { maxHolders?: number; maxCollectionsPerHolder?: number }
+  ) {
+    return this.adminService.discoverCollections(id, body);
+  }
 }

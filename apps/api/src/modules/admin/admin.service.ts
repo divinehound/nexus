@@ -26,6 +26,7 @@ import { HoldingsService } from '../holdings/holdings.service';
 import { BlockchainLookupService } from '../search/blockchain-lookup.service';
 import { HolderIndexerService } from '../indexing/holder-indexer.service';
 import { SpamCheckerService } from '../indexing/spam-checker.service';
+import { CollectionDiscoveryService } from '../indexing/collection-discovery.service';
 
 @Injectable()
 export class AdminService {
@@ -38,6 +39,7 @@ export class AdminService {
     private readonly blockchainLookup: BlockchainLookupService,
     private readonly holderIndexerService: HolderIndexerService,
     private readonly spamCheckerService: SpamCheckerService,
+    private readonly collectionDiscoveryService: CollectionDiscoveryService,
   ) {}
 
   /**
@@ -920,5 +922,30 @@ export class AdminService {
       collection.chain,
       collection.contractAddress,
     );
+  }
+
+  /**
+   * Discover new collections from a collection's holders (async)
+   */
+  async discoverCollections(
+    idOrContract: string,
+    options?: { maxHolders?: number; maxCollectionsPerHolder?: number }
+  ) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
+
+    // Run discovery in background
+    setImmediate(async () => {
+      try {
+        await this.collectionDiscoveryService.discoverFromCollection(collectionId, options);
+      } catch (err: any) {
+        this.logger.error(`Collection discovery failed for ${collectionId}: ${err?.message || 'unknown error'}`);
+      }
+    });
+
+    return {
+      status: 'started',
+      collectionId,
+      message: 'Collection discovery started in background. Check server logs for progress.',
+    };
   }
 }

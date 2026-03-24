@@ -240,6 +240,21 @@ export function adminCheckSpamRaw(collectionId: string, token: string) {
   );
 }
 
+export function adminDiscoverCollections(
+  collectionId: string,
+  options: { maxHolders?: number; maxCollectionsPerHolder?: number },
+  token: string
+) {
+  return apiFetch<{ status: string; collectionId: string; message: string }>(
+    `/admin/collections/${collectionId}/discover`,
+    {
+      method: 'POST',
+      token,
+      body: JSON.stringify(options),
+    }
+  );
+}
+
 export type IndexingJobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface AdminIndexingJobListItem {
