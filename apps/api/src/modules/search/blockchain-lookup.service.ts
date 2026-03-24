@@ -168,12 +168,22 @@ export class BlockchainLookupService {
         if (items && items.length > 0 && total && total > 1) {
           const firstItem = items[0];
           
-          this.logger.log(`[Solana Lookup] Collection ${collectionAddress}: found ${total} total items via searchAssets, name: ${firstItem.content?.metadata?.name}`);
+          // Try to get collection name from grouping metadata, fallback to deriving from NFT name
+          const collectionGroup = firstItem.grouping?.find((g: any) => g.group_key === 'collection');
+          let collectionName = firstItem.content?.metadata?.name || '';
+          
+          // If the name looks like "Collection Name #1234", extract just "Collection Name"
+          const numberSuffixMatch = collectionName.match(/^(.+?)\s*#\d+$/);
+          if (numberSuffixMatch) {
+            collectionName = numberSuffixMatch[1].trim();
+          }
+          
+          this.logger.log(`[Solana Lookup] Collection ${collectionAddress}: found ${total} total items via searchAssets, derived name: ${collectionName}`);
           
           return {
             contractAddress: collectionAddress,
             chain: Chain.SOLANA,
-            name: firstItem.content?.metadata?.name || `solana:${collectionAddress.slice(0, 8)}`,
+            name: collectionName || `solana:${collectionAddress.slice(0, 8)}`,
             symbol: firstItem.content?.metadata?.symbol || '',
             totalSupply: total,
             tokenType: 'spl',
@@ -213,13 +223,20 @@ export class BlockchainLookupService {
           const firstItem = items[0];
           const collectionInfo = firstItem.grouping?.find((g: any) => g.group_key === 'collection');
           
-          this.logger.log(`[Solana Lookup] Collection ${collectionAddress}: found ${total || 'unknown'} total items, name: ${firstItem.content?.metadata?.name}`);
+          // Derive collection name from first NFT, removing #number suffix
+          let collectionName = firstItem.content?.metadata?.name || '';
+          const numberSuffixMatch = collectionName.match(/^(.+?)\s*#\d+$/);
+          if (numberSuffixMatch) {
+            collectionName = numberSuffixMatch[1].trim();
+          }
+          
+          this.logger.log(`[Solana Lookup] Collection ${collectionAddress}: found ${total || 'unknown'} total items, derived name: ${collectionName}`);
           
           // Use collection metadata from first item
           return {
             contractAddress: collectionAddress,
             chain: Chain.SOLANA,
-            name: firstItem.content?.metadata?.name || collectionInfo?.group_value || `solana:${collectionAddress.slice(0, 8)}`,
+            name: collectionName || `solana:${collectionAddress.slice(0, 8)}`,
             symbol: firstItem.content?.metadata?.symbol || '',
             totalSupply: total || null, // Use the total count from getAssetsByGroup
             tokenType: 'spl',
