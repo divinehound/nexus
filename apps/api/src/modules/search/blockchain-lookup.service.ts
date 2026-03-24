@@ -187,6 +187,13 @@ export class BlockchainLookupService {
             const collectionAssetBody = await collectionAssetRes.json();
             const collectionAsset = collectionAssetBody.result;
             
+            this.logger.log(`[Solana Lookup] getAsset response for collection mint: ${JSON.stringify({
+              hasResult: !!collectionAsset,
+              hasContent: !!collectionAsset?.content,
+              hasMetadata: !!collectionAsset?.content?.metadata,
+              name: collectionAsset?.content?.metadata?.name,
+            })}`);
+            
             if (collectionAsset?.content?.metadata?.name) {
               this.logger.log(`[Solana Lookup] Collection mint metadata: ${collectionAsset.content.metadata.name}`);
               
@@ -201,6 +208,8 @@ export class BlockchainLookupService {
                 deployerAddress: collectionAsset.authorities?.[0]?.address || null,
               };
             }
+          } else {
+            this.logger.warn(`[Solana Lookup] getAsset for collection mint failed with status ${collectionAssetRes.status}`);
           }
           
           // Fallback if collection mint query failed

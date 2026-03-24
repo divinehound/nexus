@@ -124,6 +124,9 @@ export class CollectionDiscoveryService {
     
     for (const [key, contract] of discoveredContracts) {
       try {
+        // Rate limit: wait 100ms between API calls to avoid 429s
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
         // Fetch metadata
         const metadata = await this.blockchainLookup.getContractMetadata(
           contract.chain,
