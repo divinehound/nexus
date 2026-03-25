@@ -197,6 +197,13 @@ export class BlockchainLookupService {
       if (supplyRes.ok) {
         const supplyBody = await supplyRes.json();
         totalSupply = supplyBody.result?.total || null;
+        
+        if (!totalSupply) {
+          this.logger.warn(`[Solana Lookup] No supply in getAssetsByGroup response for ${collectionAddress}`);
+          this.logger.debug(`[Solana Lookup] Response: ${JSON.stringify(supplyBody.result)}`);
+        }
+      } else {
+        this.logger.warn(`[Solana Lookup] getAssetsByGroup failed with status ${supplyRes.status}`);
       }
 
       const name = asset.content.metadata.name;
