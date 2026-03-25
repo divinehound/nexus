@@ -168,8 +168,10 @@ export class BlockchainLookupService {
       const metadataBody = await metadataRes.json();
       const asset = metadataBody.result;
 
+      // Reject if no asset data or no name
       if (!asset?.content?.metadata?.name) {
-        this.logger.warn(`[Solana Lookup] No collection name found for ${collectionAddress}`);
+        // This could be an individual NFT mint (not a collection) or invalid address
+        this.logger.debug(`[Solana Lookup] No collection metadata for ${collectionAddress} - likely individual NFT or invalid`);
         return null;
       }
 
@@ -327,16 +329,14 @@ export class BlockchainLookupService {
       const contracts = new Set<string>();
 
       data.result?.items?.forEach((item: any) => {
-        // Look for 'collection' grouping specifically (not just first grouping)
+        // ONLY add items with explicit 'collection' grouping
         const collectionGroup = item.grouping?.find((g: any) => g.group_key === 'collection');
         
         if (collectionGroup?.group_value) {
           contracts.add(collectionGroup.group_value);
-        } else if (item.id) {
-          // Fallback: if no collection grouping, this is an individual mint
-          // We'll skip these to avoid treating mints as collections
-          this.logger.debug(`Skipping ungrouped Solana NFT: ${item.id}`);
         }
+        // Note: We intentionally skip items without collection grouping.
+        // These are individual NFT mints, not collections.
       });
 
       return Array.from(contracts).map(address => ({
