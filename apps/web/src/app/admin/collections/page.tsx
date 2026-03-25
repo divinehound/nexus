@@ -343,7 +343,7 @@ export default function AdminCollectionsPage() {
         try {
           const result = await adminDiscoverCollections(
             collectionId,
-            { maxHolders: 100, maxCollectionsPerHolder: 50 },
+            { maxHolders: 500, maxCollectionsPerHolder: 50 },
             accessToken
           );
           

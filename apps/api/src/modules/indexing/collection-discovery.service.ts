@@ -39,7 +39,7 @@ export class CollectionDiscoveryService {
     }
   ): Promise<DiscoveryResult> {
     const startTime = Date.now();
-    const maxHolders = options?.maxHolders || 100;
+    const maxHolders = options?.maxHolders || 500; // Increased from 100 to 500
     const maxPerHolder = options?.maxCollectionsPerHolder || 50;
 
     this.logger.log(`Starting collection discovery for ${collectionId}`);
