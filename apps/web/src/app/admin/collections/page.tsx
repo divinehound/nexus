@@ -171,17 +171,6 @@ export default function AdminCollectionsPage() {
     fetchData();
   };
 
-  const queueStats = useMemo(() => {
-    return {
-      tracked: collections.filter((c) => c.verificationStatus === 'tracked_unverified').length,
-      pendingClaim: collections.filter((c) => c.verificationStatus === 'pending_claim').length,
-      suggested: collections.filter((c) => c.mappingStatus === 'suggested').length,
-      verified: collections.filter((c) => c.verificationStatus === 'verified').length,
-      spam: collections.filter((c) => c.isSpam === true).length,
-      all: collections.length,
-    };
-  }, [collections]);
-
   const filteredCollections = useMemo(() => {
     let filtered = collections;
     
@@ -890,15 +879,6 @@ export default function AdminCollectionsPage() {
         )}
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
-        <StatCard label="Tracked Unverified" value={queueStats.tracked} />
-        <StatCard label="Pending Claim" value={queueStats.pendingClaim} />
-        <StatCard label="Suggested Mapping" value={queueStats.suggested} />
-        <StatCard label="Verified" value={queueStats.verified} />
-        <StatCard label="🚫 Spam" value={queueStats.spam} />
-        <StatCard label="Total" value={queueStats.all} />
-      </div>
-
       {loading ? (
         <div className="flex items-center gap-3">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-600 border-t-purple-500" />
@@ -1199,15 +1179,6 @@ export default function AdminCollectionsPage() {
         variant={confirmModal.variant}
         loading={confirmModal.loading}
       />
-    </div>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-xl border border-gray-800 p-4">
-      <p className="text-xs uppercase tracking-wide text-gray-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-gray-100">{value.toLocaleString()}</p>
     </div>
   );
 }
