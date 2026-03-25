@@ -118,13 +118,30 @@ export class CollectionDiscoveryService {
       }
     }
 
+    // Log what we're about to process BEFORE we start
+    const totalContracts = discoveredContracts.size;
+    const solanaContracts = Array.from(discoveredContracts.values()).filter(c => c.chain === 'solana');
+    
+    this.logger.log(`Discovery queue: ${totalContracts} total contracts (${solanaContracts.length} Solana)`);
+    
+    // Log ALL Solana addresses for inspection (so we can see which ones are bad)
+    if (solanaContracts.length > 0) {
+      this.logger.log(`Solana contracts to process: ${solanaContracts.map(c => c.address).join(', ')}`);
+    }
+    
+    // Safety limit: only process first 10 to avoid burning API quota
+    const contractsToProcess = Array.from(discoveredContracts.entries()).slice(0, 10);
+    if (contractsToProcess.length < discoveredContracts.size) {
+      this.logger.warn(`Limiting to first ${contractsToProcess.length}/${discoveredContracts.size} contracts to conserve API quota`);
+    }
+    
     // Add discovered collections to database (after spam filtering)
     const newCollections: Array<{ chain: string; contractAddress: string; name: string }> = [];
     let spamFiltered = 0;
     let rateLimitErrors = 0;
-    const maxRateLimitErrors = 3; // Circuit breaker: stop after 3 rate limit failures
+    const maxRateLimitErrors = 1; // Circuit breaker: stop immediately on first rate limit
     
-    for (const [key, contract] of discoveredContracts) {
+    for (const [key, contract] of contractsToProcess) {
       // Circuit breaker: stop discovery if too many rate limits
       if (rateLimitErrors >= maxRateLimitErrors) {
         this.logger.warn(`Circuit breaker triggered: ${rateLimitErrors} rate limit errors. Stopping discovery.`);
@@ -204,7 +221,8 @@ export class CollectionDiscoveryService {
         // Track rate limit errors for circuit breaker
         if (err?.message?.includes('429')) {
           rateLimitErrors++;
-          this.logger.error(`Rate limit error ${rateLimitErrors}/${maxRateLimitErrors} for ${contract.address}`);
+          this.logger.error(`⚠️ RATE LIMIT ${rateLimitErrors}/${maxRateLimitErrors} on ${contract.chain}:${contract.address}`);
+          this.logger.error(`This address will trigger circuit breaker. Full queue was: ${Array.from(discoveredContracts.keys()).join(', ')}`);
         } else {
           this.logger.error(`Failed to add collection ${contract.address}: ${err?.message || 'unknown error'}`);
         }
