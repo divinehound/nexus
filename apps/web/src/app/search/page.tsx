@@ -30,7 +30,7 @@ interface SearchResults {
     floorPrice: number | null;
     holderCount: number | null;
     imageUrl: string | null;
-    project: { id: string; name: string; slug: string };
+    project: { id: string; name: string; slug: string } | null;
     verificationStatus: CollectionVerificationStatus;
   }[];
   blockchainResults: BlockchainContractInfo[];
@@ -150,37 +150,44 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
         <section>
           <h2 className="mb-4 text-lg font-semibold text-gray-300">Collections</h2>
           <div className="space-y-3">
-            {results.collections.map((c) => (
-              <Link
-                key={c.id}
-                href={`/project/${c.project.slug}/${c.contractAddress}`}
-                className="flex items-center gap-4 rounded-xl border border-gray-800 px-4 py-3 transition-colors hover:border-gray-600"
-              >
-                {c.imageUrl && (
-                  <img src={c.imageUrl} alt={c.name} className="h-12 w-12 rounded-lg object-cover" />
-                )}
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-medium">{c.name}</h3>
-                    <TrustBadge status={c.verificationStatus} />
+            {results.collections.map((c) => {
+              // Collections-first: some collections may not have projects yet
+              const href = c.project 
+                ? `/project/${c.project.slug}/${c.contractAddress}`
+                : `/collection/${c.chain}/${c.contractAddress}`;
+              
+              return (
+                <Link
+                  key={c.id}
+                  href={href}
+                  className="flex items-center gap-4 rounded-xl border border-gray-800 px-4 py-3 transition-colors hover:border-gray-600"
+                >
+                  {c.imageUrl && (
+                    <img src={c.imageUrl} alt={c.name} className="h-12 w-12 rounded-lg object-cover" />
+                  )}
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-medium">{c.name}</h3>
+                      <TrustBadge status={c.verificationStatus} />
+                    </div>
+                    <p className="text-sm text-gray-500">
+                      {c.project ? `${c.project.name} · ` : ''}{c.chain} · {truncateAddress(c.contractAddress)}
+                    </p>
+                    {(c.verificationStatus === 'tracked_unverified' || c.verificationStatus === 'rejected') && (
+                      <TrustDisclaimer status={c.verificationStatus} />
+                    )}
                   </div>
-                  <p className="text-sm text-gray-500">
-                    {c.project.name} · {c.chain} · {truncateAddress(c.contractAddress)}
-                  </p>
-                  {(c.verificationStatus === 'tracked_unverified' || c.verificationStatus === 'rejected') && (
-                    <TrustDisclaimer status={c.verificationStatus} />
-                  )}
-                </div>
-                <div className="text-right text-sm">
-                  {c.floorPrice !== null && (
-                    <p>{formatPrice(c.floorPrice, chainCurrency(c.chain))}</p>
-                  )}
-                  {c.holderCount !== null && (
-                    <p className="text-gray-500">{c.holderCount.toLocaleString()} holders</p>
-                  )}
-                </div>
-              </Link>
-            ))}
+                  <div className="text-right text-sm">
+                    {c.floorPrice !== null && (
+                      <p>{formatPrice(c.floorPrice, chainCurrency(c.chain))}</p>
+                    )}
+                    {c.holderCount !== null && (
+                      <p className="text-gray-500">{c.holderCount.toLocaleString()} holders</p>
+                    )}
+                  </div>
+                </Link>
+              );
+            })}
           </div>
         </section>
       )}
