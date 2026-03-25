@@ -132,6 +132,11 @@ export class CollectionDiscoveryService {
       }
       
       try {
+        // Log what we're about to process (for debugging)
+        if (contract.chain === 'solana') {
+          this.logger.debug(`Processing Solana address: ${contract.address}`);
+        }
+        
         // Rate limit: wait 500ms between API calls to avoid 429s
         await new Promise(resolve => setTimeout(resolve, 500));
         

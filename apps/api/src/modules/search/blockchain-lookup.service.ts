@@ -328,16 +328,26 @@ export class BlockchainLookupService {
       const data = await response.json();
       const contracts = new Set<string>();
 
+      let skippedIndividual = 0;
+      
       data.result?.items?.forEach((item: any) => {
         // ONLY add items with explicit 'collection' grouping
         const collectionGroup = item.grouping?.find((g: any) => g.group_key === 'collection');
         
         if (collectionGroup?.group_value) {
           contracts.add(collectionGroup.group_value);
+        } else {
+          // Debug: log what we're skipping
+          skippedIndividual++;
+          if (skippedIndividual <= 3) {
+            this.logger.debug(`[Solana NFTs] Skipping ${item.id || 'unknown'}: grouping=${JSON.stringify(item.grouping)}`);
+          }
         }
-        // Note: We intentionally skip items without collection grouping.
-        // These are individual NFT mints, not collections.
       });
+      
+      if (skippedIndividual > 0) {
+        this.logger.log(`[Solana NFTs] Found ${contracts.size} collections, skipped ${skippedIndividual} individual NFTs for ${holderAddress}`);
+      }
 
       return Array.from(contracts).map(address => ({
         chain: 'solana',
