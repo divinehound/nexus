@@ -121,27 +121,40 @@ export class CollectionDiscoveryService {
     // Add discovered collections to database (after spam filtering)
     const newCollections: Array<{ chain: string; contractAddress: string; name: string }> = [];
     let spamFiltered = 0;
+    let rateLimitErrors = 0;
+    const maxRateLimitErrors = 3; // Circuit breaker: stop after 3 rate limit failures
     
     for (const [key, contract] of discoveredContracts) {
+      // Circuit breaker: stop discovery if too many rate limits
+      if (rateLimitErrors >= maxRateLimitErrors) {
+        this.logger.warn(`Circuit breaker triggered: ${rateLimitErrors} rate limit errors. Stopping discovery.`);
+        break;
+      }
+      
       try {
-        // Rate limit: wait 250ms between API calls to avoid 429s
-        await new Promise(resolve => setTimeout(resolve, 250));
+        // Rate limit: wait 500ms between API calls to avoid 429s
+        await new Promise(resolve => setTimeout(resolve, 500));
         
-        // Fetch metadata with retry on 429
+        // Fetch metadata with exponential backoff retry on 429
         let metadata = null;
         let retries = 0;
-        while (retries < 3 && !metadata) {
+        const maxRetries = 5;
+        
+        while (retries < maxRetries && !metadata) {
           try {
             metadata = await this.blockchainLookup.getContractMetadata(
               contract.chain,
               contract.address
             );
           } catch (err: any) {
-            if (err?.message?.includes('429') && retries < 2) {
+            if (err?.message?.includes('429') && retries < maxRetries - 1) {
               retries++;
-              this.logger.warn(`Rate limited, waiting 5s before retry ${retries}/3...`);
-              await new Promise(resolve => setTimeout(resolve, 5000));
+              // Exponential backoff: 5s, 10s, 20s, 40s, 80s
+              const waitTime = 5000 * Math.pow(2, retries - 1);
+              this.logger.warn(`Rate limited on ${contract.address}, waiting ${waitTime/1000}s before retry ${retries}/${maxRetries}...`);
+              await new Promise(resolve => setTimeout(resolve, waitTime));
             } else {
+              this.logger.error(`Failed to fetch metadata for ${contract.address} after ${retries} retries: ${err?.message}`);
               throw err; // Re-throw if not 429 or out of retries
             }
           }
@@ -183,14 +196,20 @@ export class CollectionDiscoveryService {
 
         this.logger.log(`Added new collection: ${name}`);
       } catch (err: any) {
-        this.logger.error(`Failed to add collection ${contract.address}: ${err?.message || 'unknown error'}`);
+        // Track rate limit errors for circuit breaker
+        if (err?.message?.includes('429')) {
+          rateLimitErrors++;
+          this.logger.error(`Rate limit error ${rateLimitErrors}/${maxRateLimitErrors} for ${contract.address}`);
+        } else {
+          this.logger.error(`Failed to add collection ${contract.address}: ${err?.message || 'unknown error'}`);
+        }
       }
     }
 
     const processingTime = Date.now() - startTime;
 
     this.logger.log(
-      `Discovery complete: ${newCollections.length} new collections added, ${spamFiltered} filtered as spam, in ${processingTime}ms`
+      `Discovery complete: ${newCollections.length} new collections added, ${spamFiltered} filtered as spam, ${rateLimitErrors} rate limit errors, in ${processingTime}ms`
     );
 
     return {
