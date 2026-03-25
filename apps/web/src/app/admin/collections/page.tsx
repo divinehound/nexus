@@ -398,10 +398,10 @@ export default function AdminCollectionsPage() {
 
     try {
       const result = await adminMarkCollectionAsSpam(collection.id, notes || undefined, accessToken);
-      alert(`✅ Marked ${result.collection} as spam`);
+      toast.success(`Marked ${result.collection} as spam`);
       await fetchData();
     } catch (err: any) {
-      setError(err?.data?.message || err?.message || 'Failed to mark as spam');
+      toast.error(err?.data?.message || err?.message || 'Failed to mark as spam');
     }
   };
 
@@ -416,39 +416,44 @@ export default function AdminCollectionsPage() {
 
     try {
       const result = await adminMarkCollectionAsNotSpam(collection.id, reason || undefined, accessToken);
-      alert(`✅ Marked ${result.collection} as NOT spam and added to allowlist`);
+      toast.success(`Marked ${result.collection} as NOT spam and added to allowlist`);
       await fetchData();
     } catch (err: any) {
-      setError(err?.data?.message || err?.message || 'Failed to mark as not spam');
+      toast.error(err?.data?.message || err?.message || 'Failed to mark as not spam');
     }
   };
 
   const handleBulkCheckSpam = async () => {
     if (!accessToken) return;
 
-    const confirmed = window.confirm(
-      'Check ALL collections for spam via Alchemy API?\n\n' +
-      'This runs as a background job and may take 5-10 minutes.\n' +
-      'Check server logs for progress and completion.\n\n' +
-      'Continue?'
-    );
-    if (!confirmed) return;
-
-    setBulkChecking(true);
-    setError(null);
-
-    try {
-      const result = await adminBulkCheckSpam(accessToken);
-      alert(
-        `✅ ${result.message}\n\n` +
-        'The spam check is running in the background.\n' +
-        'Refresh the page in a few minutes to see results.'
-      );
-      setBulkChecking(false);
-    } catch (err: any) {
-      setError(err?.data?.message || err?.message || 'Failed to start bulk spam check');
-      setBulkChecking(false);
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Check All Collections for Spam',
+      message: 'This runs as a background job via Alchemy API and may take 5-10 minutes. Check server logs for progress.',
+      confirmText: 'Start Spam Check',
+      loading: false,
+      onConfirm: async () => {
+        try {
+          setConfirmModal(prev => ({ ...prev, loading: true }));
+          setBulkChecking(true);
+          
+          const result = await adminBulkCheckSpam(accessToken);
+          
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          setBulkChecking(false);
+          
+          toast.success(result.message, {
+            description: 'Running in background. Refresh in a few minutes to see results.',
+            duration: 5000,
+          });
+        } catch (err: any) {
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          setBulkChecking(false);
+          toast.error(err?.data?.message || err?.message || 'Failed to start bulk spam check');
+        }
+      },
+      onCancel: () => setConfirmModal(prev => ({ ...prev, isOpen: false })),
+    });
   };
 
   const handleDebugSpam = async (collection: AdminCollection) => {
@@ -460,22 +465,19 @@ export default function AdminCollectionsPage() {
       
       const spamData = result.spamClassifications;
       if (spamData) {
-        alert(
-          `Spam Data for ${collection.name}:\n\n` +
-          `Is Spam: ${spamData.isSpam}\n` +
-          `Classifications: ${spamData.classifications?.join(', ') || 'none'}\n\n` +
-          `Full data logged to console`
-        );
+        toast.info(`Spam data for ${collection.name}`, {
+          description: `Is Spam: ${spamData.isSpam} | Classifications: ${spamData.classifications?.join(', ') || 'none'}`,
+          duration: 8000,
+        });
       } else {
-        alert(
-          `No spam data returned for ${collection.name}\n\n` +
-          `Response status: ${result.responseStatus}\n` +
-          `Full response logged to console`
-        );
+        toast.info(`No spam data returned`, {
+          description: `Status: ${result.responseStatus}. Check console for details.`,
+          duration: 5000,
+        });
       }
     } catch (err: any) {
       console.error('Debug spam check error:', err);
-      alert(`Error: ${err?.data?.message || err?.message || 'Failed to check spam'}`);
+      toast.error(err?.data?.message || err?.message || 'Failed to check spam');
     }
   };
 
@@ -503,61 +505,89 @@ export default function AdminCollectionsPage() {
   const handleBulkMarkSpam = async () => {
     if (!accessToken || selectedIds.size === 0) return;
 
-    const confirmed = window.confirm(
-      `Mark ${selectedIds.size} selected collection(s) as SPAM?\n\nThis will hide them from the main feed.`
-    );
-    if (!confirmed) return;
+    setConfirmModal({
+      isOpen: true,
+      title: 'Mark as Spam',
+      message: `Mark ${selectedIds.size} selected collection(s) as SPAM? This will hide them from the main feed.`,
+      confirmText: 'Mark as Spam',
+      loading: false,
+      onConfirm: async () => {
+        try {
+          setConfirmModal(prev => ({ ...prev, loading: true }));
+          setBulkActionInProgress(true);
 
-    setBulkActionInProgress(true);
-    setError(null);
+          let succeeded = 0;
+          let failed = 0;
 
-    let succeeded = 0;
-    let failed = 0;
+          for (const id of selectedIds) {
+            try {
+              await adminMarkCollectionAsSpam(id, 'bulk_manual_review', accessToken);
+              succeeded++;
+            } catch (err) {
+              failed++;
+            }
+          }
 
-    for (const id of selectedIds) {
-      try {
-        await adminMarkCollectionAsSpam(id, 'bulk_manual_review', accessToken);
-        succeeded++;
-      } catch (err) {
-        failed++;
-      }
-    }
-
-    setBulkActionInProgress(false);
-    setSelectedIds(new Set());
-    
-    alert(`✅ Bulk spam marking complete!\n\nSucceeded: ${succeeded}\nFailed: ${failed}`);
-    await fetchData();
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          setBulkActionInProgress(false);
+          setSelectedIds(new Set());
+          
+          toast.success(`Bulk spam marking complete`, {
+            description: `Succeeded: ${succeeded} | Failed: ${failed}`,
+          });
+          await fetchData();
+        } catch (err: any) {
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          setBulkActionInProgress(false);
+          toast.error('Bulk operation failed');
+        }
+      },
+      onCancel: () => setConfirmModal(prev => ({ ...prev, isOpen: false })),
+    });
   };
 
   const handleBulkMarkNotSpam = async () => {
     if (!accessToken || selectedIds.size === 0) return;
 
-    const confirmed = window.confirm(
-      `Mark ${selectedIds.size} selected collection(s) as NOT SPAM?\n\nThis will add them to the allowlist.`
-    );
-    if (!confirmed) return;
+    setConfirmModal({
+      isOpen: true,
+      title: 'Mark as NOT Spam',
+      message: `Mark ${selectedIds.size} selected collection(s) as NOT SPAM? This will add them to the allowlist.`,
+      confirmText: 'Mark as NOT Spam',
+      loading: false,
+      onConfirm: async () => {
+        try {
+          setConfirmModal(prev => ({ ...prev, loading: true }));
+          setBulkActionInProgress(true);
 
-    setBulkActionInProgress(true);
-    setError(null);
+          let succeeded = 0;
+          let failed = 0;
 
-    let succeeded = 0;
-    let failed = 0;
+          for (const id of selectedIds) {
+            try {
+              await adminMarkCollectionAsNotSpam(id, 'bulk_verified_legitimate', accessToken);
+              succeeded++;
+            } catch (err) {
+              failed++;
+            }
+          }
 
-    for (const id of selectedIds) {
-      try {
-        await adminMarkCollectionAsNotSpam(id, 'bulk_verified_legitimate', accessToken);
-        succeeded++;
-      } catch (err) {
-        failed++;
-      }
-    }
-
-    setBulkActionInProgress(false);
-    setSelectedIds(new Set());
-    
-    alert(`✅ Bulk verification complete!\n\nSucceeded: ${succeeded}\nFailed: ${failed}`);
-    await fetchData();
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          setBulkActionInProgress(false);
+          setSelectedIds(new Set());
+          
+          toast.success(`Bulk verification complete`, {
+            description: `Succeeded: ${succeeded} | Failed: ${failed}`,
+          });
+          await fetchData();
+        } catch (err: any) {
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          setBulkActionInProgress(false);
+          toast.error('Bulk operation failed');
+        }
+      },
+      onCancel: () => setConfirmModal(prev => ({ ...prev, isOpen: false })),
+    });
   };
 
   const [linkProjectId, setLinkProjectId] = useState('');
