@@ -196,11 +196,27 @@ export class BlockchainLookupService {
       let totalSupply = null;
       if (supplyRes.ok) {
         const supplyBody = await supplyRes.json();
+        
+        // The total field should contain the full collection size
         totalSupply = supplyBody.result?.total || null;
         
-        if (!totalSupply) {
-          this.logger.warn(`[Solana Lookup] No supply in getAssetsByGroup response for ${collectionAddress}`);
-          this.logger.debug(`[Solana Lookup] Response: ${JSON.stringify(supplyBody.result)}`);
+        // Also check the group object which might have collection info
+        const groupTotal = supplyBody.result?.group?.total || null;
+        
+        // Log everything for debugging
+        this.logger.log(`[Solana Lookup] getAssetsByGroup response for ${collectionAddress}:`, {
+          'result.total': totalSupply,
+          'result.group.total': groupTotal,
+          'result.items.length': supplyBody.result?.items?.length || 0,
+          'keys': Object.keys(supplyBody.result || {}),
+        });
+        
+        // Use whichever total we found
+        totalSupply = totalSupply || groupTotal || null;
+        
+        if (!totalSupply || totalSupply === 1) {
+          this.logger.warn(`[Solana Lookup] Supply is ${totalSupply} for ${collectionAddress} - dumping full response`);
+          this.logger.debug(JSON.stringify(supplyBody, null, 2));
         }
       } else {
         this.logger.warn(`[Solana Lookup] getAssetsByGroup failed with status ${supplyRes.status}`);
