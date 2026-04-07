@@ -84,12 +84,19 @@ export class HolderHistoryService {
     const latestBlock = Number(await client.getBlockNumber());
     const fromBlock = input?.fromBlock ?? (collection.holderHistoryLastCheckedBlock ? collection.holderHistoryLastCheckedBlock + 1 : 0);
 
-    const logs = await client.getLogs({
-      address: getAddress(collection.contractAddress),
-      event: transferEventAbi[0],
-      fromBlock: BigInt(Math.max(fromBlock, 0)),
-      toBlock: BigInt(latestBlock),
-    });
+    const logs = [] as Awaited<ReturnType<typeof client.getLogs>>;
+    const chunkSize = 2000;
+    for (let start = Math.max(fromBlock, 0); start <= latestBlock; start += chunkSize) {
+      const end = Math.min(start + chunkSize - 1, latestBlock);
+      this.logger.log(`Holder history scan chunk ${collectionId}: ${start}-${end}`);
+      const chunk = await client.getLogs({
+        address: getAddress(collection.contractAddress),
+        event: transferEventAbi[0],
+        fromBlock: BigInt(start),
+        toBlock: BigInt(end),
+      });
+      logs.push(...chunk);
+    }
 
     const existingSummaries = await this.db.query.collectionHolderSummaries.findMany({
       where: eq(collectionHolderSummaries.collectionId, collectionId),
