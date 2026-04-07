@@ -156,7 +156,7 @@ export class HolderHistoryService {
       job.toBlock = latestBlock;
 
       const logs = [] as Awaited<ReturnType<typeof client.getLogs>>;
-      const chunkSize = 500;
+      const chunkSize = 10;
       for (let start = Math.max(fromBlock, 0); start <= latestBlock; start += chunkSize) {
         const end = Math.min(start + chunkSize - 1, latestBlock);
         this.logger.log(`Holder history scan chunk ${collectionId}: ${start}-${end}`);
