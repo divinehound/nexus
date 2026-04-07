@@ -383,23 +383,6 @@ export class HolderHistoryService {
       undefined
     );
   }
-@@
-   private getViemChain(chain: string) {
-@@
-     }
-   }
-+
-+  private getAlchemyNetwork(chain: string): string {
-+    const networks: Record<string, string> = {
-+      ethereum: 'eth-mainnet',
-+      base: 'base-mainnet',
-+      polygon: 'polygon-mainnet',
-+      abstract: 'abstract-mainnet',
-+      apechain: 'apechain-mainnet',
-+    };
-+    return networks[chain] || 'eth-mainnet';
-+  }
- }
 
   private getViemChain(chain: string) {
     switch (chain) {
@@ -411,5 +394,16 @@ export class HolderHistoryService {
       default:
         return mainnet;
     }
+  }
+
+  private getAlchemyNetwork(chain: string): string {
+    const networks: Record<string, string> = {
+      ethereum: 'eth-mainnet',
+      base: 'base-mainnet',
+      polygon: 'polygon-mainnet',
+      abstract: 'abstract-mainnet',
+      apechain: 'apechain-mainnet',
+    };
+    return networks[chain] || 'eth-mainnet';
   }
 }
