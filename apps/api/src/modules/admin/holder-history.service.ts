@@ -1,8 +1,6 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { asc, desc, eq, sql } from 'drizzle-orm';
-import { base, mainnet, polygon } from 'viem/chains';
-import { createPublicClient, decodeEventLog, getAddress, http, isAddress } from 'viem';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import {
   type Database,
@@ -11,19 +9,6 @@ import {
   collectionHolderSummaries,
   collectionHolders,
 } from '@nexus/database';
-
-const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
-const transferEventAbi = [
-  {
-    type: 'event',
-    name: 'Transfer',
-    inputs: [
-      { indexed: true, name: 'from', type: 'address' },
-      { indexed: true, name: 'to', type: 'address' },
-      { indexed: true, name: 'tokenId', type: 'uint256' },
-    ],
-  },
-] as const;
 
 type ScanStatus = 'idle' | 'queued' | 'running' | 'completed' | 'failed';
 
@@ -37,6 +22,20 @@ type InMemoryScanJob = {
   processedTransfers: number;
   touchedWallets: number;
   error?: string;
+  pageKey?: string;
+  mode?: 'alchemy_backfill';
+};
+
+type AlchemyTransfer = {
+  hash: string;
+  from: string;
+  to: string;
+  erc721TokenId?: string;
+  blockNum: string;
+  metadata?: {
+    blockTimestamp?: string;
+  };
+  category?: string;
 };
 
 @Injectable()
@@ -87,9 +86,6 @@ export class HolderHistoryService {
     if (collection.chain === 'solana') {
       throw new BadRequestException('Holder history scan currently supports EVM collections only');
     }
-    if (!isAddress(collection.contractAddress)) {
-      throw new BadRequestException('Collection contract address is invalid for EVM log scanning');
-    }
 
     const existing = this.jobs.get(collectionId);
     if (existing && (existing.status === 'queued' || existing.status === 'running')) {
@@ -103,6 +99,7 @@ export class HolderHistoryService {
       fromBlock,
       processedTransfers: 0,
       touchedWallets: 0,
+      mode: 'alchemy_backfill',
     };
 
     this.jobs.set(collectionId, job);
@@ -135,6 +132,7 @@ export class HolderHistoryService {
       fromBlock: fromBlockInput ?? 0,
       processedTransfers: 0,
       touchedWallets: 0,
+      mode: 'alchemy_backfill' as const,
     };
 
     job.status = 'running';
@@ -143,37 +141,21 @@ export class HolderHistoryService {
     this.logger.log(`runCollectionHolderHistoryScan entered for ${collectionId}`);
 
     try {
-      const rpcUrl = this.getRpcUrlForChain(collection.chain);
-      const client = createPublicClient({
-        chain: this.getViemChain(collection.chain),
-        transport: rpcUrl ? http(rpcUrl) : http(),
-      });
+      const apiKey = this.config.get<string>('alchemy.apiKey');
+      if (!apiKey) {
+        throw new Error('Alchemy API key not configured');
+      }
 
-      const latestBlock = Number(await this.withTimeout(client.getBlockNumber(), 15000, 'getBlockNumber'));
-      this.logger.log(`Holder history latest block for ${collectionId}: ${latestBlock}`);
       const fromBlock = fromBlockInput ?? (collection.holderHistoryLastCheckedBlock ? collection.holderHistoryLastCheckedBlock + 1 : 0);
       job.fromBlock = fromBlock;
-      job.toBlock = latestBlock;
 
-      const logs = [] as Awaited<ReturnType<typeof client.getLogs>>;
-      const chunkSize = 10;
-      for (let start = Math.max(fromBlock, 0); start <= latestBlock; start += chunkSize) {
-        const end = Math.min(start + chunkSize - 1, latestBlock);
-        this.logger.log(`Holder history scan chunk ${collectionId}: ${start}-${end}`);
-        const chunk = await this.withTimeout(
-          client.getLogs({
-            address: getAddress(collection.contractAddress),
-            event: transferEventAbi[0],
-            fromBlock: BigInt(start),
-            toBlock: BigInt(end),
-          }),
-          20000,
-          `getLogs ${start}-${end}`,
-        );
-        logs.push(...chunk);
-        job.processedTransfers = logs.length;
-        this.jobs.set(collectionId, { ...job });
-      }
+      const transfers = await this.fetchAlchemyTransfersForCollection(
+        collection.chain,
+        collection.contractAddress,
+        apiKey,
+        fromBlock,
+        job,
+      );
 
       const existingSummaries = await this.db.query.collectionHolderSummaries.findMany({
         where: eq(collectionHolderSummaries.collectionId, collectionId),
@@ -183,64 +165,61 @@ export class HolderHistoryService {
       const summaryMap = new Map(existingSummaries.map((row) => [row.address.toLowerCase(), row]));
       const touched = new Set<string>();
       const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
-      const blockCache = new Map<number, string>();
+      const perWalletLogIndex = new Map<string, number>();
+      let maxBlockNumber = collection.holderHistoryLastCheckedBlock ?? fromBlock;
 
-      for (const log of logs) {
-        const decoded = decodeEventLog({ abi: transferEventAbi, data: log.data, topics: log.topics });
-        const args = decoded.args as { from: `0x${string}`; to: `0x${string}`; tokenId: bigint };
-        const from = args.from.toLowerCase();
-        const to = args.to.toLowerCase();
-        const tokenId = args.tokenId.toString();
-        const blockNumber = Number(log.blockNumber ?? 0n);
-        const logIndex = Number(log.logIndex ?? 0);
-        const txHash = log.transactionHash ?? '';
+      for (const transfer of transfers) {
+        const from = (transfer.from || '').toLowerCase();
+        const to = (transfer.to || '').toLowerCase();
+        const tokenId = normalizeTokenId(transfer.erc721TokenId);
+        const txHash = transfer.hash;
+        const blockNumber = Number.parseInt(transfer.blockNum, 16);
+        const blockTimestamp = transfer.metadata?.blockTimestamp
+          ? new Date(transfer.metadata.blockTimestamp)
+          : new Date();
+        maxBlockNumber = Math.max(maxBlockNumber, blockNumber);
 
-        let blockTimestamp = blockCache.get(blockNumber);
-        if (!blockTimestamp) {
-          const block = await this.withTimeout(
-            client.getBlock({ blockNumber: BigInt(blockNumber) }),
-            15000,
-            `getBlock ${blockNumber}`,
-          );
-          blockTimestamp = new Date(Number(block.timestamp) * 1000).toISOString();
-          blockCache.set(blockNumber, blockTimestamp);
-        }
-
-        if (from !== ZERO_ADDRESS) {
+        if (from && from !== ZERO_ADDRESS) {
           const nextBalance = Math.max((balanceMap.get(from) ?? 0) - 1, 0);
           balanceMap.set(from, nextBalance);
           touched.add(from);
+          const key = `${txHash}:${from}`;
+          const logIndex = (perWalletLogIndex.get(key) ?? 0) + 1;
+          perWalletLogIndex.set(key, logIndex);
           historyRows.push({
             collectionId,
             chain: collection.chain,
             address: from,
             blockNumber,
-            blockTimestamp: new Date(blockTimestamp),
+            blockTimestamp,
             transactionHash: txHash,
             logIndex,
             tokenId,
             direction: 'out',
             balanceAfter: nextBalance,
-            counterpartyAddress: to,
+            counterpartyAddress: to || null,
           });
         }
 
-        if (to !== ZERO_ADDRESS) {
+        if (to && to !== ZERO_ADDRESS) {
           const nextBalance = (balanceMap.get(to) ?? 0) + 1;
           balanceMap.set(to, nextBalance);
           touched.add(to);
+          const key = `${txHash}:${to}`;
+          const logIndex = (perWalletLogIndex.get(key) ?? 0) + 1;
+          perWalletLogIndex.set(key, logIndex);
           historyRows.push({
             collectionId,
             chain: collection.chain,
             address: to,
             blockNumber,
-            blockTimestamp: new Date(blockTimestamp),
+            blockTimestamp,
             transactionHash: txHash,
             logIndex,
             tokenId,
             direction: 'in',
             balanceAfter: nextBalance,
-            counterpartyAddress: from,
+            counterpartyAddress: from || null,
           });
         }
       }
@@ -314,7 +293,7 @@ export class HolderHistoryService {
       await this.db
         .update(collections)
         .set({
-          holderHistoryLastCheckedBlock: latestBlock,
+          holderHistoryLastCheckedBlock: maxBlockNumber,
           holderHistoryLastScannedAt: new Date(),
           holderCount: Array.from(balanceMap.values()).filter((v) => v > 0).length,
           lastIndexFinishedAt: new Date(),
@@ -323,11 +302,12 @@ export class HolderHistoryService {
         })
         .where(eq(collections.id, collectionId));
 
-      this.logger.log(`Holder history scan completed for ${collectionId}. Transfers: ${logs.length}, wallets: ${touched.size}`);
+      this.logger.log(`Holder history scan completed for ${collectionId}. Transfers: ${transfers.length}, wallets: ${touched.size}`);
       job.status = 'completed';
       job.finishedAt = new Date().toISOString();
-      job.processedTransfers = logs.length;
+      job.processedTransfers = transfers.length;
       job.touchedWallets = touched.size;
+      job.toBlock = maxBlockNumber;
       this.jobs.set(collectionId, { ...job });
     } catch (error: any) {
       this.logger.error(`runCollectionHolderHistoryScan failed for ${collectionId}: ${error?.message || error}`);
@@ -349,6 +329,85 @@ export class HolderHistoryService {
     }
   }
 
+  private async fetchAlchemyTransfersForCollection(
+    chain: string,
+    contractAddress: string,
+    apiKey: string,
+    fromBlock: number,
+    job: InMemoryScanJob,
+  ): Promise<AlchemyTransfer[]> {
+    const network = this.getAlchemyNetwork(chain);
+    const endpoint = `https://${network}.g.alchemy.com/v2/${apiKey}`;
+    const allTransfers: AlchemyTransfer[] = [];
+
+    let pageKey: string | undefined;
+    let page = 0;
+
+    while (true) {
+      page += 1;
+      const payload: Record<string, unknown> = {
+        jsonrpc: '2.0',
+        id: page,
+        method: 'alchemy_getAssetTransfers',
+        params: [
+          {
+            fromBlock: toHexBlock(fromBlock),
+            toBlock: 'latest',
+            contractAddresses: [contractAddress],
+            category: ['erc721'],
+            withMetadata: true,
+            excludeZeroValue: false,
+            maxCount: '0x3e8',
+            order: 'asc',
+          },
+        ],
+      };
+
+      if (pageKey) {
+        (payload.params as Array<Record<string, unknown>>)[0].pageKey = pageKey;
+      }
+
+      const response = await this.withTimeout(
+        fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }),
+        30000,
+        `alchemy_getAssetTransfers page ${page}`,
+      );
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Alchemy transfers request failed (${response.status}): ${text}`);
+      }
+
+      const data = (await response.json()) as {
+        result?: { transfers?: AlchemyTransfer[]; pageKey?: string };
+        error?: { message?: string };
+      };
+
+      if (data.error) {
+        throw new Error(data.error.message || 'Alchemy transfers error');
+      }
+
+      const transfers = data.result?.transfers ?? [];
+      allTransfers.push(...transfers);
+      pageKey = data.result?.pageKey;
+
+      job.processedTransfers = allTransfers.length;
+      job.pageKey = pageKey;
+      this.jobs.set(job.collectionId, { ...job });
+      this.logger.log(`Alchemy holder history page ${page} for ${job.collectionId}. Transfers so far: ${allTransfers.length}`);
+
+      if (!pageKey) {
+        break;
+      }
+    }
+
+    return allTransfers;
+  }
+
   private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -367,35 +426,6 @@ export class HolderHistoryService {
     });
   }
 
-  private getRpcUrlForChain(chain: string): string | undefined {
-    const alchemyApiKey = this.config.get<string>('alchemy.apiKey');
-    if (alchemyApiKey) {
-      const network = this.getAlchemyNetwork(chain);
-      return `https://${network}.g.alchemy.com/v2/${alchemyApiKey}`;
-    }
-
-    const upper = chain.toUpperCase();
-    return (
-      this.config.get<string>(`${upper}_RPC_URL`) ||
-      this.config.get<string>('RPC_URL') ||
-      this.config.get<string>('BASE_RPC_URL') ||
-      this.config.get<string>('ETH_RPC_URL') ||
-      undefined
-    );
-  }
-
-  private getViemChain(chain: string) {
-    switch (chain) {
-      case 'base':
-        return base;
-      case 'polygon':
-        return polygon;
-      case 'ethereum':
-      default:
-        return mainnet;
-    }
-  }
-
   private getAlchemyNetwork(chain: string): string {
     const networks: Record<string, string> = {
       ethereum: 'eth-mainnet',
@@ -406,4 +436,18 @@ export class HolderHistoryService {
     };
     return networks[chain] || 'eth-mainnet';
   }
+}
+
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+function toHexBlock(block: number): string {
+  return `0x${block.toString(16)}`;
+}
+
+function normalizeTokenId(tokenId?: string): string {
+  if (!tokenId) return '0';
+  if (tokenId.startsWith('0x')) {
+    return BigInt(tokenId).toString();
+  }
+  return tokenId;
 }
