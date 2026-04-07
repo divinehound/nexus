@@ -427,13 +427,17 @@ export class HolderHistoryService {
       const assets = data.result?.items ?? [];
       pageCursor = data.result?.pageCursor;
       const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
+      const knownSignatures = await this.getKnownTransactionHashesForCollection(collection.id);
 
       for (const asset of assets) {
-        await sleep(80);
+        await sleep(350);
         const txs = await this.fetchHeliusAssetTransactionHistory(asset.id, heliusApiKey);
         let runningOwner = '';
 
         for (const tx of txs) {
+          if (tx.signature && knownSignatures.has(tx.signature)) {
+            break;
+          }
           const timestamp = new Date((tx.timestamp ?? Math.floor(Date.now() / 1000)) * 1000);
           const tokenTransfers = tx.tokenTransfers?.filter((transfer) => transfer.mint === asset.id) ?? [];
 
@@ -524,11 +528,26 @@ export class HolderHistoryService {
   }
 
   private async fetchHeliusAssetTransactionHistory(assetId: string, apiKey: string): Promise<HeliusTransaction[]> {
+    return this.fetchHeliusTransactionsWithRetry(assetId, apiKey, 0);
+  }
+
+  private async fetchHeliusTransactionsWithRetry(assetId: string, apiKey: string, attempt: number): Promise<HeliusTransaction[]> {
     const response = await this.withTimeout(
       fetch(`https://api.helius.xyz/v0/addresses/${assetId}/transactions?api-key=${apiKey}&limit=100`),
       30000,
       `helius transaction history ${assetId}`,
     );
+
+    if (response.status === 429) {
+      if (attempt >= 5) {
+        const text = await response.text();
+        throw new Error(`Helius transaction history failed after retries (${response.status}): ${text}`);
+      }
+      const delay = Math.min(2000 * (attempt + 1), 10000);
+      this.logger.warn(`Helius rate limited for ${assetId}, retrying in ${delay}ms (attempt ${attempt + 1})`);
+      await sleep(delay);
+      return this.fetchHeliusTransactionsWithRetry(assetId, apiKey, attempt + 1);
+    }
 
     if (!response.ok) {
       const text = await response.text();
@@ -536,6 +555,15 @@ export class HolderHistoryService {
     }
 
     return (await response.json()) as HeliusTransaction[];
+  }
+
+  private async getKnownTransactionHashesForCollection(collectionId: string): Promise<Set<string>> {
+    const rows = await this.db.query.collectionHolderBalanceHistory.findMany({
+      where: eq(collectionHolderBalanceHistory.collectionId, collectionId),
+      columns: { transactionHash: true },
+    });
+
+    return new Set(rows.map((row) => row.transactionHash));
   }
 
   private async persistHistoryBatch(rows: Array<typeof collectionHolderBalanceHistory.$inferInsert>) {
