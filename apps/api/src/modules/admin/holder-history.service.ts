@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { asc, desc, eq, sql } from 'drizzle-orm';
+import { base, mainnet, polygon } from 'viem/chains';
 import { createPublicClient, decodeEventLog, getAddress, http, isAddress } from 'viem';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import {
@@ -74,8 +75,11 @@ export class HolderHistoryService {
       throw new BadRequestException('Collection contract address is invalid for EVM log scanning');
     }
 
-    const rpcUrl = this.config.get<string>('RPC_URL') || this.config.get<string>('BASE_RPC_URL') || this.config.get<string>('ETH_RPC_URL');
-    const client = createPublicClient({ transport: http(rpcUrl) });
+    const rpcUrl = this.getRpcUrlForChain(collection.chain);
+    const client = createPublicClient({
+      chain: this.getViemChain(collection.chain),
+      transport: rpcUrl ? http(rpcUrl) : http(),
+    });
 
     const latestBlock = Number(await client.getBlockNumber());
     const fromBlock = input?.fromBlock ?? (collection.holderHistoryLastCheckedBlock ? collection.holderHistoryLastCheckedBlock + 1 : 0);
@@ -238,5 +242,28 @@ export class HolderHistoryService {
       fromBlock,
       toBlock: latestBlock,
     };
+  }
+
+  private getRpcUrlForChain(chain: string): string | undefined {
+    const upper = chain.toUpperCase();
+    return (
+      this.config.get<string>(`${upper}_RPC_URL`) ||
+      this.config.get<string>('RPC_URL') ||
+      this.config.get<string>('BASE_RPC_URL') ||
+      this.config.get<string>('ETH_RPC_URL') ||
+      undefined
+    );
+  }
+
+  private getViemChain(chain: string) {
+    switch (chain) {
+      case 'base':
+        return base;
+      case 'polygon':
+        return polygon;
+      case 'ethereum':
+      default:
+        return mainnet;
+    }
   }
 }
