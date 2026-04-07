@@ -222,17 +222,38 @@ export function adminGetCollectionHolderHistory(collectionId: string, token: str
 
 export function adminScanCollectionHolderHistory(collectionId: string, token: string, fromBlock?: number) {
   return apiFetch<{
-    success: boolean;
-    collection: string;
-    processedTransfers: number;
-    holdersIndexed: number;
-    fromBlock: number;
-    toBlock: number;
+    queued: boolean;
+    alreadyRunning: boolean;
+    job: {
+      collectionId: string;
+      status: 'idle' | 'queued' | 'running' | 'completed' | 'failed';
+      fromBlock: number;
+      toBlock?: number;
+      startedAt?: string;
+      finishedAt?: string;
+      processedTransfers: number;
+      touchedWallets: number;
+      error?: string;
+    };
   }>(`/admin/collections/${collectionId}/holder-history/scan`, {
     method: 'POST',
     token,
     body: JSON.stringify({ fromBlock }),
   });
+}
+
+export function adminGetCollectionHolderHistoryStatus(collectionId: string, token: string) {
+  return apiFetch<{
+    collectionId: string;
+    status: 'idle' | 'queued' | 'running' | 'completed' | 'failed';
+    fromBlock?: number;
+    toBlock?: number;
+    startedAt?: string;
+    finishedAt?: string;
+    processedTransfers?: number;
+    touchedWallets?: number;
+    error?: string;
+  }>(`/admin/collections/${collectionId}/holder-history/status`, { token });
 }
 
 export function adminMarkCollectionAsSpam(collectionId: string, notes: string | undefined, token: string) {

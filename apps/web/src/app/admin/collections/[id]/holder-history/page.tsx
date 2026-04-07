@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/auth-context';
-import { adminGetCollectionHolderHistory, adminScanCollectionHolderHistory } from '@/lib/api';
+import { adminGetCollectionHolderHistory, adminGetCollectionHolderHistoryStatus, adminScanCollectionHolderHistory } from '@/lib/api';
 
 export default function AdminCollectionHolderHistoryPage({ params }: { params: Promise<{ id: string }> }) {
   const { accessToken } = useAuth();
@@ -13,6 +13,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
   const [scanning, setScanning] = useState(false);
   const [selectedWallet, setSelectedWallet] = useState<string>('');
   const [fromBlock, setFromBlock] = useState('');
+  const [jobStatus, setJobStatus] = useState<any>(null);
 
   useEffect(() => {
     params.then((p) => setCollectionId(p.id));
@@ -24,6 +25,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
     try {
       const result = await adminGetCollectionHolderHistory(collectionId, accessToken);
       setData(result);
+      setJobStatus(result.scanJob ?? null);
       setSelectedWallet((prev) => prev || result.summary.wallets[0]?.address || '');
     } catch (err: any) {
       toast.error(err?.message || 'Failed to load holder history');
@@ -41,6 +43,26 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
     return data.balanceHistory.filter((entry: any) => entry.address === selectedWallet);
   }, [data, selectedWallet]);
 
+  useEffect(() => {
+    if (!accessToken || !collectionId) return;
+    if (!jobStatus || !['queued', 'running'].includes(jobStatus.status)) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await adminGetCollectionHolderHistoryStatus(collectionId, accessToken);
+        setJobStatus(status);
+        if (status.status === 'completed' || status.status === 'failed') {
+          clearInterval(interval);
+          await load();
+        }
+      } catch {
+        clearInterval(interval);
+      }
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [accessToken, collectionId, jobStatus?.status]);
+
   const scan = async () => {
     if (!accessToken || !collectionId) return;
     setScanning(true);
@@ -50,8 +72,8 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
         accessToken,
         fromBlock.trim() ? Number(fromBlock) : undefined,
       );
-      toast.success(`Processed ${result.processedTransfers.toLocaleString()} transfers`);
-      await load();
+      setJobStatus(result.job);
+      toast.success(result.alreadyRunning ? 'Scan already running' : 'Holder history scan queued');
     } catch (err: any) {
       toast.error(err?.message || 'Failed to scan holder history');
     } finally {
@@ -98,6 +120,19 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
           value={data?.collection?.holderHistoryLastScannedAt ? new Date(data.collection.holderHistoryLastScannedAt).toLocaleString() : '—'}
         />
       </div>
+
+      {jobStatus && jobStatus.status !== 'idle' && (
+        <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-4 text-sm text-gray-300">
+          <div className="flex flex-wrap items-center gap-4">
+            <span>Status: <strong className="text-white">{jobStatus.status}</strong></span>
+            {jobStatus.fromBlock !== undefined && <span>From: <strong className="text-white">{jobStatus.fromBlock}</strong></span>}
+            {jobStatus.toBlock !== undefined && <span>To: <strong className="text-white">{jobStatus.toBlock}</strong></span>}
+            {jobStatus.processedTransfers !== undefined && <span>Transfers: <strong className="text-white">{jobStatus.processedTransfers}</strong></span>}
+            {jobStatus.touchedWallets !== undefined && <span>Wallets: <strong className="text-white">{jobStatus.touchedWallets}</strong></span>}
+          </div>
+          {jobStatus.error && <div className="mt-2 text-red-400">{jobStatus.error}</div>}
+        </div>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr,0.8fr]">
         <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-5">

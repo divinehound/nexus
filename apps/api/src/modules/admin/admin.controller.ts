@@ -154,12 +154,18 @@ export class AdminController {
   }
 
   @Post('collections/:id/holder-history/scan')
-  @ApiOperation({ summary: 'Scan transfer history for a collection and update holder summaries' })
+  @ApiOperation({ summary: 'Queue transfer history scan for a collection and update holder summaries asynchronously' })
   scanCollectionHolderHistory(
     @Param('id') id: string,
     @Body() body?: { fromBlock?: number },
   ) {
-    return this.holderHistoryService.scanCollectionHolderHistory(id, body);
+    return this.holderHistoryService.queueCollectionHolderHistoryScan(id, body);
+  }
+
+  @Get('collections/:id/holder-history/status')
+  @ApiOperation({ summary: 'Get holder history scan job status for a collection' })
+  getCollectionHolderHistoryStatus(@Param('id') id: string) {
+    return this.holderHistoryService.getCollectionHolderHistoryScanStatus(id);
   }
 
   @Post('collections/:id/mark-spam')
