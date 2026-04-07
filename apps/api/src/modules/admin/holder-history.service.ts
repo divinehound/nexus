@@ -294,7 +294,9 @@ export class HolderHistoryService {
         }
 
         if (historyRows.length > 0) {
-          await this.db.insert(collectionHolderBalanceHistory).values(historyRows).onConflictDoNothing();
+          for (const batch of chunkArray(historyRows, 500)) {
+            await this.db.insert(collectionHolderBalanceHistory).values(batch).onConflictDoNothing();
+          }
         }
 
         job.processedTransfers += transfers.length;
@@ -341,29 +343,33 @@ export class HolderHistoryService {
       }
 
       if (summaryRows.length > 0) {
-        await this.db.insert(collectionHolderSummaries).values(summaryRows).onConflictDoUpdate({
-          target: [collectionHolderSummaries.collectionId, collectionHolderSummaries.address],
-          set: {
-            currentBalance: sql`excluded.current_balance`,
-            firstReceivedAt: sql`excluded.first_received_at`,
-            firstReceivedBlock: sql`excluded.first_received_block`,
-            lastReceivedAt: sql`excluded.last_received_at`,
-            lastReceivedBlock: sql`excluded.last_received_block`,
-            totalReceivedCount: sql`excluded.total_received_count`,
-            totalSentCount: sql`excluded.total_sent_count`,
-            updatedAt: sql`excluded.updated_at`,
-          },
-        });
+        for (const batch of chunkArray(summaryRows, 500)) {
+          await this.db.insert(collectionHolderSummaries).values(batch).onConflictDoUpdate({
+            target: [collectionHolderSummaries.collectionId, collectionHolderSummaries.address],
+            set: {
+              currentBalance: sql`excluded.current_balance`,
+              firstReceivedAt: sql`excluded.first_received_at`,
+              firstReceivedBlock: sql`excluded.first_received_block`,
+              lastReceivedAt: sql`excluded.last_received_at`,
+              lastReceivedBlock: sql`excluded.last_received_block`,
+              totalReceivedCount: sql`excluded.total_received_count`,
+              totalSentCount: sql`excluded.total_sent_count`,
+              updatedAt: sql`excluded.updated_at`,
+            },
+          });
+        }
       }
 
       if (holderRows.length > 0) {
-        await this.db.insert(collectionHolders).values(holderRows).onConflictDoUpdate({
-          target: [collectionHolders.collectionId, collectionHolders.address],
-          set: {
-            tokenCount: sql`excluded.token_count`,
-            lastSeenAt: sql`excluded.last_seen_at`,
-          },
-        });
+        for (const batch of chunkArray(holderRows, 500)) {
+          await this.db.insert(collectionHolders).values(batch).onConflictDoUpdate({
+            target: [collectionHolders.collectionId, collectionHolders.address],
+            set: {
+              tokenCount: sql`excluded.token_count`,
+              lastSeenAt: sql`excluded.last_seen_at`,
+            },
+          });
+        }
       }
 
       await this.db
@@ -444,6 +450,14 @@ function normalizeTokenId(tokenId?: string): string {
     return BigInt(tokenId).toString();
   }
   return tokenId;
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
 }
 
 function ensureSummary(state: Map<string, MutableSummary>, address: string): MutableSummary {
