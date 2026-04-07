@@ -6,5 +6,6 @@ export * from './activity';
 export * from './discovery';
 export * from './market';
 export * from './ownership';
+export * from './holder-history';
 export * from './indexing';
 export * from './relations';

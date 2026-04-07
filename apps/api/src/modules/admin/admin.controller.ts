@@ -13,13 +13,17 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminGuard } from '../../common/guards/admin.guard';
 import { AdminService } from './admin.service';
+import { HolderHistoryService } from './holder-history.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
 @UseGuards(AdminGuard)
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly holderHistoryService: HolderHistoryService,
+  ) {}
 
   // --- Dashboard ---
 
@@ -141,6 +145,21 @@ export class AdminController {
   @ApiOperation({ summary: 'Index all holders for a collection (full data)' })
   indexCollectionHolders(@Param('id') id: string) {
     return this.adminService.indexCollectionHolders(id);
+  }
+
+  @Get('collections/:id/holder-history')
+  @ApiOperation({ summary: 'Get full holder history summary for a collection' })
+  getCollectionHolderHistory(@Param('id') id: string) {
+    return this.holderHistoryService.getCollectionHolderHistory(id);
+  }
+
+  @Post('collections/:id/holder-history/scan')
+  @ApiOperation({ summary: 'Scan transfer history for a collection and update holder summaries' })
+  scanCollectionHolderHistory(
+    @Param('id') id: string,
+    @Body() body?: { fromBlock?: number },
+  ) {
+    return this.holderHistoryService.scanCollectionHolderHistory(id, body);
   }
 
   @Post('collections/:id/mark-spam')

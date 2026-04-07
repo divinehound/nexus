@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { toast } from 'sonner';
 import {
   adminRejectCollection,
@@ -1123,6 +1124,13 @@ export default function AdminCollectionsPage() {
                 >
                   {indexing[c.id] ? 'Indexing...' : '🔍 Index Holders'}
                 </button>
+                <Link
+                  href={`/admin/collections/${c.id}/holder-history`}
+                  className="rounded border border-purple-700 px-3 py-1.5 text-xs font-medium text-purple-300 hover:border-purple-500 hover:text-white"
+                  title="View full holder history"
+                >
+                  📈 Holder History
+                </Link>
                 <button
                   onClick={() => handleDiscoverCollections(c.id)}
                   className="rounded bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600"

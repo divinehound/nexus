@@ -6,6 +6,7 @@ import {
   boolean,
   integer,
   real,
+  bigint,
   timestamp,
   pgEnum,
   numeric,
@@ -150,6 +151,8 @@ export const collections = pgTable(
     lastIndexStatus: varchar('last_index_status', { length: 16 }),
     lastIndexError: text('last_index_error'),
     lastIndexJobId: varchar('last_index_job_id', { length: 64 }),
+    holderHistoryLastCheckedBlock: bigint('holder_history_last_checked_block', { mode: 'number' }),
+    holderHistoryLastScannedAt: timestamp('holder_history_last_scanned_at', { withTimezone: true }),
     // Collection metadata (social links, description)
     description: text('description'),
     discordUrl: text('discord_url'),

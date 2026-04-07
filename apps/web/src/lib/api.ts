@@ -212,6 +212,29 @@ export function adminIndexCollectionHolders(collectionId: string, token: string)
   );
 }
 
+export function adminGetCollectionHolderHistory(collectionId: string, token: string) {
+  return apiFetch<{
+    collection: any;
+    summary: { wallets: any[]; totalWallets: number; totalTokensHeld: number };
+    balanceHistory: any[];
+  }>(`/admin/collections/${collectionId}/holder-history`, { token });
+}
+
+export function adminScanCollectionHolderHistory(collectionId: string, token: string, fromBlock?: number) {
+  return apiFetch<{
+    success: boolean;
+    collection: string;
+    processedTransfers: number;
+    holdersIndexed: number;
+    fromBlock: number;
+    toBlock: number;
+  }>(`/admin/collections/${collectionId}/holder-history/scan`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify({ fromBlock }),
+  });
+}
+
 export function adminMarkCollectionAsSpam(collectionId: string, notes: string | undefined, token: string) {
   return apiFetch<{ success: boolean; collection: string }>(
     `/admin/collections/${collectionId}/mark-spam`,
