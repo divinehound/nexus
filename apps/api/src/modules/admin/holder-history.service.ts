@@ -35,7 +35,16 @@ type AlchemyTransfer = {
   metadata?: {
     blockTimestamp?: string;
   };
-  category?: string;
+};
+
+type MutableSummary = {
+  currentBalance: number;
+  firstReceivedAt: Date | null;
+  firstReceivedBlock: number | null;
+  lastReceivedAt: Date | null;
+  lastReceivedBlock: number | null;
+  totalReceivedCount: number;
+  totalSentCount: number;
 };
 
 @Injectable()
@@ -138,7 +147,6 @@ export class HolderHistoryService {
     job.status = 'running';
     job.startedAt = new Date().toISOString();
     this.jobs.set(collectionId, job);
-    this.logger.log(`runCollectionHolderHistoryScan entered for ${collectionId}`);
 
     try {
       const apiKey = this.config.get<string>('alchemy.apiKey');
@@ -149,108 +157,176 @@ export class HolderHistoryService {
       const fromBlock = fromBlockInput ?? (collection.holderHistoryLastCheckedBlock ? collection.holderHistoryLastCheckedBlock + 1 : 0);
       job.fromBlock = fromBlock;
 
-      const transfers = await this.fetchAlchemyTransfersForCollection(
-        collection.chain,
-        collection.contractAddress,
-        apiKey,
-        fromBlock,
-        job,
-      );
-
       const existingSummaries = await this.db.query.collectionHolderSummaries.findMany({
         where: eq(collectionHolderSummaries.collectionId, collectionId),
       });
 
-      const balanceMap = new Map(existingSummaries.map((row) => [row.address.toLowerCase(), row.currentBalance]));
-      const summaryMap = new Map(existingSummaries.map((row) => [row.address.toLowerCase(), row]));
-      const touched = new Set<string>();
-      const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
-      const perWalletLogIndex = new Map<string, number>();
-      let maxBlockNumber = collection.holderHistoryLastCheckedBlock ?? fromBlock;
-
-      for (const transfer of transfers) {
-        const from = (transfer.from || '').toLowerCase();
-        const to = (transfer.to || '').toLowerCase();
-        const tokenId = normalizeTokenId(transfer.erc721TokenId);
-        const txHash = transfer.hash;
-        const blockNumber = Number.parseInt(transfer.blockNum, 16);
-        const blockTimestamp = transfer.metadata?.blockTimestamp
-          ? new Date(transfer.metadata.blockTimestamp)
-          : new Date();
-        maxBlockNumber = Math.max(maxBlockNumber, blockNumber);
-
-        if (from && from !== ZERO_ADDRESS) {
-          const nextBalance = Math.max((balanceMap.get(from) ?? 0) - 1, 0);
-          balanceMap.set(from, nextBalance);
-          touched.add(from);
-          const key = `${txHash}:${from}`;
-          const logIndex = (perWalletLogIndex.get(key) ?? 0) + 1;
-          perWalletLogIndex.set(key, logIndex);
-          historyRows.push({
-            collectionId,
-            chain: collection.chain,
-            address: from,
-            blockNumber,
-            blockTimestamp,
-            transactionHash: txHash,
-            logIndex,
-            tokenId,
-            direction: 'out',
-            balanceAfter: nextBalance,
-            counterpartyAddress: to || null,
-          });
-        }
-
-        if (to && to !== ZERO_ADDRESS) {
-          const nextBalance = (balanceMap.get(to) ?? 0) + 1;
-          balanceMap.set(to, nextBalance);
-          touched.add(to);
-          const key = `${txHash}:${to}`;
-          const logIndex = (perWalletLogIndex.get(key) ?? 0) + 1;
-          perWalletLogIndex.set(key, logIndex);
-          historyRows.push({
-            collectionId,
-            chain: collection.chain,
-            address: to,
-            blockNumber,
-            blockTimestamp,
-            transactionHash: txHash,
-            logIndex,
-            tokenId,
-            direction: 'in',
-            balanceAfter: nextBalance,
-            counterpartyAddress: from || null,
-          });
-        }
+      const summaryState = new Map<string, MutableSummary>();
+      for (const row of existingSummaries) {
+        summaryState.set(row.address.toLowerCase(), {
+          currentBalance: row.currentBalance,
+          firstReceivedAt: row.firstReceivedAt,
+          firstReceivedBlock: row.firstReceivedBlock,
+          lastReceivedAt: row.lastReceivedAt,
+          lastReceivedBlock: row.lastReceivedBlock,
+          totalReceivedCount: row.totalReceivedCount,
+          totalSentCount: row.totalSentCount,
+        });
       }
 
-      if (historyRows.length > 0) {
-        await this.db.insert(collectionHolderBalanceHistory).values(historyRows).onConflictDoNothing();
+      const touched = new Set<string>();
+      let maxBlockNumber = collection.holderHistoryLastCheckedBlock ?? fromBlock;
+      let pageKey: string | undefined;
+      let page = 0;
+      const network = this.getAlchemyNetwork(collection.chain);
+      const endpoint = `https://${network}.g.alchemy.com/v2/${apiKey}`;
+
+      while (true) {
+        page += 1;
+        const response = await this.withTimeout(
+          fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: page,
+              method: 'alchemy_getAssetTransfers',
+              params: [
+                {
+                  fromBlock: toHexBlock(fromBlock),
+                  toBlock: 'latest',
+                  contractAddresses: [collection.contractAddress],
+                  category: ['erc721'],
+                  withMetadata: true,
+                  excludeZeroValue: false,
+                  maxCount: '0x3e8',
+                  order: 'asc',
+                  ...(pageKey ? { pageKey } : {}),
+                },
+              ],
+            }),
+          }),
+          30000,
+          `alchemy_getAssetTransfers page ${page}`,
+        );
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`Alchemy transfers request failed (${response.status}): ${text}`);
+        }
+
+        const data = (await response.json()) as {
+          result?: { transfers?: AlchemyTransfer[]; pageKey?: string };
+          error?: { message?: string };
+        };
+
+        if (data.error) {
+          throw new Error(data.error.message || 'Alchemy transfers error');
+        }
+
+        const transfers = data.result?.transfers ?? [];
+        pageKey = data.result?.pageKey;
+        job.pageKey = pageKey;
+
+        const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
+        const perWalletLogIndex = new Map<string, number>();
+
+        for (const transfer of transfers) {
+          const from = (transfer.from || '').toLowerCase();
+          const to = (transfer.to || '').toLowerCase();
+          const tokenId = normalizeTokenId(transfer.erc721TokenId);
+          const txHash = transfer.hash;
+          const blockNumber = Number.parseInt(transfer.blockNum, 16);
+          const blockTimestamp = transfer.metadata?.blockTimestamp ? new Date(transfer.metadata.blockTimestamp) : new Date();
+          maxBlockNumber = Math.max(maxBlockNumber, blockNumber);
+
+          if (from && from !== ZERO_ADDRESS) {
+            const summary = ensureSummary(summaryState, from);
+            summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
+            summary.totalSentCount += 1;
+            touched.add(from);
+            const key = `${txHash}:${from}`;
+            const logIndex = (perWalletLogIndex.get(key) ?? 0) + 1;
+            perWalletLogIndex.set(key, logIndex);
+            historyRows.push({
+              collectionId,
+              chain: collection.chain,
+              address: from,
+              blockNumber,
+              blockTimestamp,
+              transactionHash: txHash,
+              logIndex,
+              tokenId,
+              direction: 'out',
+              balanceAfter: summary.currentBalance,
+              counterpartyAddress: to || null,
+            });
+          }
+
+          if (to && to !== ZERO_ADDRESS) {
+            const summary = ensureSummary(summaryState, to);
+            summary.currentBalance += 1;
+            summary.totalReceivedCount += 1;
+            if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNumber) {
+              summary.firstReceivedAt = blockTimestamp;
+              summary.firstReceivedBlock = blockNumber;
+            }
+            summary.lastReceivedAt = blockTimestamp;
+            summary.lastReceivedBlock = blockNumber;
+            touched.add(to);
+            const key = `${txHash}:${to}`;
+            const logIndex = (perWalletLogIndex.get(key) ?? 0) + 1;
+            perWalletLogIndex.set(key, logIndex);
+            historyRows.push({
+              collectionId,
+              chain: collection.chain,
+              address: to,
+              blockNumber,
+              blockTimestamp,
+              transactionHash: txHash,
+              logIndex,
+              tokenId,
+              direction: 'in',
+              balanceAfter: summary.currentBalance,
+              counterpartyAddress: from || null,
+            });
+          }
+        }
+
+        if (historyRows.length > 0) {
+          await this.db.insert(collectionHolderBalanceHistory).values(historyRows).onConflictDoNothing();
+        }
+
+        job.processedTransfers += transfers.length;
+        job.touchedWallets = touched.size;
+        job.toBlock = maxBlockNumber;
+        this.jobs.set(collectionId, { ...job });
+        this.logger.log(`Alchemy holder history page ${page} for ${collectionId}. Transfers so far: ${job.processedTransfers}`);
+
+        if (!pageKey) {
+          break;
+        }
       }
 
       const summaryRows: Array<typeof collectionHolderSummaries.$inferInsert> = [];
       const holderRows: Array<typeof collectionHolders.$inferInsert> = [];
 
-      for (const address of touched) {
-        const existing = summaryMap.get(address);
-        const walletHistory = historyRows.filter((row) => row.address === address);
-        const incoming = walletHistory.filter((row) => row.direction === 'in');
-        const outgoing = walletHistory.filter((row) => row.direction === 'out');
-        const firstIncoming = incoming[0];
-        const lastIncoming = incoming[incoming.length - 1];
-        const currentBalance = balanceMap.get(address) ?? 0;
+      for (const [address, summary] of summaryState.entries()) {
+        if (!touched.has(address) && summary.currentBalance === 0 && summary.totalReceivedCount === 0 && summary.totalSentCount === 0) {
+          continue;
+        }
 
         summaryRows.push({
           collectionId,
           chain: collection.chain,
           address,
-          currentBalance,
-          firstReceivedAt: existing?.firstReceivedAt ?? firstIncoming?.blockTimestamp ?? null,
-          firstReceivedBlock: existing?.firstReceivedBlock ?? firstIncoming?.blockNumber ?? null,
-          lastReceivedAt: lastIncoming?.blockTimestamp ?? existing?.lastReceivedAt ?? null,
-          lastReceivedBlock: lastIncoming?.blockNumber ?? existing?.lastReceivedBlock ?? null,
-          totalReceivedCount: (existing?.totalReceivedCount ?? 0) + incoming.length,
-          totalSentCount: (existing?.totalSentCount ?? 0) + outgoing.length,
+          currentBalance: summary.currentBalance,
+          firstReceivedAt: summary.firstReceivedAt,
+          firstReceivedBlock: summary.firstReceivedBlock,
+          lastReceivedAt: summary.lastReceivedAt,
+          lastReceivedBlock: summary.lastReceivedBlock,
+          totalReceivedCount: summary.totalReceivedCount,
+          totalSentCount: summary.totalSentCount,
           updatedAt: new Date(),
         });
 
@@ -258,8 +334,8 @@ export class HolderHistoryService {
           collectionId,
           chain: collection.chain,
           address,
-          tokenCount: currentBalance,
-          firstSeenAt: existing?.firstReceivedAt ?? firstIncoming?.blockTimestamp ?? new Date(),
+          tokenCount: summary.currentBalance,
+          firstSeenAt: summary.firstReceivedAt ?? new Date(),
           lastSeenAt: new Date(),
         });
       }
@@ -295,20 +371,17 @@ export class HolderHistoryService {
         .set({
           holderHistoryLastCheckedBlock: maxBlockNumber,
           holderHistoryLastScannedAt: new Date(),
-          holderCount: Array.from(balanceMap.values()).filter((v) => v > 0).length,
+          holderCount: Array.from(summaryState.values()).filter((v) => v.currentBalance > 0).length,
           lastIndexFinishedAt: new Date(),
           lastIndexStatus: 'success',
           lastIndexError: null,
         })
         .where(eq(collections.id, collectionId));
 
-      this.logger.log(`Holder history scan completed for ${collectionId}. Transfers: ${transfers.length}, wallets: ${touched.size}`);
       job.status = 'completed';
       job.finishedAt = new Date().toISOString();
-      job.processedTransfers = transfers.length;
-      job.touchedWallets = touched.size;
-      job.toBlock = maxBlockNumber;
       this.jobs.set(collectionId, { ...job });
+      this.logger.log(`Holder history scan completed for ${collectionId}. Transfers: ${job.processedTransfers}, wallets: ${job.touchedWallets}`);
     } catch (error: any) {
       this.logger.error(`runCollectionHolderHistoryScan failed for ${collectionId}: ${error?.message || error}`);
       job.status = 'failed';
@@ -327,85 +400,6 @@ export class HolderHistoryService {
 
       throw error;
     }
-  }
-
-  private async fetchAlchemyTransfersForCollection(
-    chain: string,
-    contractAddress: string,
-    apiKey: string,
-    fromBlock: number,
-    job: InMemoryScanJob,
-  ): Promise<AlchemyTransfer[]> {
-    const network = this.getAlchemyNetwork(chain);
-    const endpoint = `https://${network}.g.alchemy.com/v2/${apiKey}`;
-    const allTransfers: AlchemyTransfer[] = [];
-
-    let pageKey: string | undefined;
-    let page = 0;
-
-    while (true) {
-      page += 1;
-      const payload: Record<string, unknown> = {
-        jsonrpc: '2.0',
-        id: page,
-        method: 'alchemy_getAssetTransfers',
-        params: [
-          {
-            fromBlock: toHexBlock(fromBlock),
-            toBlock: 'latest',
-            contractAddresses: [contractAddress],
-            category: ['erc721'],
-            withMetadata: true,
-            excludeZeroValue: false,
-            maxCount: '0x3e8',
-            order: 'asc',
-          },
-        ],
-      };
-
-      if (pageKey) {
-        (payload.params as Array<Record<string, unknown>>)[0].pageKey = pageKey;
-      }
-
-      const response = await this.withTimeout(
-        fetch(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }),
-        30000,
-        `alchemy_getAssetTransfers page ${page}`,
-      );
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Alchemy transfers request failed (${response.status}): ${text}`);
-      }
-
-      const data = (await response.json()) as {
-        result?: { transfers?: AlchemyTransfer[]; pageKey?: string };
-        error?: { message?: string };
-      };
-
-      if (data.error) {
-        throw new Error(data.error.message || 'Alchemy transfers error');
-      }
-
-      const transfers = data.result?.transfers ?? [];
-      allTransfers.push(...transfers);
-      pageKey = data.result?.pageKey;
-
-      job.processedTransfers = allTransfers.length;
-      job.pageKey = pageKey;
-      this.jobs.set(job.collectionId, { ...job });
-      this.logger.log(`Alchemy holder history page ${page} for ${job.collectionId}. Transfers so far: ${allTransfers.length}`);
-
-      if (!pageKey) {
-        break;
-      }
-    }
-
-    return allTransfers;
   }
 
   private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -450,4 +444,21 @@ function normalizeTokenId(tokenId?: string): string {
     return BigInt(tokenId).toString();
   }
   return tokenId;
+}
+
+function ensureSummary(state: Map<string, MutableSummary>, address: string): MutableSummary {
+  let summary = state.get(address);
+  if (!summary) {
+    summary = {
+      currentBalance: 0,
+      firstReceivedAt: null,
+      firstReceivedBlock: null,
+      lastReceivedAt: null,
+      lastReceivedBlock: null,
+      totalReceivedCount: 0,
+      totalSentCount: 0,
+    };
+    state.set(address, summary);
+  }
+  return summary;
 }
