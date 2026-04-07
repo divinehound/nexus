@@ -141,6 +141,13 @@
       "when": 1774579440000,
       "tag": "0019_collection_activity",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1775536000000,
+      "tag": "0020_holder_history_admin_scan",
+      "breakpoints": true
     }
   ]
 }
