@@ -106,12 +106,14 @@ export class HolderHistoryService {
     };
 
     this.jobs.set(collectionId, job);
+    this.logger.log(`Queued holder history scan for ${collectionId} from block ${fromBlock}`);
 
-    setImmediate(() => {
+    setTimeout(() => {
+      this.logger.log(`Starting async holder history scan for ${collectionId}`);
       void this.runCollectionHolderHistoryScan(collectionId, fromBlock).catch((error) => {
         this.logger.error(`Holder history scan failed for ${collectionId}: ${error?.message || error}`);
       });
-    });
+    }, 0);
 
     return { queued: true, alreadyRunning: false, job };
   }
@@ -138,6 +140,7 @@ export class HolderHistoryService {
     job.status = 'running';
     job.startedAt = new Date().toISOString();
     this.jobs.set(collectionId, job);
+    this.logger.log(`runCollectionHolderHistoryScan entered for ${collectionId}`);
 
     try {
       const rpcUrl = this.getRpcUrlForChain(collection.chain);
@@ -147,6 +150,7 @@ export class HolderHistoryService {
       });
 
       const latestBlock = Number(await client.getBlockNumber());
+      this.logger.log(`Holder history latest block for ${collectionId}: ${latestBlock}`);
       const fromBlock = fromBlockInput ?? (collection.holderHistoryLastCheckedBlock ? collection.holderHistoryLastCheckedBlock + 1 : 0);
       job.fromBlock = fromBlock;
       job.toBlock = latestBlock;
@@ -311,12 +315,14 @@ export class HolderHistoryService {
         })
         .where(eq(collections.id, collectionId));
 
+      this.logger.log(`Holder history scan completed for ${collectionId}. Transfers: ${logs.length}, wallets: ${touched.size}`);
       job.status = 'completed';
       job.finishedAt = new Date().toISOString();
       job.processedTransfers = logs.length;
       job.touchedWallets = touched.size;
       this.jobs.set(collectionId, { ...job });
     } catch (error: any) {
+      this.logger.error(`runCollectionHolderHistoryScan failed for ${collectionId}: ${error?.message || error}`);
       job.status = 'failed';
       job.finishedAt = new Date().toISOString();
       job.error = error?.message || 'Unknown error';
