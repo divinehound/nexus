@@ -1,5 +1,11 @@
 -- Add admin holder history scan checkpoint fields and detailed per-transfer history
 
+DO $$ BEGIN
+  CREATE TYPE holder_transfer_direction AS ENUM ('in', 'out');
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+
 ALTER TABLE collections
   ADD COLUMN IF NOT EXISTS holder_history_last_checked_block BIGINT,
   ADD COLUMN IF NOT EXISTS holder_history_last_scanned_at TIMESTAMP WITH TIME ZONE;
