@@ -5,6 +5,11 @@ import { toast } from 'sonner';
 import { useAuth } from '@/context/auth-context';
 import { adminGetCollectionHolderHistory, adminGetCollectionHolderHistoryStatus, adminScanCollectionHolderHistory } from '@/lib/api';
 
+type SortField = 'currentBalance' | 'firstReceivedAt' | 'lastReceivedAt' | 'address';
+type SortDirection = 'asc' | 'desc';
+
+const PAGE_SIZE = 50;
+
 export default function AdminCollectionHolderHistoryPage({ params }: { params: Promise<{ id: string }> }) {
   const { accessToken } = useAuth();
   const [collectionId, setCollectionId] = useState<string>('');
@@ -14,6 +19,9 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
   const [selectedWallet, setSelectedWallet] = useState<string>('');
   const [fromBlock, setFromBlock] = useState('');
   const [jobStatus, setJobStatus] = useState<any>(null);
+  const [sortField, setSortField] = useState<SortField>('currentBalance');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     params.then((p) => setCollectionId(p.id));
@@ -26,7 +34,6 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
       const result = await adminGetCollectionHolderHistory(collectionId, accessToken);
       setData(result);
       setJobStatus(result.scanJob ?? null);
-      setSelectedWallet((prev) => prev || result.summary.wallets[0]?.address || '');
     } catch (err: any) {
       toast.error(err?.message || 'Failed to load holder history');
     } finally {
@@ -37,6 +44,31 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
   useEffect(() => {
     load();
   }, [accessToken, collectionId]);
+
+  const sortedWallets = useMemo(() => {
+    const wallets = [...(data?.summary?.wallets ?? [])];
+    wallets.sort((a: any, b: any) => compareWallets(a, b, sortField, sortDirection));
+    return wallets;
+  }, [data, sortField, sortDirection]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedWallets.length / PAGE_SIZE));
+  const pagedWallets = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return sortedWallets.slice(start, start + PAGE_SIZE);
+  }, [sortedWallets, page]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
+  useEffect(() => {
+    const visibleAddresses = new Set(pagedWallets.map((wallet: any) => wallet.address));
+    if (!selectedWallet || !visibleAddresses.has(selectedWallet)) {
+      setSelectedWallet(pagedWallets[0]?.address || '');
+    }
+  }, [pagedWallets, selectedWallet]);
 
   const walletHistory = useMemo(() => {
     if (!data || !selectedWallet) return [];
@@ -79,6 +111,16 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
     } finally {
       setScanning(false);
     }
+  };
+
+  const handleSort = (field: SortField) => {
+    setPage(1);
+    if (field === sortField) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortField(field);
+    setSortDirection(field === 'address' ? 'asc' : 'desc');
   };
 
   if (loading) {
@@ -136,20 +178,29 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr,0.8fr]">
         <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-5">
-          <h2 className="text-lg font-semibold text-white">Wallets by balance</h2>
-          <p className="mt-1 text-sm text-gray-400">Sorted descending by current token balance.</p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Wallets by balance</h2>
+              <p className="mt-1 text-sm text-gray-400">Sort by any column and page through holders 50 at a time.</p>
+            </div>
+            <div className="text-xs text-gray-500">
+              Showing {(page - 1) * PAGE_SIZE + (pagedWallets.length > 0 ? 1 : 0)}-
+              {(page - 1) * PAGE_SIZE + pagedWallets.length} of {sortedWallets.length}
+            </div>
+          </div>
+
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-800 text-left text-xs uppercase tracking-wide text-gray-500">
-                  <th className="py-3 pr-4">Wallet</th>
-                  <th className="py-3 pr-4">Balance</th>
-                  <th className="py-3 pr-4">First received</th>
-                  <th className="py-3 pr-4">Last received</th>
+                  <SortableHeader label="Wallet" field="address" activeField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableHeader label="Balance" field="currentBalance" activeField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableHeader label="First received" field="firstReceivedAt" activeField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableHeader label="Last received" field="lastReceivedAt" activeField={sortField} direction={sortDirection} onSort={handleSort} />
                 </tr>
               </thead>
               <tbody>
-                {data?.summary?.wallets?.map((wallet: any) => (
+                {pagedWallets.map((wallet: any) => (
                   <tr
                     key={wallet.address}
                     onClick={() => setSelectedWallet(wallet.address)}
@@ -163,6 +214,27 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                 ))}
               </tbody>
             </table>
+            {pagedWallets.length === 0 && <p className="py-6 text-sm text-gray-500">No wallets found yet.</p>}
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <button
+              onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+              disabled={page <= 1}
+              className="rounded border border-gray-700 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Previous
+            </button>
+            <div className="text-sm text-gray-400">
+              Page {page} of {totalPages}
+            </div>
+            <button
+              onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={page >= totalPages}
+              className="rounded border border-gray-700 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Next
+            </button>
           </div>
         </div>
 
@@ -198,6 +270,50 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
       </div>
     </div>
   );
+}
+
+function SortableHeader({
+  label,
+  field,
+  activeField,
+  direction,
+  onSort,
+}: {
+  label: string;
+  field: SortField;
+  activeField: SortField;
+  direction: SortDirection;
+  onSort: (field: SortField) => void;
+}) {
+  const isActive = activeField === field;
+  return (
+    <th className="py-3 pr-4">
+      <button
+        type="button"
+        onClick={() => onSort(field)}
+        className="flex items-center gap-1 text-left text-xs uppercase tracking-wide text-gray-500 hover:text-white"
+      >
+        <span>{label}</span>
+        <span className="text-[10px]">{isActive ? (direction === 'asc' ? '▲' : '▼') : '↕'}</span>
+      </button>
+    </th>
+  );
+}
+
+function compareWallets(a: any, b: any, field: SortField, direction: SortDirection) {
+  const modifier = direction === 'asc' ? 1 : -1;
+
+  if (field === 'address') {
+    return a.address.localeCompare(b.address) * modifier;
+  }
+
+  if (field === 'currentBalance') {
+    return ((a.currentBalance ?? 0) - (b.currentBalance ?? 0)) * modifier;
+  }
+
+  const aValue = a[field] ? new Date(a[field]).getTime() : 0;
+  const bValue = b[field] ? new Date(b[field]).getTime() : 0;
+  return (aValue - bValue) * modifier;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
