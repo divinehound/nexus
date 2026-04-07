@@ -430,7 +430,7 @@ export class HolderHistoryService {
       const knownSignatures = await this.getKnownTransactionHashesForCollection(collection.id);
 
       for (const asset of assets) {
-        await sleep(350);
+        await sleep(750);
         const txs = await this.fetchHeliusAssetTransactionHistory(asset.id, heliusApiKey);
         let runningOwner = '';
 
@@ -543,7 +543,7 @@ export class HolderHistoryService {
         const text = await response.text();
         throw new Error(`Helius transaction history failed after retries (${response.status}): ${text}`);
       }
-      const delay = Math.min(2000 * (attempt + 1), 10000);
+      const delay = Math.min(5000 * (attempt + 1), 30000);
       this.logger.warn(`Helius rate limited for ${assetId}, retrying in ${delay}ms (attempt ${attempt + 1})`);
       await sleep(delay);
       return this.fetchHeliusTransactionsWithRetry(assetId, apiKey, attempt + 1);
