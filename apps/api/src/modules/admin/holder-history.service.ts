@@ -60,10 +60,26 @@ type HeliusTransaction = {
   timestamp?: number;
   tokenTransfers?: Array<{
     mint?: string;
+    tokenAddress?: string;
     fromUserAccount?: string;
     toUserAccount?: string;
+    fromTokenAccount?: string;
+    toTokenAccount?: string;
     tokenAmount?: number;
   }>;
+  nativeTransfers?: Array<{
+    fromUserAccount?: string;
+    toUserAccount?: string;
+  }>;
+  events?: {
+    nft?: {
+      nfts?: Array<{
+        mint?: string;
+        fromUserAccount?: string;
+        toUserAccount?: string;
+      }>;
+    };
+  };
 };
 
 @Injectable()
@@ -439,11 +455,11 @@ export class HolderHistoryService {
             break;
           }
           const timestamp = new Date((tx.timestamp ?? Math.floor(Date.now() / 1000)) * 1000);
-          const tokenTransfers = tx.tokenTransfers?.filter((transfer) => transfer.mint === asset.id) ?? [];
+          const transfers = extractSolanaTransfers(tx, asset.id);
 
-          for (const transfer of tokenTransfers) {
-            const from = (transfer.fromUserAccount || '').toLowerCase();
-            const to = (transfer.toUserAccount || '').toLowerCase();
+          for (const transfer of transfers) {
+            const from = transfer.from.toLowerCase();
+            const to = transfer.to.toLowerCase();
             syntheticBlock += 1;
             const txHash = tx.signature || `${asset.id}:${syntheticBlock}`;
 
@@ -731,4 +747,31 @@ function ensureSummary(state: Map<string, MutableSummary>, address: string): Mut
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractSolanaTransfers(tx: HeliusTransaction, assetId: string): Array<{ from: string; to: string }> {
+  const normalizedAssetId = assetId.toLowerCase();
+  const matches = new Map<string, { from: string; to: string }>();
+
+  for (const transfer of tx.tokenTransfers ?? []) {
+    const mint = (transfer.mint || transfer.tokenAddress || '').toLowerCase();
+    if (mint !== normalizedAssetId) continue;
+
+    const from = transfer.fromUserAccount || transfer.fromTokenAccount;
+    const to = transfer.toUserAccount || transfer.toTokenAccount;
+    if (!from || !to) continue;
+    matches.set(`${from}:${to}`, { from, to });
+  }
+
+  for (const nft of tx.events?.nft?.nfts ?? []) {
+    const mint = (nft.mint || '').toLowerCase();
+    if (mint !== normalizedAssetId) continue;
+    if (!nft.fromUserAccount || !nft.toUserAccount) continue;
+    matches.set(`${nft.fromUserAccount}:${nft.toUserAccount}`, {
+      from: nft.fromUserAccount,
+      to: nft.toUserAccount,
+    });
+  }
+
+  return Array.from(matches.values());
 }
