@@ -149,7 +149,7 @@ export class HolderHistoryService {
         transport: rpcUrl ? http(rpcUrl) : http(),
       });
 
-      const latestBlock = Number(await client.getBlockNumber());
+      const latestBlock = Number(await this.withTimeout(client.getBlockNumber(), 15000, 'getBlockNumber'));
       this.logger.log(`Holder history latest block for ${collectionId}: ${latestBlock}`);
       const fromBlock = fromBlockInput ?? (collection.holderHistoryLastCheckedBlock ? collection.holderHistoryLastCheckedBlock + 1 : 0);
       job.fromBlock = fromBlock;
@@ -160,12 +160,16 @@ export class HolderHistoryService {
       for (let start = Math.max(fromBlock, 0); start <= latestBlock; start += chunkSize) {
         const end = Math.min(start + chunkSize - 1, latestBlock);
         this.logger.log(`Holder history scan chunk ${collectionId}: ${start}-${end}`);
-        const chunk = await client.getLogs({
-          address: getAddress(collection.contractAddress),
-          event: transferEventAbi[0],
-          fromBlock: BigInt(start),
-          toBlock: BigInt(end),
-        });
+        const chunk = await this.withTimeout(
+          client.getLogs({
+            address: getAddress(collection.contractAddress),
+            event: transferEventAbi[0],
+            fromBlock: BigInt(start),
+            toBlock: BigInt(end),
+          }),
+          20000,
+          `getLogs ${start}-${end}`,
+        );
         logs.push(...chunk);
         job.processedTransfers = logs.length;
         this.jobs.set(collectionId, { ...job });
@@ -193,7 +197,11 @@ export class HolderHistoryService {
 
         let blockTimestamp = blockCache.get(blockNumber);
         if (!blockTimestamp) {
-          const block = await client.getBlock({ blockNumber: BigInt(blockNumber) });
+          const block = await this.withTimeout(
+            client.getBlock({ blockNumber: BigInt(blockNumber) }),
+            15000,
+            `getBlock ${blockNumber}`,
+          );
           blockTimestamp = new Date(Number(block.timestamp) * 1000).toISOString();
           blockCache.set(blockNumber, blockTimestamp);
         }
@@ -339,6 +347,24 @@ export class HolderHistoryService {
 
       throw error;
     }
+  }
+
+  private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Timeout after ${ms}ms: ${label}`));
+      }, ms);
+
+      promise
+        .then((value) => {
+          clearTimeout(timer);
+          resolve(value);
+        })
+        .catch((error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+    });
   }
 
   private getRpcUrlForChain(chain: string): string | undefined {
