@@ -368,6 +368,12 @@ export class HolderHistoryService {
   }
 
   private getRpcUrlForChain(chain: string): string | undefined {
+    const alchemyApiKey = this.config.get<string>('alchemy.apiKey');
+    if (alchemyApiKey) {
+      const network = this.getAlchemyNetwork(chain);
+      return `https://${network}.g.alchemy.com/v2/${alchemyApiKey}`;
+    }
+
     const upper = chain.toUpperCase();
     return (
       this.config.get<string>(`${upper}_RPC_URL`) ||
@@ -377,6 +383,23 @@ export class HolderHistoryService {
       undefined
     );
   }
+@@
+   private getViemChain(chain: string) {
+@@
+     }
+   }
++
++  private getAlchemyNetwork(chain: string): string {
++    const networks: Record<string, string> = {
++      ethereum: 'eth-mainnet',
++      base: 'base-mainnet',
++      polygon: 'polygon-mainnet',
++      abstract: 'abstract-mainnet',
++      apechain: 'apechain-mainnet',
++    };
++    return networks[chain] || 'eth-mainnet';
++  }
+ }
 
   private getViemChain(chain: string) {
     switch (chain) {
