@@ -459,7 +459,7 @@ export class HolderHistoryService {
       this.logger.log(`[Solana Hybrid] No new signatures found, using DAS ownership data only`);
       for (const mint of mints) {
         if (mint.currentOwner) {
-          const ownerKey = mint.currentOwner.toLowerCase();
+          const ownerKey = mint.currentOwner; // Solana addresses are case-sensitive (Base58)
           const summary = ensureSummary(summaryState, ownerKey);
           if (summary.currentBalance === 0 && summary.totalReceivedCount === 0) {
             summary.currentBalance += 1;
@@ -495,8 +495,8 @@ export class HolderHistoryService {
 
       for (const transfer of transfers) {
         mintsWithTransfers.add(transfer.mintAddress);
-        const from = transfer.from.toLowerCase();
-        const to = transfer.to.toLowerCase();
+        const from = transfer.from; // Solana addresses are case-sensitive (Base58)
+        const to = transfer.to;
         const blockNum = slot || maxSlot;
 
         if (from) {
@@ -559,7 +559,7 @@ export class HolderHistoryService {
     // For mints with no parsed transfers, set current owner from DAS data
     for (const mint of mints) {
       if (!mintsWithTransfers.has(mint.mintAddress) && mint.currentOwner) {
-        const ownerKey = mint.currentOwner.toLowerCase();
+        const ownerKey = mint.currentOwner; // Solana addresses are case-sensitive (Base58)
         const summary = ensureSummary(summaryState, ownerKey);
         if (summary.currentBalance === 0 && summary.totalReceivedCount === 0) {
           summary.currentBalance += 1;
