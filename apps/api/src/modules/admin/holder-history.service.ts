@@ -81,10 +81,10 @@ type HeliusTransaction = {
   }>;
   events?: {
     nft?: {
+      seller?: string;
+      buyer?: string;
       nfts?: Array<{
         mint?: string;
-        fromUserAccount?: string;
-        toUserAccount?: string;
       }>;
     };
   };
@@ -1079,16 +1079,20 @@ function extractSolanaTransfersFromBatch(
     matches.set(`${mint}:${from}:${to}`, { mintAddress: mint, from, to });
   }
 
-  for (const nft of tx.events?.nft?.nfts ?? []) {
-    const mint = nft.mint || '';
-    if (!mintAddresses.has(mint)) continue;
-    if (!nft.fromUserAccount && !nft.toUserAccount) continue;
-
-    const from = nft.fromUserAccount || '';
-    const to = nft.toUserAccount || '';
-    const key = `${mint}:${from}:${to}`;
-    if (!matches.has(key)) {
-      matches.set(key, { mintAddress: mint, from, to });
+  // NFT events: seller/buyer are on the parent events.nft object, not on each nft item
+  const nftEvent = tx.events?.nft;
+  if (nftEvent?.nfts?.length) {
+    const from = nftEvent.seller || '';
+    const to = nftEvent.buyer || '';
+    if (from || to) {
+      for (const nft of nftEvent.nfts) {
+        const mint = nft.mint || '';
+        if (!mintAddresses.has(mint)) continue;
+        const key = `${mint}:${from}:${to}`;
+        if (!matches.has(key)) {
+          matches.set(key, { mintAddress: mint, from, to });
+        }
+      }
     }
   }
 
