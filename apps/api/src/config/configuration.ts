@@ -12,6 +12,9 @@ export default () => ({
   helius: {
     apiKey: process.env.HELIUS_API_KEY || '',
   },
+  solana: {
+    rpcUrl: process.env.SOLANA_RPC_URL || '',
+  },
   twitter: {
     bearerToken: process.env.TWITTER_BEARER_TOKEN || '',
   },

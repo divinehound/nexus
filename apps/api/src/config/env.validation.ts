@@ -28,6 +28,10 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
+  SOLANA_RPC_URL?: string;
+
+  @IsString()
+  @IsOptional()
   TWITTER_BEARER_TOKEN?: string;
 
   @IsString()

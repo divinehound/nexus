@@ -23,7 +23,7 @@ type InMemoryScanJob = {
   touchedWallets: number;
   error?: string;
   pageKey?: string;
-  mode?: 'alchemy_backfill' | 'helius_backfill';
+  mode?: 'alchemy_backfill' | 'helius_backfill' | 'solana_hybrid';
 };
 
 type AlchemyTransfer = {
@@ -55,9 +55,15 @@ type SolanaAsset = {
   grouping?: Array<{ group_key?: string; group_value?: string }>;
 };
 
+type SolanaMint = {
+  mintAddress: string;
+  currentOwner: string;
+};
+
 type HeliusTransaction = {
   signature?: string;
   timestamp?: number;
+  slot?: number;
   tokenTransfers?: Array<{
     mint?: string;
     tokenAddress?: string;
@@ -140,7 +146,7 @@ export class HolderHistoryService {
       fromBlock,
       processedTransfers: 0,
       touchedWallets: 0,
-      mode: collection.chain === 'solana' ? 'helius_backfill' : 'alchemy_backfill',
+      mode: collection.chain === 'solana' ? 'solana_hybrid' : 'alchemy_backfill',
     };
 
     this.jobs.set(collectionId, job);
@@ -173,7 +179,7 @@ export class HolderHistoryService {
       fromBlock: fromBlockInput ?? 0,
       processedTransfers: 0,
       touchedWallets: 0,
-      mode: collection.chain === 'solana' ? ('helius_backfill' as const) : ('alchemy_backfill' as const),
+      mode: collection.chain === 'solana' ? ('solana_hybrid' as const) : ('alchemy_backfill' as const),
     };
 
     job.status = 'running';
@@ -380,13 +386,18 @@ export class HolderHistoryService {
       throw new Error('HELIUS_API_KEY not configured');
     }
 
+    const solanaRpcUrl = this.getSolanaRpcUrl();
+    if (!solanaRpcUrl) {
+      throw new Error('SOLANA_RPC_URL or ALCHEMY_API_KEY required for Solana hybrid indexing');
+    }
+
     const existingSummaries = await this.db.query.collectionHolderSummaries.findMany({
       where: eq(collectionHolderSummaries.collectionId, collection.id),
     });
 
     const summaryState = new Map<string, MutableSummary>();
     for (const row of existingSummaries) {
-      summaryState.set(row.address.toLowerCase(), {
+      summaryState.set(row.address, {
         currentBalance: row.currentBalance,
         firstReceivedAt: row.firstReceivedAt,
         firstReceivedBlock: row.firstReceivedBlock,
@@ -398,29 +409,207 @@ export class HolderHistoryService {
     }
 
     const touched = new Set<string>();
-    let syntheticBlock = collection.holderHistoryLastCheckedBlock ?? 0;
+    let maxSlot = collection.holderHistoryLastCheckedBlock ?? 0;
+    const knownSignatures = await this.getKnownTransactionHashesForCollection(collection.id);
+
+    // --- Phase 1: Mint Discovery via Helius DAS ---
+    this.logger.log(`[Solana Hybrid] Phase 1: Discovering mints for ${collection.contractAddress}`);
+    const mints = await this.discoverSolanaMints(collection.contractAddress, heliusApiKey);
+    this.logger.log(`[Solana Hybrid] Discovered ${mints.length} mints`);
+
+    job.touchedWallets = 0;
+    job.processedTransfers = 0;
+    this.jobs.set(collection.id, { ...job });
+
+    // --- Phase 2: Signature Collection via Standard RPC (Alchemy) ---
+    this.logger.log(`[Solana Hybrid] Phase 2: Collecting signatures via standard RPC for ${mints.length} mints`);
+    const allSignatures: string[] = [];
+    const mintAddressSet = new Set(mints.map((m) => m.mintAddress));
+    const CONCURRENT_MINTS = 5;
+
+    for (let i = 0; i < mints.length; i += CONCURRENT_MINTS) {
+      const batch = mints.slice(i, i + CONCURRENT_MINTS);
+      const results = await Promise.allSettled(
+        batch.map((mint) => this.collectSignaturesForMint(mint.mintAddress, solanaRpcUrl, knownSignatures)),
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          allSignatures.push(...result.value);
+        } else {
+          this.logger.warn(`[Solana Hybrid] Failed to collect signatures for a mint: ${result.reason?.message || result.reason}`);
+        }
+      }
+
+      if (i + CONCURRENT_MINTS < mints.length) {
+        await sleep(200);
+      }
+
+      if ((i + CONCURRENT_MINTS) % 100 < CONCURRENT_MINTS) {
+        const progress = Math.min(i + CONCURRENT_MINTS, mints.length);
+        this.logger.log(`[Solana Hybrid] Signature collection progress: ${progress}/${mints.length} mints, ${allSignatures.length} signatures`);
+      }
+    }
+
+    const uniqueSignatures = [...new Set(allSignatures)];
+    this.logger.log(`[Solana Hybrid] Collected ${uniqueSignatures.length} unique new signatures from ${mints.length} mints`);
+
+    // If no new signatures, just ensure current owners from DAS are recorded
+    if (uniqueSignatures.length === 0) {
+      this.logger.log(`[Solana Hybrid] No new signatures found, using DAS ownership data only`);
+      for (const mint of mints) {
+        if (mint.currentOwner) {
+          const ownerKey = mint.currentOwner.toLowerCase();
+          const summary = ensureSummary(summaryState, ownerKey);
+          if (summary.currentBalance === 0 && summary.totalReceivedCount === 0) {
+            summary.currentBalance += 1;
+            touched.add(ownerKey);
+          }
+        }
+      }
+      await this.persistFinalHolderState(collection, summaryState, touched, maxSlot, job);
+      return;
+    }
+
+    // --- Phase 3: Batch Parse via Helius Enhanced Transactions ---
+    this.logger.log(`[Solana Hybrid] Phase 3: Parsing ${uniqueSignatures.length} signatures via Helius batch endpoint`);
+    const parsedTxs = await this.batchParseSignatures(uniqueSignatures, heliusApiKey, job, collection.id);
+    this.logger.log(`[Solana Hybrid] Parsed ${parsedTxs.length} transactions`);
+
+    // Sort by timestamp ascending for correct chronological balance tracking
+    parsedTxs.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+
+    // --- Phase 4: Transfer Extraction ---
+    this.logger.log(`[Solana Hybrid] Phase 4: Extracting transfers from ${parsedTxs.length} parsed transactions`);
+    const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
+    const mintsWithTransfers = new Set<string>();
+    const perWalletLogIndex = new Map<string, number>();
+
+    for (const tx of parsedTxs) {
+      const transfers = extractSolanaTransfersFromBatch(tx, mintAddressSet);
+      const timestamp = new Date((tx.timestamp ?? Math.floor(Date.now() / 1000)) * 1000);
+      const txSignature = tx.signature || '';
+      const slot = tx.slot ?? 0;
+
+      if (slot > maxSlot) maxSlot = slot;
+
+      for (const transfer of transfers) {
+        mintsWithTransfers.add(transfer.mintAddress);
+        const from = transfer.from.toLowerCase();
+        const to = transfer.to.toLowerCase();
+        const blockNum = slot || maxSlot;
+
+        if (from) {
+          const summary = ensureSummary(summaryState, from);
+          summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
+          summary.totalSentCount += 1;
+          touched.add(from);
+          const logKey = `${txSignature}:${from}`;
+          const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
+          perWalletLogIndex.set(logKey, logIndex);
+          historyRows.push({
+            collectionId: collection.id,
+            chain: collection.chain,
+            address: from,
+            blockNumber: blockNum,
+            blockTimestamp: timestamp,
+            transactionHash: txSignature,
+            logIndex,
+            tokenId: transfer.mintAddress,
+            direction: 'out',
+            balanceAfter: summary.currentBalance,
+            counterpartyAddress: to || null,
+          });
+        }
+
+        if (to) {
+          const summary = ensureSummary(summaryState, to);
+          summary.currentBalance += 1;
+          summary.totalReceivedCount += 1;
+          if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
+            summary.firstReceivedAt = timestamp;
+            summary.firstReceivedBlock = blockNum;
+          }
+          summary.lastReceivedAt = timestamp;
+          summary.lastReceivedBlock = blockNum;
+          touched.add(to);
+          const logKey = `${txSignature}:${to}`;
+          const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
+          perWalletLogIndex.set(logKey, logIndex);
+          historyRows.push({
+            collectionId: collection.id,
+            chain: collection.chain,
+            address: to,
+            blockNumber: blockNum,
+            blockTimestamp: timestamp,
+            transactionHash: txSignature,
+            logIndex,
+            tokenId: transfer.mintAddress,
+            direction: 'in',
+            balanceAfter: summary.currentBalance,
+            counterpartyAddress: from || null,
+          });
+        }
+      }
+    }
+
+    // Persist transfer history in batches
+    await this.persistHistoryBatch(historyRows);
+
+    // For mints with no parsed transfers, set current owner from DAS data
+    for (const mint of mints) {
+      if (!mintsWithTransfers.has(mint.mintAddress) && mint.currentOwner) {
+        const ownerKey = mint.currentOwner.toLowerCase();
+        const summary = ensureSummary(summaryState, ownerKey);
+        if (summary.currentBalance === 0 && summary.totalReceivedCount === 0) {
+          summary.currentBalance += 1;
+          touched.add(ownerKey);
+        }
+      }
+    }
+
+    job.processedTransfers = historyRows.length;
+    job.touchedWallets = touched.size;
+    job.toBlock = maxSlot;
+    this.jobs.set(collection.id, { ...job });
+
+    this.logger.log(
+      `[Solana Hybrid] Extracted ${historyRows.length} transfer records, ${touched.size} wallets touched, max slot ${maxSlot}`,
+    );
+
+    await this.persistFinalHolderState(collection, summaryState, touched, maxSlot, job);
+  }
+
+  private getSolanaRpcUrl(): string {
+    const explicit = this.config.get<string>('solana.rpcUrl');
+    if (explicit) return explicit;
+    const alchemyKey = this.config.get<string>('alchemy.apiKey');
+    if (alchemyKey) return `https://solana-mainnet.g.alchemy.com/v2/${alchemyKey}`;
+    return '';
+  }
+
+  private async discoverSolanaMints(collectionAddress: string, heliusApiKey: string): Promise<SolanaMint[]> {
+    const mints: SolanaMint[] = [];
     let page = 1;
-    let pageCursor: string | undefined;
 
     while (true) {
-      const payload: Record<string, unknown> = {
-        jsonrpc: '2.0',
-        id: page,
-        method: 'getAssetsByGroup',
-        params: {
-          groupKey: 'collection',
-          groupValue: collection.contractAddress,
-          page,
-          limit: 1000,
-          ...(pageCursor ? { pageCursor } : {}),
-        },
-      };
+      if (page > 1) await sleep(500); // Respect 2 req/s DAS rate limit
 
       const response = await this.withTimeout(
         fetch(`https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: page,
+            method: 'getAssetsByGroup',
+            params: {
+              groupKey: 'collection',
+              groupValue: collectionAddress,
+              page,
+              limit: 1000,
+            },
+          }),
         }),
         30000,
         `helius getAssetsByGroup page ${page}`,
@@ -428,11 +617,11 @@ export class HolderHistoryService {
 
       if (!response.ok) {
         const text = await response.text();
-        throw new Error(`Helius assets request failed (${response.status}): ${text}`);
+        throw new Error(`Helius getAssetsByGroup failed (${response.status}): ${text}`);
       }
 
       const data = (await response.json()) as {
-        result?: { items?: SolanaAsset[]; pageCursor?: string };
+        result?: { items?: SolanaAsset[] };
         error?: { message?: string };
       };
 
@@ -441,133 +630,153 @@ export class HolderHistoryService {
       }
 
       const assets = data.result?.items ?? [];
-      pageCursor = data.result?.pageCursor;
-      const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
-      const knownSignatures = await this.getKnownTransactionHashesForCollection(collection.id);
-
       for (const asset of assets) {
-        await sleep(750);
-        const txs = await this.fetchHeliusAssetTransactionHistory(asset.id, heliusApiKey);
-        let runningOwner = '';
-
-        for (const tx of txs) {
-          if (tx.signature && knownSignatures.has(tx.signature)) {
-            break;
-          }
-          const timestamp = new Date((tx.timestamp ?? Math.floor(Date.now() / 1000)) * 1000);
-          const transfers = extractSolanaTransfers(tx, asset.id);
-
-          for (const transfer of transfers) {
-            const from = transfer.from.toLowerCase();
-            const to = transfer.to.toLowerCase();
-            syntheticBlock += 1;
-            const txHash = tx.signature || `${asset.id}:${syntheticBlock}`;
-
-            if (from && from !== ZERO_ADDRESS) {
-              const summary = ensureSummary(summaryState, from);
-              summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
-              summary.totalSentCount += 1;
-              touched.add(from);
-              historyRows.push({
-                collectionId: collection.id,
-                chain: collection.chain,
-                address: from,
-                blockNumber: syntheticBlock,
-                blockTimestamp: timestamp,
-                transactionHash: txHash,
-                logIndex: 1,
-                tokenId: asset.id,
-                direction: 'out',
-                balanceAfter: summary.currentBalance,
-                counterpartyAddress: to || null,
-              });
-            }
-
-            if (to && to !== ZERO_ADDRESS) {
-              const summary = ensureSummary(summaryState, to);
-              summary.currentBalance += 1;
-              summary.totalReceivedCount += 1;
-              if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > syntheticBlock) {
-                summary.firstReceivedAt = timestamp;
-                summary.firstReceivedBlock = syntheticBlock;
-              }
-              summary.lastReceivedAt = timestamp;
-              summary.lastReceivedBlock = syntheticBlock;
-              touched.add(to);
-              historyRows.push({
-                collectionId: collection.id,
-                chain: collection.chain,
-                address: to,
-                blockNumber: syntheticBlock,
-                blockTimestamp: timestamp,
-                transactionHash: txHash,
-                logIndex: 2,
-                tokenId: asset.id,
-                direction: 'in',
-                balanceAfter: summary.currentBalance,
-                counterpartyAddress: from || null,
-              });
-              runningOwner = to;
-            }
-          }
-        }
-
-        if (!txs.length && asset.ownership?.owner) {
-          const owner = asset.ownership.owner.toLowerCase();
-          const summary = ensureSummary(summaryState, owner);
-          summary.currentBalance += 1;
-          touched.add(owner);
-          runningOwner = owner;
-        }
-
-        if (runningOwner) {
-          touched.add(runningOwner);
-        }
-
-        await this.persistHistoryBatch(historyRows);
-        job.processedTransfers += historyRows.length;
-        job.touchedWallets = touched.size;
-        job.toBlock = syntheticBlock;
-        this.jobs.set(collection.id, { ...job });
+        mints.push({
+          mintAddress: asset.id,
+          currentOwner: asset.ownership?.owner || '',
+        });
       }
 
-      this.logger.log(`Helius holder history page ${page} for ${collection.id}. Transfers so far: ${job.processedTransfers}`);
+      this.logger.log(`[Solana Hybrid] Mint discovery page ${page}: ${assets.length} assets (${mints.length} total)`);
 
-      if (!pageCursor || assets.length === 0) {
-        break;
-      }
-
-      page += 1;
+      if (assets.length < 1000) break;
+      page++;
     }
 
-    await this.persistFinalHolderState(collection, summaryState, touched, syntheticBlock, job);
+    return mints;
   }
 
-  private async fetchHeliusAssetTransactionHistory(assetId: string, apiKey: string): Promise<HeliusTransaction[]> {
-    return this.fetchHeliusTransactionsWithRetry(assetId, apiKey, 0);
+  private async collectSignaturesForMint(
+    mintAddress: string,
+    rpcUrl: string,
+    knownSignatures: Set<string>,
+  ): Promise<string[]> {
+    const signatures: string[] = [];
+    let before: string | undefined;
+
+    while (true) {
+      const params: Record<string, unknown> = { limit: 1000, commitment: 'finalized' };
+      if (before) params.before = before;
+
+      const result = await this.solanaRpcCallWithRetry(rpcUrl, 'getSignaturesForAddress', [mintAddress, params], 0);
+
+      const entries = (result ?? []) as Array<{
+        signature: string;
+        slot: number;
+        blockTime: number | null;
+        err: unknown;
+      }>;
+
+      let hitKnown = false;
+      for (const entry of entries) {
+        if (entry.err) continue; // Skip failed transactions
+        if (knownSignatures.has(entry.signature)) {
+          hitKnown = true;
+          break;
+        }
+        signatures.push(entry.signature);
+      }
+
+      if (hitKnown || entries.length < 1000) break;
+      before = entries[entries.length - 1].signature;
+    }
+
+    return signatures;
   }
 
-  private async fetchHeliusTransactionsWithRetry(assetId: string, apiKey: string, attempt: number): Promise<HeliusTransaction[]> {
+  private async solanaRpcCallWithRetry(
+    rpcUrl: string,
+    method: string,
+    params: unknown[],
+    attempt: number,
+  ): Promise<unknown> {
     const response = await this.withTimeout(
-      fetch(`https://api.helius.xyz/v0/addresses/${assetId}/transactions?api-key=${apiKey}&limit=100`),
+      fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      }),
       30000,
-      `helius transaction history ${assetId}`,
+      `RPC ${method}`,
     );
 
     if (response.status === 429) {
       if (attempt >= 5) {
-        const text = await response.text();
-        throw new Error(`Helius transaction history failed after retries (${response.status}): ${text}`);
+        throw new Error(`RPC ${method} rate limited after ${attempt} retries`);
       }
-      const delay = Math.min(5000 * (attempt + 1), 30000);
-      this.logger.warn(`Helius rate limited for ${assetId}, retrying in ${delay}ms (attempt ${attempt + 1})`);
+      const delay = Math.min(2000 * Math.pow(2, attempt), 30000);
+      this.logger.warn(`RPC rate limited for ${method}, retrying in ${delay}ms (attempt ${attempt + 1})`);
       await sleep(delay);
-      return this.fetchHeliusTransactionsWithRetry(assetId, apiKey, attempt + 1);
+      return this.solanaRpcCallWithRetry(rpcUrl, method, params, attempt + 1);
     }
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Helius transaction history failed (${response.status}): ${text}`);
+      throw new Error(`RPC ${method} failed (${response.status}): ${text}`);
+    }
+
+    const data = (await response.json()) as { result?: unknown; error?: { message?: string } };
+    if (data.error) {
+      throw new Error(`RPC ${method} error: ${data.error.message || 'Unknown'}`);
+    }
+
+    return data.result;
+  }
+
+  private async batchParseSignatures(
+    signatures: string[],
+    heliusApiKey: string,
+    job: InMemoryScanJob,
+    collectionId: string,
+  ): Promise<HeliusTransaction[]> {
+    const allParsed: HeliusTransaction[] = [];
+    const batches = chunkArray(signatures, 100);
+
+    for (let i = 0; i < batches.length; i++) {
+      if (i > 0) await sleep(500); // Respect 2 req/s Helius Enhanced API rate limit
+
+      const parsed = await this.heliusBatchParseWithRetry(batches[i], heliusApiKey, 0);
+      allParsed.push(...parsed);
+
+      job.processedTransfers = allParsed.length;
+      this.jobs.set(collectionId, { ...job });
+
+      if ((i + 1) % 10 === 0 || i === batches.length - 1) {
+        this.logger.log(`[Solana Hybrid] Parsed batch ${i + 1}/${batches.length} (${allParsed.length} total transactions)`);
+      }
+    }
+
+    return allParsed;
+  }
+
+  private async heliusBatchParseWithRetry(
+    signatures: string[],
+    apiKey: string,
+    attempt: number,
+  ): Promise<HeliusTransaction[]> {
+    const response = await this.withTimeout(
+      fetch(`https://api.helius.xyz/v0/transactions?api-key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions: signatures }),
+      }),
+      30000,
+      'helius batch parse',
+    );
+
+    if (response.status === 429) {
+      if (attempt >= 5) {
+        throw new Error('Helius batch parse rate limited after retries');
+      }
+      const delay = Math.min(5000 * (attempt + 1), 30000);
+      this.logger.warn(`Helius batch parse rate limited, retrying in ${delay}ms (attempt ${attempt + 1})`);
+      await sleep(delay);
+      return this.heliusBatchParseWithRetry(signatures, apiKey, attempt + 1);
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Helius batch parse failed (${response.status}): ${text}`);
     }
 
     return (await response.json()) as HeliusTransaction[];
@@ -749,28 +958,34 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function extractSolanaTransfers(tx: HeliusTransaction, assetId: string): Array<{ from: string; to: string }> {
-  const normalizedAssetId = assetId.toLowerCase();
-  const matches = new Map<string, { from: string; to: string }>();
+function extractSolanaTransfersFromBatch(
+  tx: HeliusTransaction,
+  mintAddresses: Set<string>,
+): Array<{ mintAddress: string; from: string; to: string }> {
+  const matches = new Map<string, { mintAddress: string; from: string; to: string }>();
 
   for (const transfer of tx.tokenTransfers ?? []) {
-    const mint = (transfer.mint || transfer.tokenAddress || '').toLowerCase();
-    if (mint !== normalizedAssetId) continue;
+    const mint = transfer.mint || transfer.tokenAddress || '';
+    if (!mintAddresses.has(mint)) continue;
 
-    const from = transfer.fromUserAccount || transfer.fromTokenAccount;
-    const to = transfer.toUserAccount || transfer.toTokenAccount;
-    if (!from || !to) continue;
-    matches.set(`${from}:${to}`, { from, to });
+    const from = transfer.fromUserAccount || transfer.fromTokenAccount || '';
+    const to = transfer.toUserAccount || transfer.toTokenAccount || '';
+    if (!from && !to) continue;
+
+    matches.set(`${mint}:${from}:${to}`, { mintAddress: mint, from, to });
   }
 
   for (const nft of tx.events?.nft?.nfts ?? []) {
-    const mint = (nft.mint || '').toLowerCase();
-    if (mint !== normalizedAssetId) continue;
-    if (!nft.fromUserAccount || !nft.toUserAccount) continue;
-    matches.set(`${nft.fromUserAccount}:${nft.toUserAccount}`, {
-      from: nft.fromUserAccount,
-      to: nft.toUserAccount,
-    });
+    const mint = nft.mint || '';
+    if (!mintAddresses.has(mint)) continue;
+    if (!nft.fromUserAccount && !nft.toUserAccount) continue;
+
+    const from = nft.fromUserAccount || '';
+    const to = nft.toUserAccount || '';
+    const key = `${mint}:${from}:${to}`;
+    if (!matches.has(key)) {
+      matches.set(key, { mintAddress: mint, from, to });
+    }
   }
 
   return Array.from(matches.values());
