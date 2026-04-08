@@ -148,6 +148,13 @@
       "when": 1775536000000,
       "tag": "0020_holder_history_admin_scan",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1775865600000,
+      "tag": "0021_solana_indexing_persistence",
+      "breakpoints": true
     }
   ]
 }
