@@ -671,12 +671,20 @@ export class HolderHistoryService {
 
     // For mints with no transfer history (this run or previous), use DAS ownership.
     // Skips mints already accounted for via transfer records to prevent double-counting.
+    const now = new Date();
     for (const mint of mints) {
       if (!mintsWithTransfers.has(mint.mintAddress) && !mintsWithHistory.has(mint.mintAddress) && mint.currentOwner) {
         const ownerKey = mint.currentOwner; // Solana addresses are case-sensitive (Base58)
         const summary = ensureSummary(summaryState, ownerKey);
         summary.currentBalance += 1;
         summary.totalReceivedCount += 1;
+        // Set received timestamps so they show in the grid (best we have without on-chain mint date)
+        if (!summary.firstReceivedAt) {
+          summary.firstReceivedAt = now;
+          summary.firstReceivedBlock = maxSlot || 0;
+        }
+        summary.lastReceivedAt = now;
+        summary.lastReceivedBlock = maxSlot || 0;
         touched.add(ownerKey);
       }
     }
