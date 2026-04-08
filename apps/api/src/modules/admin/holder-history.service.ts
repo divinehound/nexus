@@ -572,10 +572,13 @@ export class HolderHistoryService {
   }
 
   private getSolanaRpcUrl(): string {
+    // Prefer explicit SOLANA_RPC_URL (e.g. Alchemy Solana, QuickNode)
     const explicit = this.config.get<string>('solana.rpcUrl');
     if (explicit) return explicit;
-    const alchemyKey = this.config.get<string>('alchemy.apiKey');
-    if (alchemyKey) return `https://solana-mainnet.g.alchemy.com/v2/${alchemyKey}`;
+    // Fall back to Helius RPC which supports standard Solana JSON-RPC methods.
+    // The ALCHEMY_API_KEY is typically EVM-only and won't work on Alchemy's Solana endpoint.
+    const heliusKey = this.config.get<string>('HELIUS_API_KEY');
+    if (heliusKey) return `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
     return '';
   }
 
