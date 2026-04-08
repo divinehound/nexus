@@ -155,6 +155,13 @@
       "when": 1775865600000,
       "tag": "0021_solana_indexing_persistence",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1775869200000,
+      "tag": "0022_add_first_mint_time",
+      "breakpoints": true
     }
   ]
 }

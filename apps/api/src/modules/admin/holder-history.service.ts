@@ -481,7 +481,7 @@ export class HolderHistoryService {
     for (let i = 0; i < pendingMints.length; i++) {
       const mint = pendingMints[i];
       try {
-        const sigs = await this.collectSignaturesForMint(mint.mintAddress, solanaRpcUrl, knownSignatures);
+        const { signatures: sigs, oldestBlockTime } = await this.collectSignaturesForMint(mint.mintAddress, solanaRpcUrl, knownSignatures);
 
         if (sigs.length > 0) {
           for (const sigBatch of chunkArray(sigs, 500)) {
@@ -502,7 +502,11 @@ export class HolderHistoryService {
 
         await this.db
           .update(solanaIndexedMints)
-          .set({ sigCollectionStatus: 'complete', sigCount: sigs.length })
+          .set({
+            sigCollectionStatus: 'complete',
+            sigCount: sigs.length,
+            firstMintTime: oldestBlockTime ? new Date(oldestBlockTime * 1000) : null,
+          })
           .where(
             and(eq(solanaIndexedMints.collectionId, collection.id), eq(solanaIndexedMints.mintAddress, mint.mintAddress)),
           );
@@ -671,20 +675,28 @@ export class HolderHistoryService {
 
     // For mints with no transfer history (this run or previous), use DAS ownership.
     // Skips mints already accounted for via transfer records to prevent double-counting.
+    // Use the actual mint time from getSignaturesForAddress (stored in solana_indexed_mints).
+    const mintTimeMap = new Map<string, Date | null>();
+    for (const m of dbMints) {
+      mintTimeMap.set(m.mintAddress, m.firstMintTime);
+    }
     const now = new Date();
+
     for (const mint of mints) {
       if (!mintsWithTransfers.has(mint.mintAddress) && !mintsWithHistory.has(mint.mintAddress) && mint.currentOwner) {
         const ownerKey = mint.currentOwner; // Solana addresses are case-sensitive (Base58)
         const summary = ensureSummary(summaryState, ownerKey);
         summary.currentBalance += 1;
         summary.totalReceivedCount += 1;
-        // Set received timestamps so they show in the grid (best we have without on-chain mint date)
-        if (!summary.firstReceivedAt) {
-          summary.firstReceivedAt = now;
+        const mintTime = mintTimeMap.get(mint.mintAddress) ?? now;
+        if (!summary.firstReceivedAt || mintTime < summary.firstReceivedAt) {
+          summary.firstReceivedAt = mintTime;
           summary.firstReceivedBlock = maxSlot || 0;
         }
-        summary.lastReceivedAt = now;
-        summary.lastReceivedBlock = maxSlot || 0;
+        if (!summary.lastReceivedAt || mintTime > summary.lastReceivedAt) {
+          summary.lastReceivedAt = mintTime;
+          summary.lastReceivedBlock = maxSlot || 0;
+        }
         touched.add(ownerKey);
       }
     }
@@ -774,8 +786,9 @@ export class HolderHistoryService {
     mintAddress: string,
     rpcUrl: string,
     knownSignatures: Set<string>,
-  ): Promise<string[]> {
+  ): Promise<{ signatures: string[]; oldestBlockTime: number | null }> {
     const signatures: string[] = [];
+    let oldestBlockTime: number | null = null;
     let before: string | undefined;
 
     while (true) {
@@ -793,6 +806,10 @@ export class HolderHistoryService {
 
       let hitKnown = false;
       for (const entry of entries) {
+        // Track oldest blockTime across all entries (the mint event)
+        if (entry.blockTime !== null && (oldestBlockTime === null || entry.blockTime < oldestBlockTime)) {
+          oldestBlockTime = entry.blockTime;
+        }
         if (entry.err) continue; // Skip failed transactions
         if (knownSignatures.has(entry.signature)) {
           hitKnown = true;
@@ -805,7 +822,7 @@ export class HolderHistoryService {
       before = entries[entries.length - 1].signature;
     }
 
-    return signatures;
+    return { signatures, oldestBlockTime };
   }
 
   private async solanaRpcCallWithRetry(
