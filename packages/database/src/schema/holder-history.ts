@@ -81,6 +81,7 @@ export const solanaIndexedMints = pgTable(
     currentOwner: varchar('current_owner', { length: 64 }),
     sigCollectionStatus: varchar('sig_collection_status', { length: 16 }).default('pending').notNull(),
     sigCount: integer('sig_count').default(0).notNull(),
+    firstMintTime: timestamp('first_mint_time', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
