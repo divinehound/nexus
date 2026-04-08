@@ -434,10 +434,8 @@ export class HolderHistoryService {
         this.logger.warn(`[Solana Hybrid] Failed to collect signatures for mint ${mints[i].mintAddress}: ${err?.message || err}`);
       }
 
-      // Throttle to stay within Alchemy free-tier Solana RPC limits
-      if ((i + 1) % 2 === 0) {
-        await sleep(250);
-      }
+      // Throttle to stay within Alchemy free-tier Solana RPC limits (~2 req/s)
+      await sleep(500);
 
       if ((i + 1) % 100 === 0 || i === mints.length - 1) {
         this.logger.log(`[Solana Hybrid] Signature collection progress: ${i + 1}/${mints.length} mints, ${allSignatures.length} signatures`);
