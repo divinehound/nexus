@@ -9,6 +9,7 @@ import {
   uniqueIndex,
   index,
   pgEnum,
+  boolean,
 } from 'drizzle-orm/pg-core';
 import { collections, chainEnum } from './projects';
 
@@ -66,5 +67,42 @@ export const collectionHolderBalanceHistory = pgTable(
       table.address,
     ),
     index('collection_holder_balance_history_wallet_idx').on(table.collectionId, table.address, table.blockNumber),
+  ],
+);
+
+export const solanaIndexedMints = pgTable(
+  'solana_indexed_mints',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    collectionId: uuid('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    mintAddress: varchar('mint_address', { length: 64 }).notNull(),
+    currentOwner: varchar('current_owner', { length: 64 }),
+    sigCollectionStatus: varchar('sig_collection_status', { length: 16 }).default('pending').notNull(),
+    sigCount: integer('sig_count').default(0).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('solana_indexed_mints_unique').on(table.collectionId, table.mintAddress),
+    index('solana_indexed_mints_status_idx').on(table.collectionId, table.sigCollectionStatus),
+  ],
+);
+
+export const solanaRawSignatures = pgTable(
+  'solana_raw_signatures',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    collectionId: uuid('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    mintAddress: varchar('mint_address', { length: 64 }).notNull(),
+    signature: varchar('signature', { length: 128 }).notNull(),
+    parsed: boolean('parsed').default(false).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('solana_raw_signatures_sig_unique').on(table.signature),
+    index('solana_raw_signatures_parsed_idx').on(table.collectionId, table.parsed),
   ],
 );
