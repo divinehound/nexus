@@ -452,10 +452,9 @@ export class HolderHistoryService {
         if (mint.currentOwner) {
           const ownerKey = mint.currentOwner; // Solana addresses are case-sensitive (Base58)
           const summary = ensureSummary(summaryState, ownerKey);
-          if (summary.currentBalance === 0 && summary.totalReceivedCount === 0) {
-            summary.currentBalance += 1;
-            touched.add(ownerKey);
-          }
+          summary.currentBalance += 1;
+          summary.totalReceivedCount += 1;
+          touched.add(ownerKey);
         }
       }
       await this.persistFinalHolderState(collection, summaryState, touched, maxSlot, job);
@@ -472,6 +471,27 @@ export class HolderHistoryService {
 
     // --- Phase 4: Transfer Extraction ---
     this.logger.log(`[Solana Hybrid] Phase 4: Extracting transfers from ${parsedTxs.length} parsed transactions`);
+
+    // Diagnostic: inspect first few parsed transactions to verify structure
+    const withTokenTransfers = parsedTxs.filter((tx) => (tx.tokenTransfers?.length ?? 0) > 0);
+    const withNftEvents = parsedTxs.filter((tx) => (tx.events?.nft?.nfts?.length ?? 0) > 0);
+    this.logger.log(
+      `[Solana Hybrid] Diagnostics: ${withTokenTransfers.length} txs have tokenTransfers, ${withNftEvents.length} txs have events.nft.nfts`,
+    );
+    if (parsedTxs.length > 0) {
+      const sample = parsedTxs[0];
+      const sampleMints = (sample.tokenTransfers ?? []).map((t) => t.mint || t.tokenAddress || '(empty)').slice(0, 3);
+      const sampleNftMints = (sample.events?.nft?.nfts ?? []).map((n) => n.mint || '(empty)').slice(0, 3);
+      this.logger.log(
+        `[Solana Hybrid] Sample tx keys: ${Object.keys(sample).join(', ')}`,
+      );
+      this.logger.log(
+        `[Solana Hybrid] Sample tokenTransfer mints: [${sampleMints.join(', ')}], nft event mints: [${sampleNftMints.join(', ')}]`,
+      );
+      const sampleMintFromSet = [...mintAddressSet].slice(0, 2);
+      this.logger.log(`[Solana Hybrid] Sample expected mints: [${sampleMintFromSet.join(', ')}]`);
+    }
+
     const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
     const mintsWithTransfers = new Set<string>();
     const perWalletLogIndex = new Map<string, number>();
@@ -547,15 +567,15 @@ export class HolderHistoryService {
     // Persist transfer history in batches
     await this.persistHistoryBatch(historyRows);
 
-    // For mints with no parsed transfers, set current owner from DAS data
+    // For mints with no parsed transfers, set current owner from DAS data.
+    // Increment balance for each mint they hold (not just the first one).
     for (const mint of mints) {
       if (!mintsWithTransfers.has(mint.mintAddress) && mint.currentOwner) {
         const ownerKey = mint.currentOwner; // Solana addresses are case-sensitive (Base58)
         const summary = ensureSummary(summaryState, ownerKey);
-        if (summary.currentBalance === 0 && summary.totalReceivedCount === 0) {
-          summary.currentBalance += 1;
-          touched.add(ownerKey);
-        }
+        summary.currentBalance += 1;
+        summary.totalReceivedCount += 1;
+        touched.add(ownerKey);
       }
     }
 
