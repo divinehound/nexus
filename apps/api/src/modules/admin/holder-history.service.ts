@@ -393,23 +393,34 @@ export class HolderHistoryService {
       throw new Error('SOLANA_RPC_URL or HELIUS_API_KEY required for Solana hybrid indexing');
     }
 
-    // Load existing holder state
-    const existingSummaries = await this.db.query.collectionHolderSummaries.findMany({
-      where: eq(collectionHolderSummaries.collectionId, collection.id),
-    });
-
+    // Rebuild summaryState from actual transfer history records, NOT from the
+    // summaries table. This ensures idempotent re-runs — DAS fallback won't
+    // double-count because we always start from the source of truth.
     const summaryState = new Map<string, MutableSummary>();
-    for (const row of existingSummaries) {
-      summaryState.set(row.address, {
-        currentBalance: row.currentBalance,
-        firstReceivedAt: row.firstReceivedAt,
-        firstReceivedBlock: row.firstReceivedBlock,
-        lastReceivedAt: row.lastReceivedAt,
-        lastReceivedBlock: row.lastReceivedBlock,
-        totalReceivedCount: row.totalReceivedCount,
-        totalSentCount: row.totalSentCount,
-      });
+    const existingHistory = await this.db.query.collectionHolderBalanceHistory.findMany({
+      where: eq(collectionHolderBalanceHistory.collectionId, collection.id),
+      orderBy: [asc(collectionHolderBalanceHistory.blockNumber), asc(collectionHolderBalanceHistory.logIndex)],
+    });
+    const mintsWithHistory = new Set<string>();
+    for (const record of existingHistory) {
+      mintsWithHistory.add(record.tokenId);
+      const summary = ensureSummary(summaryState, record.address);
+      if (record.direction === 'in') {
+        summary.currentBalance += 1;
+        summary.totalReceivedCount += 1;
+        const blockNum = record.blockNumber;
+        if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
+          summary.firstReceivedAt = record.blockTimestamp;
+          summary.firstReceivedBlock = blockNum;
+        }
+        summary.lastReceivedAt = record.blockTimestamp;
+        summary.lastReceivedBlock = blockNum;
+      } else {
+        summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
+        summary.totalSentCount += 1;
+      }
     }
+    this.logger.log(`[Solana Hybrid] Replayed ${existingHistory.length} existing history records, ${mintsWithHistory.size} mints with transfer history`);
 
     const touched = new Set<string>();
     let maxSlot = collection.holderHistoryLastCheckedBlock ?? 0;
@@ -658,9 +669,10 @@ export class HolderHistoryService {
       this.logger.log(`[Solana Hybrid] Sample expected mints: [${[...mintAddressSet].slice(0, 5).join(', ')}]`);
     }
 
-    // For mints with no parsed transfers, set current owner from DAS data.
+    // For mints with no transfer history (this run or previous), use DAS ownership.
+    // Skips mints already accounted for via transfer records to prevent double-counting.
     for (const mint of mints) {
-      if (!mintsWithTransfers.has(mint.mintAddress) && mint.currentOwner) {
+      if (!mintsWithTransfers.has(mint.mintAddress) && !mintsWithHistory.has(mint.mintAddress) && mint.currentOwner) {
         const ownerKey = mint.currentOwner; // Solana addresses are case-sensitive (Base58)
         const summary = ensureSummary(summaryState, ownerKey);
         summary.currentBalance += 1;
