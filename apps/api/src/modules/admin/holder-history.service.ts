@@ -425,29 +425,22 @@ export class HolderHistoryService {
     this.logger.log(`[Solana Hybrid] Phase 2: Collecting signatures via standard RPC for ${mints.length} mints`);
     const allSignatures: string[] = [];
     const mintAddressSet = new Set(mints.map((m) => m.mintAddress));
-    const CONCURRENT_MINTS = 5;
 
-    for (let i = 0; i < mints.length; i += CONCURRENT_MINTS) {
-      const batch = mints.slice(i, i + CONCURRENT_MINTS);
-      const results = await Promise.allSettled(
-        batch.map((mint) => this.collectSignaturesForMint(mint.mintAddress, solanaRpcUrl, knownSignatures)),
-      );
-
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          allSignatures.push(...result.value);
-        } else {
-          this.logger.warn(`[Solana Hybrid] Failed to collect signatures for a mint: ${result.reason?.message || result.reason}`);
-        }
+    for (let i = 0; i < mints.length; i++) {
+      try {
+        const sigs = await this.collectSignaturesForMint(mints[i].mintAddress, solanaRpcUrl, knownSignatures);
+        allSignatures.push(...sigs);
+      } catch (err: any) {
+        this.logger.warn(`[Solana Hybrid] Failed to collect signatures for mint ${mints[i].mintAddress}: ${err?.message || err}`);
       }
 
-      if (i + CONCURRENT_MINTS < mints.length) {
-        await sleep(200);
+      // Throttle to stay within Alchemy free-tier Solana RPC limits
+      if ((i + 1) % 2 === 0) {
+        await sleep(250);
       }
 
-      if ((i + CONCURRENT_MINTS) % 100 < CONCURRENT_MINTS) {
-        const progress = Math.min(i + CONCURRENT_MINTS, mints.length);
-        this.logger.log(`[Solana Hybrid] Signature collection progress: ${progress}/${mints.length} mints, ${allSignatures.length} signatures`);
+      if ((i + 1) % 100 === 0 || i === mints.length - 1) {
+        this.logger.log(`[Solana Hybrid] Signature collection progress: ${i + 1}/${mints.length} mints, ${allSignatures.length} signatures`);
       }
     }
 
