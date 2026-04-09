@@ -755,7 +755,7 @@ export class HolderHistoryService {
       const uniqueFallbackSigs = [...sigToMints.keys()];
       this.logger.log(`[Solana Hybrid] Phase 3b: Fetching ${uniqueFallbackSigs.length} unique raw transactions`);
 
-      const BATCH_SIZE = 50;
+      const BATCH_SIZE = 5;
       const sigBatches = chunkArray(uniqueFallbackSigs, BATCH_SIZE);
       let fallbackTransferCount = 0;
 
