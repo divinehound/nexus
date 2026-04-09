@@ -561,6 +561,7 @@ export class HolderHistoryService {
     let diagTokenTransferTxs = 0;
     let diagNftEventTxs = 0;
     let diagAccountDataTxs = 0;
+    let diagSampleAccountData: string | null = null;
     const diagSeenMints = new Set<string>();
 
     while (true) {
@@ -580,7 +581,6 @@ export class HolderHistoryService {
       parsed.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
 
       // Diagnostics: collect info about parsed structure
-      let diagSampleAccountData: string | null = null;
       for (const tx of parsed) {
         if ((tx.tokenTransfers?.length ?? 0) > 0) diagTokenTransferTxs++;
         if ((tx.events?.nft?.nfts?.length ?? 0) > 0) diagNftEventTxs++;
