@@ -580,6 +580,7 @@ export class HolderHistoryService {
       parsed.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
 
       // Diagnostics: collect info about parsed structure
+      let diagSampleAccountData: string | null = null;
       for (const tx of parsed) {
         if ((tx.tokenTransfers?.length ?? 0) > 0) diagTokenTransferTxs++;
         if ((tx.events?.nft?.nfts?.length ?? 0) > 0) diagNftEventTxs++;
@@ -600,6 +601,17 @@ export class HolderHistoryService {
           }
         }
         if (hasAccountDataMint) diagAccountDataTxs++;
+        // Capture a sample accountData entry for debugging
+        if (!diagSampleAccountData && (tx.accountData?.length ?? 0) > 0) {
+          const hasAnyTokenChanges = tx.accountData!.some((a) => (a.tokenBalanceChanges?.length ?? 0) > 0);
+          const sampleEntry = tx.accountData![0];
+          const keys = Object.keys(sampleEntry);
+          diagSampleAccountData = `keys=[${keys.join(',')}], entries=${tx.accountData!.length}, anyTokenBalanceChanges=${hasAnyTokenChanges}`;
+          if (hasAnyTokenChanges) {
+            const entryWithChanges = tx.accountData!.find((a) => (a.tokenBalanceChanges?.length ?? 0) > 0);
+            diagSampleAccountData += `, sampleChange=${JSON.stringify(entryWithChanges?.tokenBalanceChanges?.[0])}`;
+          }
+        }
       }
 
       // Extract transfers
@@ -695,6 +707,9 @@ export class HolderHistoryService {
 
     // Log diagnostics
     const matchingMints = [...diagSeenMints].filter((m) => mintAddressSet.has(m));
+    if (diagSampleAccountData) {
+      this.logger.log(`[Solana Hybrid] AccountData sample: ${diagSampleAccountData}`);
+    }
     this.logger.log(
       `[Solana Hybrid] Diagnostics: ${diagTokenTransferTxs} txs had tokenTransfers, ${diagNftEventTxs} had events.nft.nfts, ${diagAccountDataTxs} had accountData with matching mints`,
     );
