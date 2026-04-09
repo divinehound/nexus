@@ -135,6 +135,14 @@ export default function BalanceLineChart({ entries, xDomain }: BalanceLineChartP
       .call((g) => g.selectAll('.tick line').attr('stroke', '#374151').attr('stroke-dasharray', '2,2'))
       .call((g) => g.selectAll('.tick text').attr('fill', '#6b7280').attr('font-size', '10px'));
 
+    // Extend line/area to the end of the time domain (last scanned date)
+    const lastPoint = dayPoints[dayPoints.length - 1];
+    const trailDate = xDomain[1];
+    const linePoints: DayPoint[] =
+      lastPoint && trailDate > lastPoint.date
+        ? [...dayPoints, { ...lastPoint, date: trailDate, entries: [] }]
+        : dayPoints;
+
     // Area
     const area = d3
       .area<DayPoint>()
@@ -143,7 +151,7 @@ export default function BalanceLineChart({ entries, xDomain }: BalanceLineChartP
       .y1((d) => y(d.balanceAfter))
       .curve(d3.curveStepAfter);
 
-    g.append('path').datum(dayPoints).attr('d', area).attr('fill', AREA_COLOR);
+    g.append('path').datum(linePoints).attr('d', area).attr('fill', AREA_COLOR);
 
     // Line
     const line = d3
@@ -153,7 +161,7 @@ export default function BalanceLineChart({ entries, xDomain }: BalanceLineChartP
       .curve(d3.curveStepAfter);
 
     g.append('path')
-      .datum(dayPoints)
+      .datum(linePoints)
       .attr('d', line)
       .attr('fill', 'none')
       .attr('stroke', LINE_COLOR)
