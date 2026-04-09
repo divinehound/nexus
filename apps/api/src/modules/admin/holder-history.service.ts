@@ -686,13 +686,20 @@ export class HolderHistoryService {
 
     // For mints with no transfer history (this run or previous), use DAS ownership.
     // Skips mints already accounted for via transfer records to prevent double-counting.
-    // mintTimeMap was built in Phase 2 with actual on-chain mint times.
+    // Sort by mint time so balanceAfter values are chronologically correct.
     const now = new Date();
     const dasHistoryRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
 
-    for (const mint of mints) {
-      if (!mintsWithTransfers.has(mint.mintAddress) && !mintsWithHistory.has(mint.mintAddress) && mint.currentOwner) {
-        const ownerKey = mint.currentOwner; // Solana addresses are case-sensitive (Base58)
+    const dasFallbackMints = mints
+      .filter((m) => !mintsWithTransfers.has(m.mintAddress) && !mintsWithHistory.has(m.mintAddress) && m.currentOwner)
+      .sort((a, b) => {
+        const aTime = mintInfoMap.get(a.mintAddress)?.time?.getTime() ?? 0;
+        const bTime = mintInfoMap.get(b.mintAddress)?.time?.getTime() ?? 0;
+        return aTime - bTime;
+      });
+
+    for (const mint of dasFallbackMints) {
+      const ownerKey = mint.currentOwner; // Solana addresses are case-sensitive (Base58)
         const summary = ensureSummary(summaryState, ownerKey);
         summary.currentBalance += 1;
         summary.totalReceivedCount += 1;
@@ -723,7 +730,6 @@ export class HolderHistoryService {
           balanceAfter: summary.currentBalance,
           counterpartyAddress: null,
         });
-      }
     }
 
     if (dasHistoryRows.length > 0) {
