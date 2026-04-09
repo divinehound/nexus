@@ -721,6 +721,180 @@ export class HolderHistoryService {
       this.logger.log(`[Solana Hybrid] Sample expected mints: [${[...mintAddressSet].slice(0, 5).join(', ')}]`);
     }
 
+    // --- Phase 3b: Raw getTransaction fallback for mints without detected transfers ---
+    // The Helius batch parse misses most NFT transfers (tokenBalanceChanges is empty).
+    // Fall back to standard getTransaction RPC which has pre/postTokenBalances.
+    const mintsNeedingFallback = [...mintAddressSet].filter(
+      (m) => !mintsWithTransfers.has(m) && !mintsWithHistory.has(m),
+    );
+
+    if (mintsNeedingFallback.length > 0) {
+      this.logger.log(
+        `[Solana Hybrid] Phase 3b: Raw tx fallback for ${mintsNeedingFallback.length} mints without detected transfers`,
+      );
+
+      // Get signatures for these mints from DB
+      const fallbackMintSet = new Set(mintsNeedingFallback);
+      const fallbackSigRows = await this.db.query.solanaRawSignatures.findMany({
+        where: eq(solanaRawSignatures.collectionId, collection.id),
+        columns: { signature: true, mintAddress: true },
+      });
+
+      // Deduplicate signatures and map signature → set of mints it belongs to
+      const sigToMints = new Map<string, Set<string>>();
+      for (const row of fallbackSigRows) {
+        if (!fallbackMintSet.has(row.mintAddress)) continue;
+        let mSet = sigToMints.get(row.signature);
+        if (!mSet) {
+          mSet = new Set();
+          sigToMints.set(row.signature, mSet);
+        }
+        mSet.add(row.mintAddress);
+      }
+
+      const uniqueFallbackSigs = [...sigToMints.keys()];
+      this.logger.log(`[Solana Hybrid] Phase 3b: Fetching ${uniqueFallbackSigs.length} unique raw transactions`);
+
+      const BATCH_SIZE = 50;
+      const sigBatches = chunkArray(uniqueFallbackSigs, BATCH_SIZE);
+      let fallbackTransferCount = 0;
+
+      for (let bi = 0; bi < sigBatches.length; bi++) {
+        const batch = sigBatches[bi];
+
+        // JSON-RPC batch request for getTransaction
+        const rpcRequests = batch.map((sig, i) => ({
+          jsonrpc: '2.0',
+          id: i,
+          method: 'getTransaction',
+          params: [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
+        }));
+
+        let rpcResults: any[];
+        try {
+          const response = await this.withTimeout(
+            fetch(solanaRpcUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(rpcRequests),
+            }),
+            60000,
+            'batch getTransaction',
+          );
+
+          if (!response.ok) {
+            this.logger.warn(`[Solana Hybrid] Phase 3b batch ${bi + 1} failed: ${response.status}`);
+            await sleep(2000);
+            continue;
+          }
+
+          rpcResults = await response.json();
+          if (!Array.isArray(rpcResults)) {
+            rpcResults = [rpcResults];
+          }
+        } catch (err: any) {
+          this.logger.warn(`[Solana Hybrid] Phase 3b batch ${bi + 1} error: ${err?.message}`);
+          await sleep(2000);
+          continue;
+        }
+
+        for (let i = 0; i < batch.length; i++) {
+          const sig = batch[i];
+          const txData = rpcResults[i]?.result;
+          if (!txData?.meta || txData.meta.err) continue;
+
+          const transfers = extractTransfersFromRawTransaction(txData, mintAddressSet);
+          if (transfers.length === 0) continue;
+
+          const txTimestamp = new Date((txData.blockTime ?? Math.floor(Date.now() / 1000)) * 1000);
+          const txSlot = txData.slot ?? 0;
+          if (txSlot > maxSlot) maxSlot = txSlot;
+
+          for (const transfer of transfers) {
+            mintsWithTransfers.add(transfer.mintAddress);
+            const from = transfer.from;
+            const to = transfer.to;
+            const blockNum = txSlot || maxSlot;
+
+            if (from) {
+              const summary = ensureSummary(summaryState, from);
+              summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
+              summary.totalSentCount += 1;
+              touched.add(from);
+              const logKey = `${sig}:${from}`;
+              const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
+              perWalletLogIndex.set(logKey, logIndex);
+              historyRows.push({
+                collectionId: collection.id,
+                chain: collection.chain,
+                address: from,
+                blockNumber: blockNum,
+                blockTimestamp: txTimestamp,
+                transactionHash: sig,
+                logIndex,
+                tokenId: transfer.mintAddress,
+                direction: 'out',
+                balanceAfter: summary.currentBalance,
+                counterpartyAddress: to || null,
+              });
+            }
+
+            if (to) {
+              const summary = ensureSummary(summaryState, to);
+              summary.currentBalance += 1;
+              summary.totalReceivedCount += 1;
+              if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
+                summary.firstReceivedAt = txTimestamp;
+                summary.firstReceivedBlock = blockNum;
+              }
+              summary.lastReceivedAt = txTimestamp;
+              summary.lastReceivedBlock = blockNum;
+              touched.add(to);
+              const logKey = `${sig}:${to}`;
+              const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
+              perWalletLogIndex.set(logKey, logIndex);
+              historyRows.push({
+                collectionId: collection.id,
+                chain: collection.chain,
+                address: to,
+                blockNumber: blockNum,
+                blockTimestamp: txTimestamp,
+                transactionHash: sig,
+                logIndex,
+                tokenId: transfer.mintAddress,
+                direction: 'in',
+                balanceAfter: summary.currentBalance,
+                counterpartyAddress: from || null,
+              });
+            }
+
+            fallbackTransferCount++;
+          }
+        }
+
+        // Persist periodically
+        if (historyRows.length >= 1000) {
+          await this.persistHistoryBatch(historyRows);
+          historyRows.length = 0;
+        }
+
+        await sleep(500);
+
+        if ((bi + 1) % 20 === 0 || bi === sigBatches.length - 1) {
+          this.logger.log(
+            `[Solana Hybrid] Phase 3b progress: ${bi + 1}/${sigBatches.length} batches, ${fallbackTransferCount} transfers found, ${mintsWithTransfers.size} mints with transfers`,
+          );
+        }
+      }
+
+      await this.persistHistoryBatch(historyRows);
+      historyRows.length = 0;
+
+      this.logger.log(
+        `[Solana Hybrid] Phase 3b complete: ${fallbackTransferCount} additional transfers found for ${mintsWithTransfers.size} total mints`,
+      );
+    }
+
     // For mints with no transfer history (this run or previous), use DAS ownership.
     // Skips mints already accounted for via transfer records to prevent double-counting.
     // Sort by mint time so balanceAfter values are chronologically correct.
@@ -1238,4 +1412,42 @@ function extractSolanaTransfersFromBatch(
   }
 
   return Array.from(matches.values());
+}
+
+function extractTransfersFromRawTransaction(
+  txData: { slot?: number; blockTime?: number | null; meta?: { preTokenBalances?: any[]; postTokenBalances?: any[] } },
+  mintAddresses: Set<string>,
+): Array<{ mintAddress: string; from: string; to: string }> {
+  const pre = txData.meta?.preTokenBalances ?? [];
+  const post = txData.meta?.postTokenBalances ?? [];
+
+  // Map mint → owner with balance > 0 for pre and post states
+  const preOwners = new Map<string, string>();
+  const postOwners = new Map<string, string>();
+
+  for (const b of pre) {
+    if (b.mint && mintAddresses.has(b.mint) && parseInt(b.uiTokenAmount?.amount || '0') > 0) {
+      preOwners.set(b.mint, b.owner || '');
+    }
+  }
+
+  for (const b of post) {
+    if (b.mint && mintAddresses.has(b.mint) && parseInt(b.uiTokenAmount?.amount || '0') > 0) {
+      postOwners.set(b.mint, b.owner || '');
+    }
+  }
+
+  const transfers: Array<{ mintAddress: string; from: string; to: string }> = [];
+  const allMints = new Set([...preOwners.keys(), ...postOwners.keys()]);
+
+  for (const mint of allMints) {
+    const from = preOwners.get(mint) || '';
+    const to = postOwners.get(mint) || '';
+    // Ownership changed — it's a transfer (or mint/burn)
+    if (from !== to && (from || to)) {
+      transfers.push({ mintAddress: mint, from, to });
+    }
+  }
+
+  return transfers;
 }
