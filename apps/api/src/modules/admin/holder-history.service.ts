@@ -687,6 +687,7 @@ export class HolderHistoryService {
     // Skips mints already accounted for via transfer records to prevent double-counting.
     // mintTimeMap was built in Phase 2 with actual on-chain mint times.
     const now = new Date();
+    const dasHistoryRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
 
     for (const mint of mints) {
       if (!mintsWithTransfers.has(mint.mintAddress) && !mintsWithHistory.has(mint.mintAddress) && mint.currentOwner) {
@@ -704,10 +705,30 @@ export class HolderHistoryService {
           summary.lastReceivedBlock = maxSlot || 0;
         }
         touched.add(ownerKey);
+
+        // Create a balance history row so the mint shows in "Balance over time"
+        dasHistoryRows.push({
+          collectionId: collection.id,
+          chain: collection.chain,
+          address: ownerKey,
+          blockNumber: maxSlot || 0,
+          blockTimestamp: mintTime,
+          transactionHash: `das-mint:${mint.mintAddress}`,
+          logIndex: 1,
+          tokenId: mint.mintAddress,
+          direction: 'in',
+          balanceAfter: summary.currentBalance,
+          counterpartyAddress: null,
+        });
       }
     }
 
-    job.processedTransfers = historyRows.length;
+    if (dasHistoryRows.length > 0) {
+      this.logger.log(`[Solana Hybrid] Persisting ${dasHistoryRows.length} DAS mint history rows`);
+      await this.persistHistoryBatch(dasHistoryRows);
+    }
+
+    job.processedTransfers = historyRows.length + dasHistoryRows.length;
     job.touchedWallets = touched.size;
     job.toBlock = maxSlot;
     this.jobs.set(collection.id, { ...job });
