@@ -31,7 +31,6 @@ interface TooltipData {
 interface BalanceLineChartProps {
   entries: BalanceEntry[];
   xDomain: [Date, Date];
-  yMax: number;
 }
 
 const MARGIN = { top: 16, right: 24, bottom: 32, left: 48 };
@@ -82,7 +81,7 @@ function dotColor(point: DayPoint): string {
   return DOT_COLOR_IN;
 }
 
-export default function BalanceLineChart({ entries, xDomain, yMax }: BalanceLineChartProps) {
+export default function BalanceLineChart({ entries, xDomain }: BalanceLineChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const [width, setWidth] = useState(600);
@@ -110,7 +109,8 @@ export default function BalanceLineChart({ entries, xDomain, yMax }: BalanceLine
     const innerH = HEIGHT - MARGIN.top - MARGIN.bottom;
 
     const x = d3.scaleTime().domain(xDomain).range([0, innerW]);
-    const y = d3.scaleLinear().domain([0, yMax]).nice().range([innerH, 0]);
+    const localYMax = Math.max(1, d3.max(dayPoints, (d) => d.balanceAfter) ?? 1);
+    const y = d3.scaleLinear().domain([0, localYMax]).nice().range([innerH, 0]);
 
     const g = svg
       .attr('width', width)
@@ -181,7 +181,7 @@ export default function BalanceLineChart({ entries, xDomain, yMax }: BalanceLine
         d3.select(this).transition().duration(100).attr('r', 4);
         setTooltip(null);
       });
-  }, [dayPoints, width, xDomain, yMax]);
+  }, [dayPoints, width, xDomain]);
 
   if (entries.length === 0) {
     return <div className="py-4 text-center text-xs text-gray-500">No balance history for this wallet.</div>;
