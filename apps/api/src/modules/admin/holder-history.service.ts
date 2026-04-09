@@ -474,10 +474,10 @@ export class HolderHistoryService {
 
     // --- Phase 2: Signature Collection (persisted to DB for resume) ---
     const pendingMints = dbMints.filter((m) => m.sigCollectionStatus !== 'complete');
-    // Track mint times in memory (dbMints snapshot is stale after Phase 2 writes)
-    const mintTimeMap = new Map<string, Date | null>();
+    // Track mint times + slots in memory (dbMints snapshot is stale after Phase 2 writes)
+    const mintInfoMap = new Map<string, { time: Date | null; slot: number }>();
     for (const m of dbMints) {
-      mintTimeMap.set(m.mintAddress, m.firstMintTime);
+      mintInfoMap.set(m.mintAddress, { time: m.firstMintTime, slot: 0 });
     }
     this.logger.log(
       `[Solana Hybrid] Phase 2: Collecting signatures for ${pendingMints.length} pending mints (${dbMints.length - pendingMints.length} already complete)`,
@@ -486,7 +486,7 @@ export class HolderHistoryService {
     for (let i = 0; i < pendingMints.length; i++) {
       const mint = pendingMints[i];
       try {
-        const { signatures: sigs, oldestBlockTime } = await this.collectSignaturesForMint(mint.mintAddress, solanaRpcUrl, knownSignatures);
+        const { signatures: sigs, oldestBlockTime, oldestSlot } = await this.collectSignaturesForMint(mint.mintAddress, solanaRpcUrl, knownSignatures);
 
         if (sigs.length > 0) {
           for (const sigBatch of chunkArray(sigs, 500)) {
@@ -505,10 +505,11 @@ export class HolderHistoryService {
           for (const s of sigs) knownSignatures.add(s);
         }
 
-        // Update in-memory mint time map (dbMints snapshot is stale)
-        if (oldestBlockTime) {
-          mintTimeMap.set(mint.mintAddress, new Date(oldestBlockTime * 1000));
-        }
+        // Update in-memory mint info map (dbMints snapshot is stale)
+        mintInfoMap.set(mint.mintAddress, {
+          time: oldestBlockTime ? new Date(oldestBlockTime * 1000) : null,
+          slot: oldestSlot ?? 0,
+        });
 
         await this.db
           .update(solanaIndexedMints)
@@ -695,14 +696,16 @@ export class HolderHistoryService {
         const summary = ensureSummary(summaryState, ownerKey);
         summary.currentBalance += 1;
         summary.totalReceivedCount += 1;
-        const mintTime = mintTimeMap.get(mint.mintAddress) ?? now;
+        const mintInfo = mintInfoMap.get(mint.mintAddress);
+        const mintTime = mintInfo?.time ?? now;
+        const mintSlot = mintInfo?.slot ?? 0;
         if (!summary.firstReceivedAt || mintTime < summary.firstReceivedAt) {
           summary.firstReceivedAt = mintTime;
-          summary.firstReceivedBlock = maxSlot || 0;
+          summary.firstReceivedBlock = mintSlot;
         }
         if (!summary.lastReceivedAt || mintTime > summary.lastReceivedAt) {
           summary.lastReceivedAt = mintTime;
-          summary.lastReceivedBlock = maxSlot || 0;
+          summary.lastReceivedBlock = mintSlot;
         }
         touched.add(ownerKey);
 
@@ -711,7 +714,7 @@ export class HolderHistoryService {
           collectionId: collection.id,
           chain: collection.chain,
           address: ownerKey,
-          blockNumber: maxSlot || 0,
+          blockNumber: mintSlot,
           blockTimestamp: mintTime,
           transactionHash: `das-mint:${mint.mintAddress}`,
           logIndex: 1,
@@ -813,9 +816,10 @@ export class HolderHistoryService {
     mintAddress: string,
     rpcUrl: string,
     knownSignatures: Set<string>,
-  ): Promise<{ signatures: string[]; oldestBlockTime: number | null }> {
+  ): Promise<{ signatures: string[]; oldestBlockTime: number | null; oldestSlot: number | null }> {
     const signatures: string[] = [];
     let oldestBlockTime: number | null = null;
+    let oldestSlot: number | null = null;
     let before: string | undefined;
 
     while (true) {
@@ -833,9 +837,10 @@ export class HolderHistoryService {
 
       let hitKnown = false;
       for (const entry of entries) {
-        // Track oldest blockTime across all entries (the mint event)
+        // Track oldest blockTime and slot across all entries (the mint event)
         if (entry.blockTime !== null && (oldestBlockTime === null || entry.blockTime < oldestBlockTime)) {
           oldestBlockTime = entry.blockTime;
+          oldestSlot = entry.slot;
         }
         if (entry.err) continue; // Skip failed transactions
         if (knownSignatures.has(entry.signature)) {
@@ -849,7 +854,7 @@ export class HolderHistoryService {
       before = entries[entries.length - 1].signature;
     }
 
-    return { signatures, oldestBlockTime };
+    return { signatures, oldestBlockTime, oldestSlot };
   }
 
   private async solanaRpcCallWithRetry(
