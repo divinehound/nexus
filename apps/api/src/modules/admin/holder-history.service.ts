@@ -474,6 +474,11 @@ export class HolderHistoryService {
 
     // --- Phase 2: Signature Collection (persisted to DB for resume) ---
     const pendingMints = dbMints.filter((m) => m.sigCollectionStatus !== 'complete');
+    // Track mint times in memory (dbMints snapshot is stale after Phase 2 writes)
+    const mintTimeMap = new Map<string, Date | null>();
+    for (const m of dbMints) {
+      mintTimeMap.set(m.mintAddress, m.firstMintTime);
+    }
     this.logger.log(
       `[Solana Hybrid] Phase 2: Collecting signatures for ${pendingMints.length} pending mints (${dbMints.length - pendingMints.length} already complete)`,
     );
@@ -498,6 +503,11 @@ export class HolderHistoryService {
           }
           // Add to known set so subsequent mints don't re-collect shared signatures
           for (const s of sigs) knownSignatures.add(s);
+        }
+
+        // Update in-memory mint time map (dbMints snapshot is stale)
+        if (oldestBlockTime) {
+          mintTimeMap.set(mint.mintAddress, new Date(oldestBlockTime * 1000));
         }
 
         await this.db
@@ -675,11 +685,7 @@ export class HolderHistoryService {
 
     // For mints with no transfer history (this run or previous), use DAS ownership.
     // Skips mints already accounted for via transfer records to prevent double-counting.
-    // Use the actual mint time from getSignaturesForAddress (stored in solana_indexed_mints).
-    const mintTimeMap = new Map<string, Date | null>();
-    for (const m of dbMints) {
-      mintTimeMap.set(m.mintAddress, m.firstMintTime);
-    }
+    // mintTimeMap was built in Phase 2 with actual on-chain mint times.
     const now = new Date();
 
     for (const mint of mints) {
