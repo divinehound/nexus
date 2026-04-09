@@ -86,19 +86,17 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
     });
   }, [data, selectedWallet, historySortDirection]);
 
-  const chartDomains = useMemo(() => {
+  const chartXDomain = useMemo((): [Date, Date] => {
     const history = data?.balanceHistory ?? [];
-    if (history.length === 0) return { xDomain: [new Date(), new Date()] as [Date, Date], yMax: 1 };
+    if (history.length === 0) return [new Date(), new Date()];
     let minTime = Infinity;
     let maxTime = -Infinity;
-    let maxBalance = 0;
     for (const e of history) {
       const t = new Date(e.blockTimestamp).getTime();
       if (t < minTime) minTime = t;
       if (t > maxTime) maxTime = t;
-      if (e.balanceAfter > maxBalance) maxBalance = e.balanceAfter;
     }
-    return { xDomain: [new Date(minTime), new Date(maxTime)] as [Date, Date], yMax: maxBalance };
+    return [new Date(minTime), new Date(maxTime)];
   }, [data]);
 
   useEffect(() => {
@@ -303,8 +301,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                           <td colSpan={5} className="border-b border-gray-800 bg-gray-950/60 px-4 py-3">
                             <BalanceLineChart
                               entries={(data?.balanceHistory ?? []).filter((e: any) => e.address === wallet.address)}
-                              xDomain={chartDomains.xDomain}
-                              yMax={chartDomains.yMax}
+                              xDomain={chartXDomain}
                             />
                           </td>
                         </tr>
