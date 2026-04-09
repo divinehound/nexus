@@ -96,6 +96,11 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
       if (t < minTime) minTime = t;
       if (t > maxTime) maxTime = t;
     }
+    const scannedAt = data?.collection?.holderHistoryLastScannedAt;
+    if (scannedAt) {
+      const t = new Date(scannedAt).getTime();
+      if (t > maxTime) maxTime = t;
+    }
     return [new Date(minTime), new Date(maxTime)];
   }, [data]);
 
