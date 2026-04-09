@@ -79,6 +79,17 @@ type HeliusTransaction = {
     fromUserAccount?: string;
     toUserAccount?: string;
   }>;
+  accountData?: Array<{
+    account?: string;
+    tokenBalanceChanges?: Array<{
+      userAccount?: string;
+      mint?: string;
+      rawTokenAmount?: {
+        tokenAmount?: string;
+        decimals?: number;
+      };
+    }>;
+  }>;
   events?: {
     nft?: {
       seller?: string;
@@ -549,6 +560,7 @@ export class HolderHistoryService {
     // Diagnostic counters
     let diagTokenTransferTxs = 0;
     let diagNftEventTxs = 0;
+    let diagAccountDataTxs = 0;
     const diagSeenMints = new Set<string>();
 
     while (true) {
@@ -571,6 +583,7 @@ export class HolderHistoryService {
       for (const tx of parsed) {
         if ((tx.tokenTransfers?.length ?? 0) > 0) diagTokenTransferTxs++;
         if ((tx.events?.nft?.nfts?.length ?? 0) > 0) diagNftEventTxs++;
+        let hasAccountDataMint = false;
         for (const t of tx.tokenTransfers ?? []) {
           if (t.mint) diagSeenMints.add(t.mint);
           if (t.tokenAddress) diagSeenMints.add(t.tokenAddress);
@@ -578,6 +591,15 @@ export class HolderHistoryService {
         for (const n of tx.events?.nft?.nfts ?? []) {
           if (n.mint) diagSeenMints.add(n.mint);
         }
+        for (const a of tx.accountData ?? []) {
+          for (const c of a.tokenBalanceChanges ?? []) {
+            if (c.mint) {
+              diagSeenMints.add(c.mint);
+              if (mintAddressSet.has(c.mint)) hasAccountDataMint = true;
+            }
+          }
+        }
+        if (hasAccountDataMint) diagAccountDataTxs++;
       }
 
       // Extract transfers
@@ -674,7 +696,7 @@ export class HolderHistoryService {
     // Log diagnostics
     const matchingMints = [...diagSeenMints].filter((m) => mintAddressSet.has(m));
     this.logger.log(
-      `[Solana Hybrid] Diagnostics: ${diagTokenTransferTxs} txs had tokenTransfers, ${diagNftEventTxs} had events.nft.nfts`,
+      `[Solana Hybrid] Diagnostics: ${diagTokenTransferTxs} txs had tokenTransfers, ${diagNftEventTxs} had events.nft.nfts, ${diagAccountDataTxs} had accountData with matching mints`,
     );
     this.logger.log(
       `[Solana Hybrid] Unique mints in parsed data: ${diagSeenMints.size}, matching our set: ${matchingMints.length}`,
@@ -1168,6 +1190,35 @@ function extractSolanaTransfersFromBatch(
           matches.set(key, { mintAddress: mint, from, to });
         }
       }
+    }
+  }
+
+  // accountData: parse tokenBalanceChanges to catch transfers missed by the above.
+  // Group by mint — negative amount = sender, positive amount = receiver.
+  const balanceChanges = new Map<string, { from: string; to: string }>();
+  for (const account of tx.accountData ?? []) {
+    for (const change of account.tokenBalanceChanges ?? []) {
+      const mint = change.mint || '';
+      if (!mintAddresses.has(mint)) continue;
+      if (!change.userAccount) continue;
+
+      const amount = parseFloat(change.rawTokenAmount?.tokenAmount || '0');
+      if (amount === 0) continue;
+
+      const existing = balanceChanges.get(mint) || { from: '', to: '' };
+      if (amount > 0) {
+        existing.to = change.userAccount;
+      } else {
+        existing.from = change.userAccount;
+      }
+      balanceChanges.set(mint, existing);
+    }
+  }
+  for (const [mint, transfer] of balanceChanges) {
+    if (!transfer.from && !transfer.to) continue;
+    const key = `${mint}:${transfer.from}:${transfer.to}`;
+    if (!matches.has(key)) {
+      matches.set(key, { mintAddress: mint, from: transfer.from, to: transfer.to });
     }
   }
 
