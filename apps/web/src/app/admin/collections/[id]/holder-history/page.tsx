@@ -21,6 +21,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
   const [jobStatus, setJobStatus] = useState<any>(null);
   const [sortField, setSortField] = useState<SortField>('currentBalance');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [historySortDirection, setHistorySortDirection] = useState<SortDirection>('desc');
   const [page, setPage] = useState(1);
 
   useEffect(() => {
@@ -72,8 +73,14 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
 
   const walletHistory = useMemo(() => {
     if (!data || !selectedWallet) return [];
-    return data.balanceHistory.filter((entry: any) => entry.address === selectedWallet);
-  }, [data, selectedWallet]);
+    const filtered = data.balanceHistory.filter((entry: any) => entry.address === selectedWallet);
+    const modifier = historySortDirection === 'asc' ? 1 : -1;
+    return filtered.sort((a: any, b: any) => {
+      const aTime = a.blockTimestamp ? new Date(a.blockTimestamp).getTime() : 0;
+      const bTime = b.blockTimestamp ? new Date(b.blockTimestamp).getTime() : 0;
+      return (aTime - bTime) * modifier;
+    });
+  }, [data, selectedWallet, historySortDirection]);
 
   useEffect(() => {
     if (!accessToken || !collectionId) return;
@@ -239,8 +246,19 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
         </div>
 
         <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-5">
-          <h2 className="text-lg font-semibold text-white">Balance over time</h2>
-          <p className="mt-1 text-sm text-gray-400">Transfer-by-transfer balance checkpoints.</p>
+          <div className="flex items-end justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">Balance over time</h2>
+              <p className="mt-1 text-sm text-gray-400">Transfer-by-transfer balance checkpoints.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setHistorySortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+              className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-xs text-gray-400 hover:text-white"
+            >
+              Date {historySortDirection === 'asc' ? '▲' : '▼'}
+            </button>
+          </div>
           {selectedWallet ? (
             <div className="mt-4 space-y-3">
               <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3 font-mono text-xs text-gray-300">
