@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/auth-context';
 import { adminGetCollectionHolderHistory, adminGetCollectionHolderHistoryStatus, adminScanCollectionHolderHistory } from '@/lib/api';
+import { truncateAddress } from '@/lib/utils';
+import BalanceLineChart from './balance-line-chart';
 
 type SortField = 'currentBalance' | 'firstReceivedAt' | 'lastReceivedAt' | 'address';
 type SortDirection = 'asc' | 'desc';
@@ -23,6 +25,8 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [historySortDirection, setHistorySortDirection] = useState<SortDirection>('desc');
   const [page, setPage] = useState(1);
+  const [expandedWallet, setExpandedWallet] = useState<string | null>(null);
+  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
 
   useEffect(() => {
     params.then((p) => setCollectionId(p.id));
@@ -81,6 +85,21 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
       return (aTime - bTime) * modifier;
     });
   }, [data, selectedWallet, historySortDirection]);
+
+  const chartDomains = useMemo(() => {
+    const history = data?.balanceHistory ?? [];
+    if (history.length === 0) return { xDomain: [new Date(), new Date()] as [Date, Date], yMax: 1 };
+    let minTime = Infinity;
+    let maxTime = -Infinity;
+    let maxBalance = 0;
+    for (const e of history) {
+      const t = new Date(e.blockTimestamp).getTime();
+      if (t < minTime) minTime = t;
+      if (t > maxTime) maxTime = t;
+      if (e.balanceAfter > maxBalance) maxBalance = e.balanceAfter;
+    }
+    return { xDomain: [new Date(minTime), new Date(maxTime)] as [Date, Date], yMax: maxBalance };
+  }, [data]);
 
   useEffect(() => {
     if (!accessToken || !collectionId) return;
@@ -200,6 +219,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-800 text-left text-xs uppercase tracking-wide text-gray-500">
+                  <th className="w-8 py-3" />
                   <SortableHeader label="Wallet" field="address" activeField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableHeader label="Balance" field="currentBalance" activeField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableHeader label="First received" field="firstReceivedAt" activeField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -207,18 +227,91 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                 </tr>
               </thead>
               <tbody>
-                {pagedWallets.map((wallet: any) => (
-                  <tr
-                    key={wallet.address}
-                    onClick={() => setSelectedWallet(wallet.address)}
-                    className={`cursor-pointer border-b border-gray-900 ${selectedWallet === wallet.address ? 'bg-gray-900/70' : 'hover:bg-gray-900/40'}`}
-                  >
-                    <td className="py-3 pr-4 font-mono text-xs text-gray-200">{wallet.address}</td>
-                    <td className="py-3 pr-4 font-semibold text-purple-300">{wallet.currentBalance}</td>
-                    <td className="py-3 pr-4 text-gray-300">{formatDate(wallet.firstReceivedAt)}</td>
-                    <td className="py-3 pr-4 text-gray-300">{formatDate(wallet.lastReceivedAt)}</td>
-                  </tr>
-                ))}
+                {pagedWallets.map((wallet: any) => {
+                  const isExpanded = expandedWallet === wallet.address;
+                  const chain = data?.collection?.chain ?? '';
+                  const explorerUrl = getExplorerLink(chain, wallet.address);
+                  return (
+                    <WalletRows key={wallet.address}>
+                      <tr
+                        onClick={() => setSelectedWallet(wallet.address)}
+                        className={`cursor-pointer border-b border-gray-900 ${selectedWallet === wallet.address ? 'bg-gray-900/70' : 'hover:bg-gray-900/40'}`}
+                      >
+                        <td className="w-8 py-3 pl-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedWallet(isExpanded ? null : wallet.address);
+                            }}
+                            className="flex h-5 w-5 items-center justify-center rounded text-gray-500 hover:text-white"
+                          >
+                            <svg className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} fill="currentColor" viewBox="0 0 20 20">
+                              <path d="M6.293 4.293a1 1 0 011.414 0L14 10.586l-6.293 6.293a1 1 0 01-1.414-1.414L11.172 10.5 6.293 5.707a1 1 0 010-1.414z" />
+                            </svg>
+                          </button>
+                        </td>
+                        <td className="py-3 pr-4">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs text-gray-200" title={wallet.address}>
+                              {truncateAddress(wallet.address, 6)}
+                            </span>
+                            {explorerUrl && (
+                              <a
+                                href={explorerUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-gray-500 hover:text-purple-400"
+                                title="View on explorer"
+                              >
+                                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                                </svg>
+                              </a>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigator.clipboard.writeText(wallet.address);
+                                setCopiedAddress(wallet.address);
+                                toast.success('Address copied');
+                                setTimeout(() => setCopiedAddress(null), 2000);
+                              }}
+                              className="text-gray-500 hover:text-white"
+                              title="Copy address"
+                            >
+                              {copiedAddress === wallet.address ? (
+                                <svg className="h-3.5 w-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                                </svg>
+                              ) : (
+                                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
+                                </svg>
+                              )}
+                            </button>
+                          </div>
+                        </td>
+                        <td className="py-3 pr-4 font-semibold text-purple-300">{wallet.currentBalance}</td>
+                        <td className="py-3 pr-4 text-gray-300">{formatDate(wallet.firstReceivedAt)}</td>
+                        <td className="py-3 pr-4 text-gray-300">{formatDate(wallet.lastReceivedAt)}</td>
+                      </tr>
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={5} className="border-b border-gray-800 bg-gray-950/60 px-4 py-3">
+                            <BalanceLineChart
+                              entries={(data?.balanceHistory ?? []).filter((e: any) => e.address === wallet.address)}
+                              xDomain={chartDomains.xDomain}
+                              yMax={chartDomains.yMax}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </WalletRows>
+                  );
+                })}
               </tbody>
             </table>
             {pagedWallets.length === 0 && <p className="py-6 text-sm text-gray-500">No wallets found yet.</p>}
@@ -346,4 +439,19 @@ function Stat({ label, value }: { label: string; value: string }) {
 function formatDate(value?: string | null) {
   if (!value) return '—';
   return new Date(value).toLocaleString();
+}
+
+function WalletRows({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
+}
+
+function getExplorerLink(chain: string, address: string): string | null {
+  const c = chain.toLowerCase();
+  if (c === 'ethereum') return `https://etherscan.io/address/${address}`;
+  if (c === 'base') return `https://basescan.org/address/${address}`;
+  if (c === 'polygon') return `https://polygonscan.com/address/${address}`;
+  if (c === 'abstract') return `https://explorer.abs.xyz/address/${address}`;
+  if (c === 'apechain') return `https://apescan.io/address/${address}`;
+  if (c === 'solana') return `https://solscan.io/account/${address}`;
+  return null;
 }
