@@ -1140,10 +1140,19 @@ export class HolderHistoryService {
       return this.batchGetTransactionWithRetry(rpcUrl, requests, attempt + 1);
     }
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      const text = await response.text().catch(() => '(body unavailable)');
+      this.logger.warn(`batch getTransaction failed: status=${response.status}, body=${text.substring(0, 500)}`);
+      return null;
+    }
 
     const data = await response.json();
-    return Array.isArray(data) ? data : [data];
+    // Log if response is an error object (not an array)
+    if (!Array.isArray(data)) {
+      this.logger.warn(`batch getTransaction non-array response: ${JSON.stringify(data).substring(0, 500)}`);
+      return [data];
+    }
+    return data;
   }
 
   private async batchParseSignatures(
