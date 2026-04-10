@@ -768,122 +768,111 @@ export class HolderHistoryService {
       const uniqueFallbackSigs = [...sigToMints.keys()];
       this.logger.log(`[Solana Hybrid] Phase 3b: Fetching ${uniqueFallbackSigs.length} unique raw transactions`);
 
-      // Helius: getTransaction supports up to 100 per batch, 2 req/s, 100 credits/req.
-      // Use batch size 10 to keep response payloads manageable.
-      const BATCH_SIZE = 10;
-      const sigBatches = chunkArray(uniqueFallbackSigs, BATCH_SIZE);
+      // Use individual getTransaction calls via solanaRpcCallWithRetry (the same
+      // method used by Phase 2 getSignaturesForAddress which works fine).
+      // Batching via JSON-RPC triggered Helius 413 "Too many requests" even
+      // with backoff — individual calls work.
       let fallbackTransferCount = 0;
-      let consecutiveFailedBatches = 0;
+      let consecutiveFailures = 0;
 
-      for (let bi = 0; bi < sigBatches.length; bi++) {
-        if (bi > 0) await sleep(750); // stay comfortably under Helius 2 req/s limit
+      for (let si = 0; si < uniqueFallbackSigs.length; si++) {
+        if (si > 0) await sleep(600); // ~1.6 req/s, safely under Helius 2 req/s
 
-        const batch = sigBatches[bi];
-
-        // JSON-RPC batch request
-        const rpcRequests = batch.map((sig, i) => ({
-          jsonrpc: '2.0',
-          id: i,
-          method: 'getTransaction',
-          params: [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
-        }));
-
-        let rpcResults: any[] | null = null;
+        const sig = uniqueFallbackSigs[si];
+        let txData: any = null;
         try {
-          rpcResults = await this.batchGetTransactionWithRetry(solanaRpcUrl, rpcRequests, 0);
+          txData = await this.solanaRpcCallWithRetry(
+            solanaRpcUrl,
+            'getTransaction',
+            [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
+            0,
+          );
         } catch (err: any) {
-          this.logger.warn(`[Solana Hybrid] Phase 3b batch ${bi + 1} error: ${err?.message}`);
-        }
-
-        if (!rpcResults) {
-          consecutiveFailedBatches++;
-          if (consecutiveFailedBatches >= 3) {
+          consecutiveFailures++;
+          if (consecutiveFailures >= 10) {
             this.logger.warn(
-              `[Solana Hybrid] Phase 3b aborted: ${consecutiveFailedBatches} consecutive batches failed.`,
+              `[Solana Hybrid] Phase 3b aborted: 10 consecutive failures. Last error: ${err?.message}`,
             );
             break;
           }
           continue;
         }
-        consecutiveFailedBatches = 0;
+        consecutiveFailures = 0;
 
-        if (bi === 0) {
-          const successCount = rpcResults.filter((r) => r?.result).length;
-          this.logger.log(`[Solana Hybrid] Phase 3b first batch: ${successCount}/${batch.length} transactions fetched successfully`);
+        if (si === 0) {
+          this.logger.log(
+            `[Solana Hybrid] Phase 3b first call: ${txData ? 'success' : 'null result'}`,
+          );
         }
 
-        for (let i = 0; i < batch.length; i++) {
-          const sig = batch[i];
-          const txData = rpcResults[i]?.result;
-          if (!txData?.meta || txData.meta.err) continue;
+        if (!txData?.meta || txData.meta.err) continue;
 
-          const transfers = extractTransfersFromRawTransaction(txData, mintAddressSet);
-          if (transfers.length === 0) continue;
+        const transfers = extractTransfersFromRawTransaction(txData, mintAddressSet);
+        if (transfers.length === 0) continue;
 
-          const txTimestamp = new Date((txData.blockTime ?? Math.floor(Date.now() / 1000)) * 1000);
-          const txSlot = txData.slot ?? 0;
-          if (txSlot > maxSlot) maxSlot = txSlot;
+        const txTimestamp = new Date((txData.blockTime ?? Math.floor(Date.now() / 1000)) * 1000);
+        const txSlot = txData.slot ?? 0;
+        if (txSlot > maxSlot) maxSlot = txSlot;
 
-          for (const transfer of transfers) {
-            mintsWithTransfers.add(transfer.mintAddress);
-            const from = transfer.from;
-            const to = transfer.to;
-            const blockNum = txSlot || maxSlot;
+        for (const transfer of transfers) {
+          mintsWithTransfers.add(transfer.mintAddress);
+          const from = transfer.from;
+          const to = transfer.to;
+          const blockNum = txSlot || maxSlot;
 
-            if (from) {
-              const summary = ensureSummary(summaryState, from);
-              summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
-              summary.totalSentCount += 1;
-              touched.add(from);
-              const logKey = `${sig}:${from}`;
-              const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
-              perWalletLogIndex.set(logKey, logIndex);
-              historyRows.push({
-                collectionId: collection.id,
-                chain: collection.chain,
-                address: from,
-                blockNumber: blockNum,
-                blockTimestamp: txTimestamp,
-                transactionHash: sig,
-                logIndex,
-                tokenId: transfer.mintAddress,
-                direction: 'out',
-                balanceAfter: summary.currentBalance,
-                counterpartyAddress: to || null,
-              });
-            }
-
-            if (to) {
-              const summary = ensureSummary(summaryState, to);
-              summary.currentBalance += 1;
-              summary.totalReceivedCount += 1;
-              if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
-                summary.firstReceivedAt = txTimestamp;
-                summary.firstReceivedBlock = blockNum;
-              }
-              summary.lastReceivedAt = txTimestamp;
-              summary.lastReceivedBlock = blockNum;
-              touched.add(to);
-              const logKey = `${sig}:${to}`;
-              const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
-              perWalletLogIndex.set(logKey, logIndex);
-              historyRows.push({
-                collectionId: collection.id,
-                chain: collection.chain,
-                address: to,
-                blockNumber: blockNum,
-                blockTimestamp: txTimestamp,
-                transactionHash: sig,
-                logIndex,
-                tokenId: transfer.mintAddress,
-                direction: 'in',
-                balanceAfter: summary.currentBalance,
-                counterpartyAddress: from || null,
-              });
-            }
-
-            fallbackTransferCount++;
+          if (from) {
+            const summary = ensureSummary(summaryState, from);
+            summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
+            summary.totalSentCount += 1;
+            touched.add(from);
+            const logKey = `${sig}:${from}`;
+            const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
+            perWalletLogIndex.set(logKey, logIndex);
+            historyRows.push({
+              collectionId: collection.id,
+              chain: collection.chain,
+              address: from,
+              blockNumber: blockNum,
+              blockTimestamp: txTimestamp,
+              transactionHash: sig,
+              logIndex,
+              tokenId: transfer.mintAddress,
+              direction: 'out',
+              balanceAfter: summary.currentBalance,
+              counterpartyAddress: to || null,
+            });
           }
+
+          if (to) {
+            const summary = ensureSummary(summaryState, to);
+            summary.currentBalance += 1;
+            summary.totalReceivedCount += 1;
+            if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
+              summary.firstReceivedAt = txTimestamp;
+              summary.firstReceivedBlock = blockNum;
+            }
+            summary.lastReceivedAt = txTimestamp;
+            summary.lastReceivedBlock = blockNum;
+            touched.add(to);
+            const logKey = `${sig}:${to}`;
+            const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
+            perWalletLogIndex.set(logKey, logIndex);
+            historyRows.push({
+              collectionId: collection.id,
+              chain: collection.chain,
+              address: to,
+              blockNumber: blockNum,
+              blockTimestamp: txTimestamp,
+              transactionHash: sig,
+              logIndex,
+              tokenId: transfer.mintAddress,
+              direction: 'in',
+              balanceAfter: summary.currentBalance,
+              counterpartyAddress: from || null,
+            });
+          }
+
+          fallbackTransferCount++;
         }
 
         // Persist periodically
@@ -892,11 +881,9 @@ export class HolderHistoryService {
           historyRows.length = 0;
         }
 
-        // Rate limit delay is at the top of the loop (500ms = 2 req/s)
-
-        if ((bi + 1) % 20 === 0 || bi === sigBatches.length - 1) {
+        if ((si + 1) % 200 === 0 || si === uniqueFallbackSigs.length - 1) {
           this.logger.log(
-            `[Solana Hybrid] Phase 3b progress: ${bi + 1}/${sigBatches.length} batches, ${fallbackTransferCount} transfers found, ${mintsWithTransfers.size} mints with transfers`,
+            `[Solana Hybrid] Phase 3b progress: ${si + 1}/${uniqueFallbackSigs.length} txs, ${fallbackTransferCount} transfers found, ${mintsWithTransfers.size} mints with transfers`,
           );
         }
       }
@@ -1104,12 +1091,13 @@ export class HolderHistoryService {
       `RPC ${method}`,
     );
 
-    if (response.status === 429) {
-      if (attempt >= 5) {
+    // Helius returns 413 (with -32413 body) or 429 for rate limiting
+    if (response.status === 429 || response.status === 413) {
+      if (attempt >= 7) {
         throw new Error(`RPC ${method} rate limited after ${attempt} retries`);
       }
-      const delay = Math.min(2000 * Math.pow(2, attempt), 30000);
-      this.logger.warn(`RPC rate limited for ${method}, retrying in ${delay}ms (attempt ${attempt + 1})`);
+      const delay = Math.min(2000 * Math.pow(2, attempt), 60000);
+      this.logger.warn(`RPC rate limited (${response.status}) for ${method}, retrying in ${delay}ms (attempt ${attempt + 1})`);
       await sleep(delay);
       return this.solanaRpcCallWithRetry(rpcUrl, method, params, attempt + 1);
     }
@@ -1127,47 +1115,6 @@ export class HolderHistoryService {
     return data.result;
   }
 
-  private async batchGetTransactionWithRetry(
-    rpcUrl: string,
-    requests: any[],
-    attempt: number,
-  ): Promise<any[] | null> {
-    const response = await this.withTimeout(
-      fetch(rpcUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requests),
-      }),
-      60000,
-      'batch getTransaction',
-    );
-
-    // Helius returns 413 with JSON-RPC code -32413 for rate limiting on getTransaction batches
-    if (response.status === 429 || response.status === 403 || response.status === 413) {
-      if (attempt >= 7) {
-        this.logger.warn(`batch getTransaction rate limited after ${attempt} retries`);
-        return null;
-      }
-      const delay = Math.min(2000 * Math.pow(2, attempt), 30000);
-      this.logger.warn(`batch getTransaction ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1})`);
-      await sleep(delay);
-      return this.batchGetTransactionWithRetry(rpcUrl, requests, attempt + 1);
-    }
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => '(body unavailable)');
-      this.logger.warn(`batch getTransaction failed: status=${response.status}, body=${text.substring(0, 500)}`);
-      return null;
-    }
-
-    const data = await response.json();
-    // Log if response is an error object (not an array)
-    if (!Array.isArray(data)) {
-      this.logger.warn(`batch getTransaction non-array response: ${JSON.stringify(data).substring(0, 500)}`);
-      return [data];
-    }
-    return data;
-  }
 
   private async batchParseSignatures(
     signatures: string[],
