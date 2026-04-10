@@ -742,70 +742,35 @@ export class HolderHistoryService {
     );
 
     if (mintsNeedingFallback.length > 0) {
+      // Per-asset fallback using Helius Enhanced Transactions endpoint.
+      // Works for both standard NFTs and cNFTs (compressed NFTs) where
+      // getSignaturesForAddress on standard RPC won't find actual transfers
+      // because cNFTs don't live in token accounts.
+      // Cost: 100 credits per mint × 1091 = ~109K credits (within 1M free tier).
       this.logger.log(
-        `[Solana Hybrid] Phase 3b: Raw tx fallback for ${mintsNeedingFallback.length} mints without detected transfers`,
+        `[Solana Hybrid] Phase 3b: Per-asset tx fetch for ${mintsNeedingFallback.length} mints via Helius /v0/addresses/{asset}/transactions`,
       );
 
-      // Get signatures for these mints from DB
-      const fallbackMintSet = new Set(mintsNeedingFallback);
-      const fallbackSigRows = await this.db.query.solanaRawSignatures.findMany({
-        where: eq(solanaRawSignatures.collectionId, collection.id),
-        columns: { signature: true, mintAddress: true },
-      });
-
-      // Deduplicate signatures and map signature → set of mints it belongs to
-      const sigToMints = new Map<string, Set<string>>();
-      for (const row of fallbackSigRows) {
-        if (!fallbackMintSet.has(row.mintAddress)) continue;
-        let mSet = sigToMints.get(row.signature);
-        if (!mSet) {
-          mSet = new Set();
-          sigToMints.set(row.signature, mSet);
-        }
-        mSet.add(row.mintAddress);
-      }
-
-      const uniqueFallbackSigs = [...sigToMints.keys()];
-      this.logger.log(`[Solana Hybrid] Phase 3b: Fetching ${uniqueFallbackSigs.length} unique raw transactions`);
-
-      // Use individual getTransaction calls via solanaRpcCallWithRetry (the same
-      // method used by Phase 2 getSignaturesForAddress which works fine).
-      // Batching via JSON-RPC triggered Helius 413 "Too many requests" even
-      // with backoff — individual calls work.
       let fallbackTransferCount = 0;
       let consecutiveFailures = 0;
-      // Phase 3b diagnostic counters
-      let diag3bProcessed = 0;
-      let diag3bWithBalances = 0;
-      let diag3bWithMatchingMints = 0;
-      let diag3bWithBalanceChanges = 0;
-      let diag3bYieldingTransfers = 0;
-      let diag3bSamplesLogged = 0;
+      let diag3bMintsProcessed = 0;
+      let diag3bMintsWithTxs = 0;
+      let diag3bMintsWithTransfers = 0;
 
-      // Phase 3b loop-level counters for debugging silent hangs
-      let diag3bNullResult = 0;
-      let diag3bMissingMeta = 0;
-      let diag3bMetaError = 0;
+      for (let mi = 0; mi < mintsNeedingFallback.length; mi++) {
+        if (mi > 0) await sleep(600); // ~1.6 req/s, safely under Helius 2 req/s
 
-      for (let si = 0; si < uniqueFallbackSigs.length; si++) {
-        if (si > 0) await sleep(600); // ~1.6 req/s, safely under Helius 2 req/s
-
-        // Log progress BEFORE any continues, so we always see forward movement
-        if ((si + 1) % 50 === 0 || si === uniqueFallbackSigs.length - 1) {
+        // Log progress BEFORE any continues
+        if ((mi + 1) % 25 === 0 || mi === mintsNeedingFallback.length - 1) {
           this.logger.log(
-            `[Solana Hybrid] Phase 3b progress: ${si + 1}/${uniqueFallbackSigs.length} txs | null=${diag3bNullResult}, missingMeta=${diag3bMissingMeta}, metaErr=${diag3bMetaError} | withBalances=${diag3bWithBalances}, withMatchingMints=${diag3bWithMatchingMints}, withBalanceChanges=${diag3bWithBalanceChanges}, yieldingTransfers=${diag3bYieldingTransfers}, transfers=${fallbackTransferCount}, mints=${mintsWithTransfers.size}`,
+            `[Solana Hybrid] Phase 3b progress: ${mi + 1}/${mintsNeedingFallback.length} mints | withTxs=${diag3bMintsWithTxs}, withTransfers=${diag3bMintsWithTransfers}, transfers=${fallbackTransferCount}, totalMintsWithTransfers=${mintsWithTransfers.size}`,
           );
         }
 
-        const sig = uniqueFallbackSigs[si];
-        let txData: any = null;
+        const mintAddress = mintsNeedingFallback[mi];
+        let assetTxs: HeliusTransaction[] = [];
         try {
-          txData = await this.solanaRpcCallWithRetry(
-            solanaRpcUrl,
-            'getTransaction',
-            [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
-            0,
-          );
+          assetTxs = await this.fetchAssetTransactionsWithRetry(mintAddress, heliusApiKey, 0);
         } catch (err: any) {
           consecutiveFailures++;
           if (consecutiveFailures >= 10) {
@@ -817,136 +782,97 @@ export class HolderHistoryService {
           continue;
         }
         consecutiveFailures = 0;
+        diag3bMintsProcessed++;
 
-        if (si === 0) {
+        if (mi === 0) {
           this.logger.log(
-            `[Solana Hybrid] Phase 3b first call: ${txData ? 'success' : 'null result'}, hasMetaKeys=${txData?.meta ? Object.keys(txData.meta).slice(0, 10).join(',') : 'none'}`,
+            `[Solana Hybrid] Phase 3b first mint: ${assetTxs.length} txs returned`,
           );
         }
 
-        if (!txData) { diag3bNullResult++; continue; }
-        if (!txData.meta) { diag3bMissingMeta++; continue; }
-        if (txData.meta.err) { diag3bMetaError++; continue; }
+        if (assetTxs.length === 0) continue;
+        diag3bMintsWithTxs++;
 
-        // Diagnostics
-        diag3bProcessed++;
-        const preBalances = txData.meta.preTokenBalances ?? [];
-        const postBalances = txData.meta.postTokenBalances ?? [];
-        if (preBalances.length > 0 || postBalances.length > 0) {
-          diag3bWithBalances++;
-        }
-        const matchingPre = preBalances.filter((b: any) => b.mint && mintAddressSet.has(b.mint));
-        const matchingPost = postBalances.filter((b: any) => b.mint && mintAddressSet.has(b.mint));
-        const hasMatchingMint = matchingPre.length > 0 || matchingPost.length > 0;
-        if (hasMatchingMint) {
-          diag3bWithMatchingMints++;
-          // Check if any matching mint has a balance change
-          const preAmounts = new Map<string, number>();
-          for (const b of matchingPre) {
-            preAmounts.set(`${b.accountIndex}:${b.mint}`, parseInt(b.uiTokenAmount?.amount || '0'));
-          }
-          let hasChange = false;
-          for (const b of matchingPost) {
-            const key = `${b.accountIndex}:${b.mint}`;
-            const preAmt = preAmounts.get(key) ?? 0;
-            const postAmt = parseInt(b.uiTokenAmount?.amount || '0');
-            if (preAmt !== postAmt) {
-              hasChange = true;
-              break;
+        // Sort chronologically so balanceAfter is correct
+        assetTxs.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+
+        let hadTransfer = false;
+        for (const tx of assetTxs) {
+          const transfers = extractSolanaTransfersFromBatch(tx, mintAddressSet);
+          if (transfers.length === 0) continue;
+          hadTransfer = true;
+
+          const txTimestamp = new Date((tx.timestamp ?? Math.floor(Date.now() / 1000)) * 1000);
+          const txSignature = tx.signature || '';
+          const txSlot = tx.slot ?? 0;
+          if (txSlot > maxSlot) maxSlot = txSlot;
+
+          for (const transfer of transfers) {
+            mintsWithTransfers.add(transfer.mintAddress);
+            const from = transfer.from;
+            const to = transfer.to;
+            const blockNum = txSlot || maxSlot;
+
+            if (from) {
+              const summary = ensureSummary(summaryState, from);
+              summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
+              summary.totalSentCount += 1;
+              touched.add(from);
+              const logKey = `${txSignature}:${from}`;
+              const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
+              perWalletLogIndex.set(logKey, logIndex);
+              historyRows.push({
+                collectionId: collection.id,
+                chain: collection.chain,
+                address: from,
+                blockNumber: blockNum,
+                blockTimestamp: txTimestamp,
+                transactionHash: txSignature,
+                logIndex,
+                tokenId: transfer.mintAddress,
+                direction: 'out',
+                balanceAfter: summary.currentBalance,
+                counterpartyAddress: to || null,
+              });
             }
-            preAmounts.delete(key);
-          }
-          if (!hasChange) {
-            for (const amt of preAmounts.values()) if (amt > 0) hasChange = true;
-          }
-          if (hasChange) diag3bWithBalanceChanges++;
-        }
 
-        const transfers = extractTransfersFromRawTransaction(txData, mintAddressSet);
-
-        // Log first few samples where we have matching mints but extracted 0 transfers
-        if (hasMatchingMint && transfers.length === 0 && diag3bSamplesLogged < 3) {
-          diag3bSamplesLogged++;
-          this.logger.log(
-            `[Solana Hybrid] Phase 3b sample no-transfer tx ${sig.substring(0, 16)}... pre=${JSON.stringify(matchingPre)}, post=${JSON.stringify(matchingPost)}`,
-          );
-        }
-
-        if (transfers.length === 0) continue;
-        diag3bYieldingTransfers++;
-
-        const txTimestamp = new Date((txData.blockTime ?? Math.floor(Date.now() / 1000)) * 1000);
-        const txSlot = txData.slot ?? 0;
-        if (txSlot > maxSlot) maxSlot = txSlot;
-
-        for (const transfer of transfers) {
-          mintsWithTransfers.add(transfer.mintAddress);
-          const from = transfer.from;
-          const to = transfer.to;
-          const blockNum = txSlot || maxSlot;
-
-          if (from) {
-            const summary = ensureSummary(summaryState, from);
-            summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
-            summary.totalSentCount += 1;
-            touched.add(from);
-            const logKey = `${sig}:${from}`;
-            const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
-            perWalletLogIndex.set(logKey, logIndex);
-            historyRows.push({
-              collectionId: collection.id,
-              chain: collection.chain,
-              address: from,
-              blockNumber: blockNum,
-              blockTimestamp: txTimestamp,
-              transactionHash: sig,
-              logIndex,
-              tokenId: transfer.mintAddress,
-              direction: 'out',
-              balanceAfter: summary.currentBalance,
-              counterpartyAddress: to || null,
-            });
-          }
-
-          if (to) {
-            const summary = ensureSummary(summaryState, to);
-            summary.currentBalance += 1;
-            summary.totalReceivedCount += 1;
-            if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
-              summary.firstReceivedAt = txTimestamp;
-              summary.firstReceivedBlock = blockNum;
+            if (to) {
+              const summary = ensureSummary(summaryState, to);
+              summary.currentBalance += 1;
+              summary.totalReceivedCount += 1;
+              if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
+                summary.firstReceivedAt = txTimestamp;
+                summary.firstReceivedBlock = blockNum;
+              }
+              summary.lastReceivedAt = txTimestamp;
+              summary.lastReceivedBlock = blockNum;
+              touched.add(to);
+              const logKey = `${txSignature}:${to}`;
+              const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
+              perWalletLogIndex.set(logKey, logIndex);
+              historyRows.push({
+                collectionId: collection.id,
+                chain: collection.chain,
+                address: to,
+                blockNumber: blockNum,
+                blockTimestamp: txTimestamp,
+                transactionHash: txSignature,
+                logIndex,
+                tokenId: transfer.mintAddress,
+                direction: 'in',
+                balanceAfter: summary.currentBalance,
+                counterpartyAddress: from || null,
+              });
             }
-            summary.lastReceivedAt = txTimestamp;
-            summary.lastReceivedBlock = blockNum;
-            touched.add(to);
-            const logKey = `${sig}:${to}`;
-            const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
-            perWalletLogIndex.set(logKey, logIndex);
-            historyRows.push({
-              collectionId: collection.id,
-              chain: collection.chain,
-              address: to,
-              blockNumber: blockNum,
-              blockTimestamp: txTimestamp,
-              transactionHash: sig,
-              logIndex,
-              tokenId: transfer.mintAddress,
-              direction: 'in',
-              balanceAfter: summary.currentBalance,
-              counterpartyAddress: from || null,
-            });
-          }
 
-          fallbackTransferCount++;
+            fallbackTransferCount++;
+          }
         }
+
+        if (hadTransfer) diag3bMintsWithTransfers++;
 
         // Persist periodically
         if (historyRows.length >= 1000) {
-          await this.persistHistoryBatch(historyRows);
-          historyRows.length = 0;
-        }
-
-        if ((si + 1) % 500 === 0) {
           await this.persistHistoryBatch(historyRows);
           historyRows.length = 0;
         }
@@ -956,7 +882,7 @@ export class HolderHistoryService {
       historyRows.length = 0;
 
       this.logger.log(
-        `[Solana Hybrid] Phase 3b complete: processed=${diag3bProcessed}, withBalances=${diag3bWithBalances}, withMatchingMints=${diag3bWithMatchingMints}, withBalanceChanges=${diag3bWithBalanceChanges}, yieldingTransfers=${diag3bYieldingTransfers}, transferCount=${fallbackTransferCount}, mints=${mintsWithTransfers.size}`,
+        `[Solana Hybrid] Phase 3b complete: processed=${diag3bMintsProcessed}, mintsWithTxs=${diag3bMintsWithTxs}, mintsWithTransfers=${diag3bMintsWithTransfers}, transferCount=${fallbackTransferCount}`,
       );
     }
 
@@ -1237,6 +1163,38 @@ export class HolderHistoryService {
     }
 
     return (await response.json()) as HeliusTransaction[];
+  }
+
+  private async fetchAssetTransactionsWithRetry(
+    assetAddress: string,
+    apiKey: string,
+    attempt: number,
+  ): Promise<HeliusTransaction[]> {
+    const response = await this.withTimeout(
+      fetch(`https://api.helius.xyz/v0/addresses/${assetAddress}/transactions?api-key=${apiKey}&limit=100`),
+      30000,
+      `helius asset transactions ${assetAddress}`,
+    );
+
+    if (response.status === 429 || response.status === 413) {
+      if (attempt >= 7) {
+        throw new Error(`Helius asset transactions rate limited for ${assetAddress} after ${attempt} retries`);
+      }
+      const delay = Math.min(2000 * Math.pow(2, attempt), 60000);
+      this.logger.warn(
+        `Helius asset transactions rate limited (${response.status}) for ${assetAddress}, retrying in ${delay}ms (attempt ${attempt + 1})`,
+      );
+      await sleep(delay);
+      return this.fetchAssetTransactionsWithRetry(assetAddress, apiKey, attempt + 1);
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Helius asset transactions failed for ${assetAddress} (${response.status}): ${text}`);
+    }
+
+    const data = await response.json();
+    return Array.isArray(data) ? (data as HeliusTransaction[]) : [];
   }
 
   private async getKnownTransactionHashesForCollection(collectionId: string): Promise<Set<string>> {
