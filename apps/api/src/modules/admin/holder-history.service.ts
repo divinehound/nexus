@@ -1,6 +1,6 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, like, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import {
   type Database,
@@ -403,6 +403,19 @@ export class HolderHistoryService {
     if (!solanaRpcUrl) {
       throw new Error('SOLANA_RPC_URL or HELIUS_API_KEY required for Solana hybrid indexing');
     }
+
+    // Delete synthetic DAS fallback rows from previous runs. Phase 3b may now
+    // be able to find real transfers for mints that were previously DAS-only,
+    // so we clear the synthetic rows and let the pipeline rebuild them.
+    const dasDeleted = await this.db
+      .delete(collectionHolderBalanceHistory)
+      .where(
+        and(
+          eq(collectionHolderBalanceHistory.collectionId, collection.id),
+          like(collectionHolderBalanceHistory.transactionHash, 'das-mint:%'),
+        ),
+      );
+    this.logger.log(`[Solana Hybrid] Cleared previous DAS fallback rows: ${JSON.stringify(dasDeleted)}`);
 
     // Rebuild summaryState from actual transfer history records, NOT from the
     // summaries table. This ensures idempotent re-runs — DAS fallback won't
