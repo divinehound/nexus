@@ -776,7 +776,7 @@ export class HolderHistoryService {
       let consecutiveFailedBatches = 0;
 
       for (let bi = 0; bi < sigBatches.length; bi++) {
-        if (bi > 0) await sleep(500); // 2 req/s rate limit
+        if (bi > 0) await sleep(750); // stay comfortably under Helius 2 req/s limit
 
         const batch = sigBatches[bi];
 
@@ -1142,12 +1142,13 @@ export class HolderHistoryService {
       'batch getTransaction',
     );
 
-    if (response.status === 429 || response.status === 403) {
-      if (attempt >= 5) {
+    // Helius returns 413 with JSON-RPC code -32413 for rate limiting on getTransaction batches
+    if (response.status === 429 || response.status === 403 || response.status === 413) {
+      if (attempt >= 7) {
         this.logger.warn(`batch getTransaction rate limited after ${attempt} retries`);
         return null;
       }
-      const delay = Math.min(3000 * Math.pow(2, attempt), 30000);
+      const delay = Math.min(2000 * Math.pow(2, attempt), 30000);
       this.logger.warn(`batch getTransaction ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1})`);
       await sleep(delay);
       return this.batchGetTransactionWithRetry(rpcUrl, requests, attempt + 1);
