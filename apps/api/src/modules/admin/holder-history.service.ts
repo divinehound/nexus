@@ -1424,31 +1424,93 @@ function extractTransfersFromRawTransaction(
   const pre = txData.meta?.preTokenBalances ?? [];
   const post = txData.meta?.postTokenBalances ?? [];
 
-  // Map mint → owner with balance > 0 for pre and post states
-  const preOwners = new Map<string, string>();
-  const postOwners = new Map<string, string>();
+  // Track balance changes per (accountIndex, mint) so we can identify actual
+  // movements (pre=1→post=0 = sender, pre=0→post=1 = receiver). This avoids
+  // false positives from marketplace transactions like Magic Eden Cancel Buy
+  // where escrow token accounts are opened/closed without real NFT movement.
+  type AccountInfo = { preAmount: number; postAmount: number; owner: string; mint: string };
+  const accountStates = new Map<string, AccountInfo>();
 
   for (const b of pre) {
-    if (b.mint && mintAddresses.has(b.mint) && parseInt(b.uiTokenAmount?.amount || '0') > 0) {
-      preOwners.set(b.mint, b.owner || '');
-    }
+    if (!b.mint || !mintAddresses.has(b.mint)) continue;
+    const key = `${b.accountIndex}:${b.mint}`;
+    accountStates.set(key, {
+      preAmount: parseInt(b.uiTokenAmount?.amount || '0'),
+      postAmount: 0,
+      owner: b.owner || '',
+      mint: b.mint,
+    });
   }
 
   for (const b of post) {
-    if (b.mint && mintAddresses.has(b.mint) && parseInt(b.uiTokenAmount?.amount || '0') > 0) {
-      postOwners.set(b.mint, b.owner || '');
+    if (!b.mint || !mintAddresses.has(b.mint)) continue;
+    const key = `${b.accountIndex}:${b.mint}`;
+    const existing = accountStates.get(key);
+    if (existing) {
+      existing.postAmount = parseInt(b.uiTokenAmount?.amount || '0');
+      // Prefer post-state owner if present (in case it changed)
+      if (b.owner) existing.owner = b.owner;
+    } else {
+      accountStates.set(key, {
+        preAmount: 0,
+        postAmount: parseInt(b.uiTokenAmount?.amount || '0'),
+        owner: b.owner || '',
+        mint: b.mint,
+      });
     }
   }
 
+  // Per mint: find senders (pre>0, post=0) and receivers (pre=0, post>0)
+  const sendersByMint = new Map<string, string>();
+  const receiversByMint = new Map<string, string>();
+
+  for (const info of accountStates.values()) {
+    if (info.preAmount > 0 && info.postAmount === 0 && info.owner) {
+      sendersByMint.set(info.mint, info.owner);
+    } else if (info.preAmount === 0 && info.postAmount > 0 && info.owner) {
+      receiversByMint.set(info.mint, info.owner);
+    }
+  }
+
+  // A valid transfer requires both a sender AND receiver (or just receiver for mint events).
+  // Cancel Buy / Cancel Listing etc. wouldn't have matching sender+receiver.
   const transfers: Array<{ mintAddress: string; from: string; to: string }> = [];
-  const allMints = new Set([...preOwners.keys(), ...postOwners.keys()]);
+  const allMints = new Set([...sendersByMint.keys(), ...receiversByMint.keys()]);
 
   for (const mint of allMints) {
-    const from = preOwners.get(mint) || '';
-    const to = postOwners.get(mint) || '';
-    // Ownership changed — it's a transfer (or mint/burn)
-    if (from !== to && (from || to)) {
+    const from = sendersByMint.get(mint) || '';
+    const to = receiversByMint.get(mint) || '';
+
+    // Skip if same wallet (no real transfer)
+    if (from && to && from === to) continue;
+
+    // Skip if neither side is present (shouldn't happen but defensive)
+    if (!from && !to) continue;
+
+    // Real transfer: both sender and receiver exist
+    if (from && to) {
       transfers.push({ mintAddress: mint, from, to });
+      continue;
+    }
+
+    // Mint event: receiver only, no sender
+    // (Only count as mint if pre has no entries for this mint at all)
+    if (!from && to) {
+      const hadPreEntry = pre.some((b: any) => b.mint === mint);
+      if (!hadPreEntry) {
+        transfers.push({ mintAddress: mint, from: '', to });
+      }
+      // If there was a pre entry but no valid sender, it's likely an escrow
+      // account change (e.g., cancel buy) — skip it.
+    }
+
+    // Burn event: sender only, no receiver
+    // (Only count as burn if post has no entries for this mint at all)
+    if (from && !to) {
+      const hadPostEntry = post.some((b: any) => b.mint === mint);
+      if (!hadPostEntry) {
+        transfers.push({ mintAddress: mint, from, to: '' });
+      }
     }
   }
 
