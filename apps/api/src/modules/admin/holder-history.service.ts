@@ -758,15 +758,37 @@ export class HolderHistoryService {
       const BATCH_SIZE = 5;
       const sigBatches = chunkArray(uniqueFallbackSigs, BATCH_SIZE);
       let fallbackTransferCount = 0;
+      let consecutiveFailedBatches = 0;
 
       for (let bi = 0; bi < sigBatches.length; bi++) {
         const batch = sigBatches[bi];
 
-        // Fetch each transaction individually to avoid batch payload/permission issues
+        // Fetch each transaction individually
         const rpcResults: any[] = [];
+        let batchNulls = 0;
         for (const sig of batch) {
           const txData = await this.getTransactionWithRetry(solanaRpcUrl, sig, 0);
           rpcResults.push(txData);
+          if (txData === null) batchNulls++;
+        }
+
+        // Circuit breaker: if first 3 batches ALL return null, the RPC
+        // likely doesn't support getTransaction on this tier — abort early
+        if (batchNulls === batch.length) {
+          consecutiveFailedBatches++;
+          if (consecutiveFailedBatches >= 3) {
+            this.logger.warn(
+              `[Solana Hybrid] Phase 3b aborted: ${consecutiveFailedBatches} consecutive batches returned no data. RPC may not support getTransaction on free tier.`,
+            );
+            break;
+          }
+        } else {
+          consecutiveFailedBatches = 0;
+        }
+
+        if (bi === 0) {
+          const successCount = rpcResults.filter((r) => r !== null).length;
+          this.logger.log(`[Solana Hybrid] Phase 3b first batch: ${successCount}/${batch.length} transactions fetched successfully`);
         }
 
         for (let i = 0; i < batch.length; i++) {
