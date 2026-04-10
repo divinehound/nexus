@@ -755,45 +755,53 @@ export class HolderHistoryService {
       const uniqueFallbackSigs = [...sigToMints.keys()];
       this.logger.log(`[Solana Hybrid] Phase 3b: Fetching ${uniqueFallbackSigs.length} unique raw transactions`);
 
-      const BATCH_SIZE = 5;
+      // Helius: getTransaction supports up to 100 per batch, 2 req/s, 100 credits/req.
+      // Use batch size 10 to keep response payloads manageable.
+      const BATCH_SIZE = 10;
       const sigBatches = chunkArray(uniqueFallbackSigs, BATCH_SIZE);
       let fallbackTransferCount = 0;
       let consecutiveFailedBatches = 0;
 
       for (let bi = 0; bi < sigBatches.length; bi++) {
+        if (bi > 0) await sleep(500); // 2 req/s rate limit
+
         const batch = sigBatches[bi];
 
-        // Fetch each transaction individually
-        const rpcResults: any[] = [];
-        let batchNulls = 0;
-        for (const sig of batch) {
-          const txData = await this.getTransactionWithRetry(solanaRpcUrl, sig, 0);
-          rpcResults.push(txData);
-          if (txData === null) batchNulls++;
+        // JSON-RPC batch request
+        const rpcRequests = batch.map((sig, i) => ({
+          jsonrpc: '2.0',
+          id: i,
+          method: 'getTransaction',
+          params: [sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
+        }));
+
+        let rpcResults: any[] | null = null;
+        try {
+          rpcResults = await this.batchGetTransactionWithRetry(solanaRpcUrl, rpcRequests, 0);
+        } catch (err: any) {
+          this.logger.warn(`[Solana Hybrid] Phase 3b batch ${bi + 1} error: ${err?.message}`);
         }
 
-        // Circuit breaker: if first 3 batches ALL return null, the RPC
-        // likely doesn't support getTransaction on this tier — abort early
-        if (batchNulls === batch.length) {
+        if (!rpcResults) {
           consecutiveFailedBatches++;
           if (consecutiveFailedBatches >= 3) {
             this.logger.warn(
-              `[Solana Hybrid] Phase 3b aborted: ${consecutiveFailedBatches} consecutive batches returned no data. RPC may not support getTransaction on free tier.`,
+              `[Solana Hybrid] Phase 3b aborted: ${consecutiveFailedBatches} consecutive batches failed.`,
             );
             break;
           }
-        } else {
-          consecutiveFailedBatches = 0;
+          continue;
         }
+        consecutiveFailedBatches = 0;
 
         if (bi === 0) {
-          const successCount = rpcResults.filter((r) => r !== null).length;
+          const successCount = rpcResults.filter((r) => r?.result).length;
           this.logger.log(`[Solana Hybrid] Phase 3b first batch: ${successCount}/${batch.length} transactions fetched successfully`);
         }
 
         for (let i = 0; i < batch.length; i++) {
           const sig = batch[i];
-          const txData = rpcResults[i];
+          const txData = rpcResults[i]?.result;
           if (!txData?.meta || txData.meta.err) continue;
 
           const transfers = extractTransfersFromRawTransaction(txData, mintAddressSet);
@@ -871,9 +879,7 @@ export class HolderHistoryService {
           historyRows.length = 0;
         }
 
-        // Helius free tier: ~2 req/s for standard RPC. With 5 calls per batch,
-        // wait 3s between batches to stay under the limit.
-        await sleep(3000);
+        // Rate limit delay is at the top of the loop (500ms = 2 req/s)
 
         if ((bi + 1) % 20 === 0 || bi === sigBatches.length - 1) {
           this.logger.log(
@@ -1108,36 +1114,36 @@ export class HolderHistoryService {
     return data.result;
   }
 
-  private async getTransactionWithRetry(rpcUrl: string, signature: string, attempt: number): Promise<any> {
+  private async batchGetTransactionWithRetry(
+    rpcUrl: string,
+    requests: any[],
+    attempt: number,
+  ): Promise<any[] | null> {
     const response = await this.withTimeout(
       fetch(rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getTransaction',
-          params: [signature, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }],
-        }),
+        body: JSON.stringify(requests),
       }),
-      30000,
-      'getTransaction',
+      60000,
+      'batch getTransaction',
     );
 
     if (response.status === 429 || response.status === 403) {
       if (attempt >= 5) {
-        this.logger.warn(`getTransaction rate limited after ${attempt} retries for ${signature}`);
+        this.logger.warn(`batch getTransaction rate limited after ${attempt} retries`);
         return null;
       }
       const delay = Math.min(3000 * Math.pow(2, attempt), 30000);
+      this.logger.warn(`batch getTransaction ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1})`);
       await sleep(delay);
-      return this.getTransactionWithRetry(rpcUrl, signature, attempt + 1);
+      return this.batchGetTransactionWithRetry(rpcUrl, requests, attempt + 1);
     }
 
     if (!response.ok) return null;
 
-    const data = (await response.json()) as { result?: any };
-    return data.result ?? null;
+    const data = await response.json();
+    return Array.isArray(data) ? data : [data];
   }
 
   private async batchParseSignatures(
