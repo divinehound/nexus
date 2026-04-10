@@ -774,6 +774,13 @@ export class HolderHistoryService {
       // with backoff — individual calls work.
       let fallbackTransferCount = 0;
       let consecutiveFailures = 0;
+      // Phase 3b diagnostic counters
+      let diag3bProcessed = 0;
+      let diag3bWithBalances = 0;
+      let diag3bWithMatchingMints = 0;
+      let diag3bWithBalanceChanges = 0;
+      let diag3bYieldingTransfers = 0;
+      let diag3bSamplesLogged = 0;
 
       for (let si = 0; si < uniqueFallbackSigs.length; si++) {
         if (si > 0) await sleep(600); // ~1.6 req/s, safely under Helius 2 req/s
@@ -807,8 +814,52 @@ export class HolderHistoryService {
 
         if (!txData?.meta || txData.meta.err) continue;
 
+        // Diagnostics
+        diag3bProcessed++;
+        const preBalances = txData.meta.preTokenBalances ?? [];
+        const postBalances = txData.meta.postTokenBalances ?? [];
+        if (preBalances.length > 0 || postBalances.length > 0) {
+          diag3bWithBalances++;
+        }
+        const matchingPre = preBalances.filter((b: any) => b.mint && mintAddressSet.has(b.mint));
+        const matchingPost = postBalances.filter((b: any) => b.mint && mintAddressSet.has(b.mint));
+        const hasMatchingMint = matchingPre.length > 0 || matchingPost.length > 0;
+        if (hasMatchingMint) {
+          diag3bWithMatchingMints++;
+          // Check if any matching mint has a balance change
+          const preAmounts = new Map<string, number>();
+          for (const b of matchingPre) {
+            preAmounts.set(`${b.accountIndex}:${b.mint}`, parseInt(b.uiTokenAmount?.amount || '0'));
+          }
+          let hasChange = false;
+          for (const b of matchingPost) {
+            const key = `${b.accountIndex}:${b.mint}`;
+            const preAmt = preAmounts.get(key) ?? 0;
+            const postAmt = parseInt(b.uiTokenAmount?.amount || '0');
+            if (preAmt !== postAmt) {
+              hasChange = true;
+              break;
+            }
+            preAmounts.delete(key);
+          }
+          if (!hasChange) {
+            for (const amt of preAmounts.values()) if (amt > 0) hasChange = true;
+          }
+          if (hasChange) diag3bWithBalanceChanges++;
+        }
+
         const transfers = extractTransfersFromRawTransaction(txData, mintAddressSet);
+
+        // Log first few samples where we have matching mints but extracted 0 transfers
+        if (hasMatchingMint && transfers.length === 0 && diag3bSamplesLogged < 3) {
+          diag3bSamplesLogged++;
+          this.logger.log(
+            `[Solana Hybrid] Phase 3b sample no-transfer tx ${sig.substring(0, 16)}... pre=${JSON.stringify(matchingPre)}, post=${JSON.stringify(matchingPost)}`,
+          );
+        }
+
         if (transfers.length === 0) continue;
+        diag3bYieldingTransfers++;
 
         const txTimestamp = new Date((txData.blockTime ?? Math.floor(Date.now() / 1000)) * 1000);
         const txSlot = txData.slot ?? 0;
@@ -881,9 +932,9 @@ export class HolderHistoryService {
           historyRows.length = 0;
         }
 
-        if ((si + 1) % 200 === 0 || si === uniqueFallbackSigs.length - 1) {
+        if ((si + 1) % 50 === 0 || si === uniqueFallbackSigs.length - 1) {
           this.logger.log(
-            `[Solana Hybrid] Phase 3b progress: ${si + 1}/${uniqueFallbackSigs.length} txs, ${fallbackTransferCount} transfers found, ${mintsWithTransfers.size} mints with transfers`,
+            `[Solana Hybrid] Phase 3b progress: ${si + 1}/${uniqueFallbackSigs.length} txs | withBalances=${diag3bWithBalances}, withMatchingMints=${diag3bWithMatchingMints}, withBalanceChanges=${diag3bWithBalanceChanges}, yieldingTransfers=${diag3bYieldingTransfers}, transfers=${fallbackTransferCount}, mints=${mintsWithTransfers.size}`,
           );
         }
       }
@@ -892,7 +943,7 @@ export class HolderHistoryService {
       historyRows.length = 0;
 
       this.logger.log(
-        `[Solana Hybrid] Phase 3b complete: ${fallbackTransferCount} additional transfers found for ${mintsWithTransfers.size} total mints`,
+        `[Solana Hybrid] Phase 3b complete: processed=${diag3bProcessed}, withBalances=${diag3bWithBalances}, withMatchingMints=${diag3bWithMatchingMints}, withBalanceChanges=${diag3bWithBalanceChanges}, yieldingTransfers=${diag3bYieldingTransfers}, transferCount=${fallbackTransferCount}, mints=${mintsWithTransfers.size}`,
       );
     }
 
