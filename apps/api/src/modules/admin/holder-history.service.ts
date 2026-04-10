@@ -782,8 +782,20 @@ export class HolderHistoryService {
       let diag3bYieldingTransfers = 0;
       let diag3bSamplesLogged = 0;
 
+      // Phase 3b loop-level counters for debugging silent hangs
+      let diag3bNullResult = 0;
+      let diag3bMissingMeta = 0;
+      let diag3bMetaError = 0;
+
       for (let si = 0; si < uniqueFallbackSigs.length; si++) {
         if (si > 0) await sleep(600); // ~1.6 req/s, safely under Helius 2 req/s
+
+        // Log progress BEFORE any continues, so we always see forward movement
+        if ((si + 1) % 50 === 0 || si === uniqueFallbackSigs.length - 1) {
+          this.logger.log(
+            `[Solana Hybrid] Phase 3b progress: ${si + 1}/${uniqueFallbackSigs.length} txs | null=${diag3bNullResult}, missingMeta=${diag3bMissingMeta}, metaErr=${diag3bMetaError} | withBalances=${diag3bWithBalances}, withMatchingMints=${diag3bWithMatchingMints}, withBalanceChanges=${diag3bWithBalanceChanges}, yieldingTransfers=${diag3bYieldingTransfers}, transfers=${fallbackTransferCount}, mints=${mintsWithTransfers.size}`,
+          );
+        }
 
         const sig = uniqueFallbackSigs[si];
         let txData: any = null;
@@ -808,11 +820,13 @@ export class HolderHistoryService {
 
         if (si === 0) {
           this.logger.log(
-            `[Solana Hybrid] Phase 3b first call: ${txData ? 'success' : 'null result'}`,
+            `[Solana Hybrid] Phase 3b first call: ${txData ? 'success' : 'null result'}, hasMetaKeys=${txData?.meta ? Object.keys(txData.meta).slice(0, 10).join(',') : 'none'}`,
           );
         }
 
-        if (!txData?.meta || txData.meta.err) continue;
+        if (!txData) { diag3bNullResult++; continue; }
+        if (!txData.meta) { diag3bMissingMeta++; continue; }
+        if (txData.meta.err) { diag3bMetaError++; continue; }
 
         // Diagnostics
         diag3bProcessed++;
@@ -932,10 +946,9 @@ export class HolderHistoryService {
           historyRows.length = 0;
         }
 
-        if ((si + 1) % 50 === 0 || si === uniqueFallbackSigs.length - 1) {
-          this.logger.log(
-            `[Solana Hybrid] Phase 3b progress: ${si + 1}/${uniqueFallbackSigs.length} txs | withBalances=${diag3bWithBalances}, withMatchingMints=${diag3bWithMatchingMints}, withBalanceChanges=${diag3bWithBalanceChanges}, yieldingTransfers=${diag3bYieldingTransfers}, transfers=${fallbackTransferCount}, mints=${mintsWithTransfers.size}`,
-          );
+        if ((si + 1) % 500 === 0) {
+          await this.persistHistoryBatch(historyRows);
+          historyRows.length = 0;
         }
       }
 
