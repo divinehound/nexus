@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/auth-context';
 import { adminGetCollectionHolderHistory, adminGetCollectionHolderHistoryStatus, adminScanCollectionHolderHistory } from '@/lib/api';
+import ReconciliationPanel from './reconciliation-panel';
 
 type SortField = 'currentBalance' | 'firstReceivedAt' | 'lastReceivedAt' | 'address';
 type SortDirection = 'asc' | 'desc';
@@ -188,6 +189,10 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
           </div>
           {jobStatus.error && <div className="mt-2 text-red-400">{jobStatus.error}</div>}
         </div>
+      )}
+
+      {data?.collection?.chain === 'solana' && (
+        <ReconciliationPanel collectionId={collectionId} accessToken={accessToken} />
       )}
 
       <div className="grid gap-6 xl:grid-cols-[1.2fr,0.8fr]">

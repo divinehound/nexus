@@ -256,6 +256,61 @@ export function adminGetCollectionHolderHistoryStatus(collectionId: string, toke
   }>(`/admin/collections/${collectionId}/holder-history/status`, { token });
 }
 
+export function adminGetSolanaReconciliation(collectionId: string, token: string, limit = 200) {
+  return apiFetch<{
+    collection: any;
+    summary: { ok: number; mismatch: number; pending: number; total: number };
+    mismatches: Array<{
+      mintAddress: string;
+      dasOwner: string | null;
+      computedOwner: string | null;
+      reconciliationNote: string | null;
+      signatureCount: number;
+      signatures: Array<{
+        signature: string;
+        blockTime: string | null;
+        slot: number | null;
+        parseStatus: string;
+        transfersFound: number;
+        errorMessage: string | null;
+      }>;
+      transferCount: number;
+      transfers: Array<{
+        signature: string;
+        mintAddress: string;
+        fromWallet: string | null;
+        toWallet: string | null;
+        blockTime: string;
+        slot: number;
+        parserName: string;
+        programId: string | null;
+      }>;
+    }>;
+  }>(`/admin/collections/${collectionId}/holder-history/reconciliation?limit=${limit}`, { token });
+}
+
+export function adminMarkSolanaSignaturesForReview(collectionId: string, signatures: string[], token: string) {
+  return apiFetch<{ updated: number }>(
+    `/admin/collections/${collectionId}/holder-history/mark-for-review`,
+    { method: 'POST', token, body: JSON.stringify({ signatures }) },
+  );
+}
+
+export function adminGetSolanaSignatureRawData(signature: string, token: string) {
+  return apiFetch<{
+    signature: string;
+    mintAddress: string;
+    blockTime: string | null;
+    slot: number | null;
+    parseStatus: string;
+    transfersFound: number;
+    lastParsedAt: string | null;
+    errorMessage: string | null;
+    rawData: any;
+    parsedTransfers: any[];
+  }>(`/admin/solana/signatures/${signature}/raw`, { token });
+}
+
 export function adminMarkCollectionAsSpam(collectionId: string, notes: string | undefined, token: string) {
   return apiFetch<{ success: boolean; collection: string }>(
     `/admin/collections/${collectionId}/mark-spam`,

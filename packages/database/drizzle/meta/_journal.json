@@ -162,6 +162,13 @@
       "when": 1775869200000,
       "tag": "0022_add_first_mint_time",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1776075000000,
+      "tag": "0023_solana_parse_tracking",
+      "breakpoints": true
     }
   ]
 }
