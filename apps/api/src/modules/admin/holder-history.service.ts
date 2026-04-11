@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, asc, desc, eq, inArray, like, sql } from 'drizzle-orm';
+import bs58 from 'bs58';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import {
   type Database,
@@ -99,6 +100,16 @@ type HeliusTransaction = {
       }>;
     };
   };
+  instructions?: Array<{
+    programId?: string;
+    accounts?: string[];
+    data?: string;
+    innerInstructions?: Array<{
+      programId?: string;
+      accounts?: string[];
+      data?: string;
+    }>;
+  }>;
 };
 
 @Injectable()
@@ -1436,8 +1447,67 @@ function extractSolanaTransfersFromBatch(
     }
   }
 
+  // MPL Core assets: parse TransferV1 instructions directly.
+  // Metaplex Core assets don't use SPL token accounts — they're stored in the
+  // asset account's data and transferred via the MPL Core program's TransferV1
+  // instruction. Helius's enhanced parser classifies these as type=UNKNOWN,
+  // so we decode the instructions ourselves.
+  //
+  // TransferV1 account layout:
+  //   [0] asset    (the NFT address)
+  //   [1] collection (or MPL Core program ID placeholder)
+  //   [2] payer    (the current owner, unless authority overrides)
+  //   [3] authority (optional — if set, this is the actual owner; else placeholder)
+  //   [4] new_owner (the recipient)
+  //   [5] system_program (placeholder if unused)
+  //   [6] log_wrapper   (placeholder if unused)
+  const processMplCoreInstr = (instr: { programId?: string; accounts?: string[]; data?: string }) => {
+    if (instr.programId !== MPL_CORE_PROGRAM_ID) return;
+    if (!instr.accounts || instr.accounts.length < 5) return;
+
+    // Decode discriminator from instruction data (first byte identifies the instruction)
+    let discriminator: number | null = null;
+    if (instr.data) {
+      try {
+        const decoded = bs58.decode(instr.data);
+        if (decoded.length > 0) discriminator = decoded[0];
+      } catch {
+        // ignore bad base58
+      }
+    }
+    if (discriminator !== MPL_CORE_TRANSFER_DISCRIMINATOR) return;
+
+    const asset = instr.accounts[0];
+    if (!mintAddresses.has(asset)) return;
+
+    const payer = instr.accounts[2];
+    const authority = instr.accounts[3];
+    const newOwner = instr.accounts[4];
+
+    // If authority is a real pubkey (not the program ID placeholder), it's the owner
+    const from = authority && authority !== MPL_CORE_PROGRAM_ID ? authority : payer;
+    const to = newOwner;
+
+    if (!from || !to || from === to) return;
+
+    const key = `${asset}:${from}:${to}`;
+    if (!matches.has(key)) {
+      matches.set(key, { mintAddress: asset, from, to });
+    }
+  };
+
+  for (const instr of tx.instructions ?? []) {
+    processMplCoreInstr(instr);
+    for (const inner of instr.innerInstructions ?? []) {
+      processMplCoreInstr(inner);
+    }
+  }
+
   return Array.from(matches.values());
 }
+
+const MPL_CORE_PROGRAM_ID = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
+const MPL_CORE_TRANSFER_DISCRIMINATOR = 14;
 
 function extractTransfersFromRawTransaction(
   txData: { slot?: number; blockTime?: number | null; meta?: { preTokenBalances?: any[]; postTokenBalances?: any[] } },
