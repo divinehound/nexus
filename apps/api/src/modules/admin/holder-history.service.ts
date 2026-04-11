@@ -1,7 +1,6 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, asc, desc, eq, inArray, like, sql } from 'drizzle-orm';
-import bs58 from 'bs58';
+import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import {
   type Database,
@@ -11,7 +10,9 @@ import {
   collectionHolders,
   solanaIndexedMints,
   solanaRawSignatures,
+  solanaParsedTransfers,
 } from '@nexus/database';
+import { runAllParsers } from './solana-parsers';
 
 type ScanStatus = 'idle' | 'queued' | 'running' | 'completed' | 'failed';
 
@@ -188,6 +189,135 @@ export class HolderHistoryService {
 
   async getCollectionHolderHistoryScanStatus(collectionId: string) {
     return this.jobs.get(collectionId) ?? { collectionId, status: 'idle' };
+  }
+
+  /**
+   * Returns the reconciliation summary + list of mismatched mints for a Solana
+   * collection. Used by the admin UI "Reconciliation" panel.
+   */
+  async getSolanaReconciliation(collectionId: string, mismatchLimit = 200) {
+    const collection = await this.db.query.collections.findFirst({
+      where: eq(collections.id, collectionId),
+    });
+    if (!collection) throw new NotFoundException('Collection not found');
+    if (collection.chain !== 'solana') {
+      throw new BadRequestException('Reconciliation is only available for Solana collections');
+    }
+
+    // Summary counts
+    const statusRows = await this.db
+      .select({
+        status: solanaIndexedMints.reconciliationStatus,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(solanaIndexedMints)
+      .where(eq(solanaIndexedMints.collectionId, collectionId))
+      .groupBy(solanaIndexedMints.reconciliationStatus);
+
+    const summary = { ok: 0, mismatch: 0, pending: 0, total: 0 };
+    for (const row of statusRows) {
+      const s = row.status as keyof typeof summary;
+      if (s in summary) (summary as any)[s] = Number(row.count);
+      summary.total += Number(row.count);
+    }
+
+    // Mismatch details
+    const mismatches = await this.db.query.solanaIndexedMints.findMany({
+      where: and(
+        eq(solanaIndexedMints.collectionId, collectionId),
+        eq(solanaIndexedMints.reconciliationStatus, 'mismatch'),
+      ),
+      limit: mismatchLimit,
+      orderBy: [asc(solanaIndexedMints.mintAddress)],
+    });
+
+    // For each mismatched mint, fetch its parsed transfers so we can show the chain
+    const mismatchDetails = await Promise.all(
+      mismatches.map(async (mint) => {
+        const transfers = await this.db.query.solanaParsedTransfers.findMany({
+          where: and(
+            eq(solanaParsedTransfers.collectionId, collectionId),
+            eq(solanaParsedTransfers.mintAddress, mint.mintAddress),
+          ),
+          orderBy: [
+            asc(solanaParsedTransfers.blockTime),
+            asc(solanaParsedTransfers.slot),
+          ],
+        });
+        const signatures = await this.db.query.solanaRawSignatures.findMany({
+          where: and(
+            eq(solanaRawSignatures.collectionId, collectionId),
+            eq(solanaRawSignatures.mintAddress, mint.mintAddress),
+          ),
+          orderBy: [asc(solanaRawSignatures.blockTime)],
+          columns: {
+            signature: true,
+            blockTime: true,
+            slot: true,
+            parseStatus: true,
+            transfersFound: true,
+            errorMessage: true,
+          },
+        });
+        return {
+          mintAddress: mint.mintAddress,
+          dasOwner: mint.currentOwner,
+          computedOwner: transfers.length > 0 ? transfers[transfers.length - 1].toWallet : null,
+          reconciliationNote: mint.reconciliationNote,
+          signatureCount: signatures.length,
+          signatures,
+          transferCount: transfers.length,
+          transfers,
+        };
+      }),
+    );
+
+    return { collection, summary, mismatches: mismatchDetails };
+  }
+
+  /**
+   * Returns the stored raw_data for a specific signature (for debugging).
+   */
+  async getSolanaSignatureRawData(signature: string) {
+    const row = await this.db.query.solanaRawSignatures.findFirst({
+      where: eq(solanaRawSignatures.signature, signature),
+    });
+    if (!row) throw new NotFoundException('Signature not found in raw_signatures');
+
+    const transfers = await this.db.query.solanaParsedTransfers.findMany({
+      where: eq(solanaParsedTransfers.signature, signature),
+    });
+
+    return {
+      signature: row.signature,
+      mintAddress: row.mintAddress,
+      blockTime: row.blockTime,
+      slot: row.slot,
+      parseStatus: row.parseStatus,
+      transfersFound: row.transfersFound,
+      lastParsedAt: row.lastParsedAt,
+      errorMessage: row.errorMessage,
+      rawData: row.rawData,
+      parsedTransfers: transfers,
+    };
+  }
+
+  /**
+   * Marks the given signatures for re-parsing on the next scan. Used when a new
+   * parser has been added and existing signatures should be re-run against it.
+   */
+  async markSolanaSignaturesForReview(collectionId: string, signatures: string[]) {
+    if (signatures.length === 0) return { updated: 0 };
+    const result = await this.db
+      .update(solanaRawSignatures)
+      .set({ parseStatus: 'needs_review' })
+      .where(
+        and(
+          eq(solanaRawSignatures.collectionId, collectionId),
+          inArray(solanaRawSignatures.signature, signatures),
+        ),
+      );
+    return { updated: signatures.length, result: JSON.stringify(result ?? {}) };
   }
 
   private async runCollectionHolderHistoryScan(collectionId: string, fromBlockInput?: number) {
@@ -400,7 +530,6 @@ export class HolderHistoryService {
 
     await this.persistFinalHolderState(collection, summaryState, touched, maxBlockNumber, job);
   }
-
   private async runSolanaCollectionHolderHistoryScan(
     collection: typeof collections.$inferSelect,
     job: InMemoryScanJob,
@@ -412,61 +541,18 @@ export class HolderHistoryService {
 
     const solanaRpcUrl = this.getSolanaRpcUrl();
     if (!solanaRpcUrl) {
-      throw new Error('SOLANA_RPC_URL or HELIUS_API_KEY required for Solana hybrid indexing');
+      throw new Error('SOLANA_RPC_URL or HELIUS_API_KEY required for Solana indexing');
     }
 
-    // Full reset: delete all history for this collection and reset parsed flags.
-    // We rebuild everything from scratch each scan so we can process transfers
-    // in strict global chronological order (required for correct balanceAfter).
-    await this.db
-      .delete(collectionHolderBalanceHistory)
-      .where(eq(collectionHolderBalanceHistory.collectionId, collection.id));
-    await this.db
-      .update(solanaRawSignatures)
-      .set({ parsed: false })
-      .where(eq(solanaRawSignatures.collectionId, collection.id));
-    this.logger.log(`[Solana Hybrid] Reset: cleared history and parsed flags for rebuild`);
-
-    // Start with an empty summaryState — we just deleted all history and will
-    // rebuild chronologically from scratch via the collect-sort-process pattern.
-    const summaryState = new Map<string, MutableSummary>();
-    const mintsWithHistory = new Set<string>();
-
-    const touched = new Set<string>();
-    let maxSlot = collection.holderHistoryLastCheckedBlock ?? 0;
-
-    // Accumulates all transfers extracted from Phase 3 and Phase 3b. We sort
-    // and process these chronologically AFTER extraction so balanceAfter values
-    // form a correct running balance regardless of extraction order.
-    type CollectedTransfer = {
-      mintAddress: string;
-      from: string;
-      to: string;
-      signature: string;
-      timestamp: Date;
-      slot: number;
-    };
-    const collectedTransfers: CollectedTransfer[] = [];
-
-
-    // Build known signatures from both balance history and raw_signatures for dedup
-    const knownHistorySigs = await this.getKnownTransactionHashesForCollection(collection.id);
-    const existingRawSigs = await this.db.query.solanaRawSignatures.findMany({
-      where: eq(solanaRawSignatures.collectionId, collection.id),
-      columns: { signature: true },
-    });
-    const knownSignatures = new Set([...knownHistorySigs, ...existingRawSigs.map((s) => s.signature)]);
-
-    job.touchedWallets = 0;
-    job.processedTransfers = 0;
-    this.jobs.set(collection.id, { ...job });
-
-    // --- Phase 1: Mint Discovery (always re-runs to catch new mints + updated owners) ---
-    this.logger.log(`[Solana Hybrid] Phase 1: Discovering mints for ${collection.contractAddress}`);
+    // =====================================================================
+    // PHASE 1: Asset Discovery
+    // =====================================================================
+    // Always re-runs. Upserts every asset from DAS getAssetsByGroup so new
+    // mints and ownership changes are reflected on every scan.
+    this.logger.log(`[Solana] Phase 1: Discovering assets for ${collection.contractAddress}`);
     const mints = await this.discoverSolanaMints(collection.contractAddress, heliusApiKey);
-    this.logger.log(`[Solana Hybrid] Discovered ${mints.length} mints from DAS`);
+    this.logger.log(`[Solana] Phase 1: ${mints.length} assets from DAS`);
 
-    // Upsert all mints: inserts new ones, updates current_owner for existing ones.
     for (const batch of chunkArray(mints, 500)) {
       await this.db
         .insert(solanaIndexedMints)
@@ -480,301 +566,254 @@ export class HolderHistoryService {
         )
         .onConflictDoUpdate({
           target: [solanaIndexedMints.collectionId, solanaIndexedMints.mintAddress],
-          set: {
-            currentOwner: sql`excluded.current_owner`,
-          },
+          set: { currentOwner: sql`excluded.current_owner` },
         });
     }
 
-    let dbMints = await this.db.query.solanaIndexedMints.findMany({
+    const dbMints = await this.db.query.solanaIndexedMints.findMany({
       where: eq(solanaIndexedMints.collectionId, collection.id),
     });
-    this.logger.log(`[Solana Hybrid] Phase 1 complete: ${dbMints.length} mints in DB (${mints.length} from DAS)`);
+    const mintAddressSet = new Set(dbMints.map((m) => m.mintAddress));
+    this.logger.log(`[Solana] Phase 1 complete: ${dbMints.length} assets persisted`);
 
-    const mintAddressSet = new Set(mints.map((m) => m.mintAddress));
+    // =====================================================================
+    // PHASE 2: Signature Collection (incremental)
+    // =====================================================================
+    // For each asset, call getSignaturesForAddress newest-first, stopping at
+    // the first signature already stored. Captures block_time and slot for
+    // chronological ordering later.
+    this.logger.log(`[Solana] Phase 2: Collecting signatures for ${dbMints.length} assets`);
+    const knownSignatures = new Set<string>();
+    const existingSigRows = await this.db.query.solanaRawSignatures.findMany({
+      where: eq(solanaRawSignatures.collectionId, collection.id),
+      columns: { signature: true },
+    });
+    for (const row of existingSigRows) knownSignatures.add(row.signature);
 
-    // --- Phase 2: Signature Collection (incremental — always re-runs) ---
-    // Re-collect signatures for ALL mints on every scan. The knownSignatures
-    // set (from raw_signatures + balance history) causes collectSignaturesForMint
-    // to stop as soon as it hits a known sig, so subsequent scans are cheap and
-    // only pick up NEW transactions since the last scan.
-    const mintInfoMap = new Map<string, { time: Date | null; slot: number }>();
-    for (const m of dbMints) {
-      mintInfoMap.set(m.mintAddress, { time: m.firstMintTime, slot: 0 });
-    }
-    this.logger.log(
-      `[Solana Hybrid] Phase 2: Re-collecting signatures for ${dbMints.length} mints (incremental)`,
-    );
-
-    let phase2NewSigs = 0;
+    let newSigCount = 0;
     for (let i = 0; i < dbMints.length; i++) {
       const mint = dbMints[i];
       try {
-        const { signatures: sigs, oldestBlockTime, oldestSlot } = await this.collectSignaturesForMint(mint.mintAddress, solanaRpcUrl, knownSignatures);
-
-        if (sigs.length > 0) {
-          phase2NewSigs += sigs.length;
-          for (const sigBatch of chunkArray(sigs, 500)) {
+        const entries = await this.collectSignaturesWithMetadata(mint.mintAddress, solanaRpcUrl, knownSignatures);
+        if (entries.length > 0) {
+          for (const batch of chunkArray(entries, 500)) {
             await this.db
               .insert(solanaRawSignatures)
               .values(
-                sigBatch.map((s) => ({
+                batch.map((e) => ({
                   collectionId: collection.id,
                   mintAddress: mint.mintAddress,
-                  signature: s,
+                  signature: e.signature,
+                  blockTime: e.blockTime ? new Date(e.blockTime * 1000) : null,
+                  slot: e.slot,
+                  parseStatus: 'pending',
                 })),
               )
               .onConflictDoNothing();
+            for (const e of batch) knownSignatures.add(e.signature);
+            newSigCount += batch.length;
           }
-          // Add to known set so subsequent mints don't re-collect shared signatures
-          for (const s of sigs) knownSignatures.add(s);
         }
-
-        // Update in-memory mint info map. Preserve existing first_mint_time if
-        // we didn't get an older value (only the very first scan discovers the mint event).
-        const existing = mintInfoMap.get(mint.mintAddress);
-        const newestOldestTime = oldestBlockTime ? new Date(oldestBlockTime * 1000) : null;
-        const useTime = existing?.time && (!newestOldestTime || existing.time < newestOldestTime)
-          ? existing.time
-          : newestOldestTime;
-        mintInfoMap.set(mint.mintAddress, {
-          time: useTime,
-          slot: oldestSlot ?? existing?.slot ?? 0,
-        });
-
         await this.db
           .update(solanaIndexedMints)
-          .set({
-            sigCollectionStatus: 'complete',
-            sigCount: sigs.length,
-            ...(useTime ? { firstMintTime: useTime } : {}),
-          })
+          .set({ sigCollectionStatus: 'complete', sigCount: entries.length })
           .where(
-            and(eq(solanaIndexedMints.collectionId, collection.id), eq(solanaIndexedMints.mintAddress, mint.mintAddress)),
+            and(
+              eq(solanaIndexedMints.collectionId, collection.id),
+              eq(solanaIndexedMints.mintAddress, mint.mintAddress),
+            ),
           );
       } catch (err: any) {
-        this.logger.warn(`[Solana Hybrid] Failed to collect signatures for mint ${mint.mintAddress}: ${err?.message || err}`);
-        await this.db
-          .update(solanaIndexedMints)
-          .set({ sigCollectionStatus: 'failed' })
-          .where(
-            and(eq(solanaIndexedMints.collectionId, collection.id), eq(solanaIndexedMints.mintAddress, mint.mintAddress)),
-          );
+        this.logger.warn(`[Solana] Phase 2: Failed to collect signatures for ${mint.mintAddress}: ${err?.message || err}`);
       }
 
       await sleep(500);
-
       if ((i + 1) % 100 === 0 || i === dbMints.length - 1) {
-        this.logger.log(`[Solana Hybrid] Signature collection progress: ${i + 1}/${dbMints.length} mints, ${phase2NewSigs} new signatures`);
+        this.logger.log(`[Solana] Phase 2 progress: ${i + 1}/${dbMints.length} assets, ${newSigCount} new signatures`);
       }
     }
-    this.logger.log(`[Solana Hybrid] Phase 2 complete: ${phase2NewSigs} new signatures collected`);
+    this.logger.log(`[Solana] Phase 2 complete: ${newSigCount} new signatures collected`);
 
-    // --- Phase 3: Batch Parse (collect transfers only — no state updates yet) ---
-    this.logger.log(`[Solana Hybrid] Phase 3: Parsing signatures via Helius batch endpoint`);
-    const mintsWithTransfers = new Set<string>();
-    let totalParsed = 0;
-    let batchNum = 0;
+    // =====================================================================
+    // PHASE 3: Parse signatures (pending + needs_review)
+    // =====================================================================
+    // Fetches raw data via Helius batch parse, stores it in raw_data JSONB,
+    // runs all parsers, inserts found transfers into solana_parsed_transfers.
+    // Only processes pending/needs_review rows; success/failed are skipped.
+    this.logger.log(`[Solana] Phase 3: Parsing signatures via Helius batch endpoint`);
+    const parserCtx = { mintAddresses: mintAddressSet };
+    let totalParsedThisRun = 0;
+    let totalTransfersFound = 0;
 
     while (true) {
-      const unparsedBatch = await this.db.query.solanaRawSignatures.findMany({
-        where: and(eq(solanaRawSignatures.collectionId, collection.id), eq(solanaRawSignatures.parsed, false)),
+      const toParse = await this.db.query.solanaRawSignatures.findMany({
+        where: and(
+          eq(solanaRawSignatures.collectionId, collection.id),
+          or(
+            eq(solanaRawSignatures.parseStatus, 'pending'),
+            eq(solanaRawSignatures.parseStatus, 'needs_review'),
+          ),
+        ),
         limit: 100,
       });
+      if (toParse.length === 0) break;
 
-      if (unparsedBatch.length === 0) break;
-      batchNum++;
+      const signatures = toParse.map((s) => s.signature);
+      let parsed: any[] = [];
+      try {
+        parsed = await this.heliusBatchParseWithRetry(signatures, heliusApiKey, 0);
+      } catch (err: any) {
+        this.logger.error(`[Solana] Phase 3: batch parse failed: ${err?.message || err}`);
+        // mark this batch as failed so we can retry later
+        for (const sig of toParse) {
+          await this.db
+            .update(solanaRawSignatures)
+            .set({ parseStatus: 'failed', errorMessage: err?.message || 'batch parse error', lastParsedAt: new Date() })
+            .where(eq(solanaRawSignatures.id, sig.id));
+        }
+        await sleep(5000);
+        continue;
+      }
 
-      const signatures = unparsedBatch.map((s) => s.signature);
-      const parsed = await this.heliusBatchParseWithRetry(signatures, heliusApiKey, 0);
-      totalParsed += parsed.length;
-
-      // Extract transfers and accumulate — DO NOT update summaryState or create
-      // history rows yet. We process everything in chronological order after
-      // Phase 3b completes.
+      // Build a map signature → parsed tx so we can match to the DB rows
+      const parsedBySig = new Map<string, any>();
       for (const tx of parsed) {
-        const transfers = extractSolanaTransfersFromBatch(tx, mintAddressSet);
-        if (transfers.length === 0) continue;
-        const timestamp = new Date((tx.timestamp ?? Math.floor(Date.now() / 1000)) * 1000);
-        const txSignature = tx.signature || '';
-        const slot = tx.slot ?? 0;
-        for (const transfer of transfers) {
-          mintsWithTransfers.add(transfer.mintAddress);
-          collectedTransfers.push({
-            mintAddress: transfer.mintAddress,
-            from: transfer.from,
-            to: transfer.to,
-            signature: txSignature,
-            timestamp,
-            slot,
+        if (tx?.signature) parsedBySig.set(tx.signature, tx);
+      }
+
+      const transfersToInsert: Array<typeof solanaParsedTransfers.$inferInsert> = [];
+      const sigUpdates: Array<{ id: string; status: string; rawData: any; transfersFound: number; error: string | null; blockTime: Date | null; slot: number | null }> = [];
+
+      for (const sigRow of toParse) {
+        const tx = parsedBySig.get(sigRow.signature);
+        if (!tx) {
+          // Helius didn't return anything for this signature
+          sigUpdates.push({
+            id: sigRow.id,
+            status: 'failed',
+            rawData: null,
+            transfersFound: 0,
+            error: 'no response from helius batch parse',
+            blockTime: sigRow.blockTime,
+            slot: sigRow.slot,
           });
-        }
-      }
-
-      // Mark batch as parsed in DB
-      await this.db
-        .update(solanaRawSignatures)
-        .set({ parsed: true })
-        .where(inArray(solanaRawSignatures.id, unparsedBatch.map((s) => s.id)));
-
-      await sleep(500); // Rate limit Helius
-
-      if (batchNum % 10 === 0) {
-        this.logger.log(
-          `[Solana Hybrid] Phase 3 progress: ${totalParsed} txs parsed, ${collectedTransfers.length} transfers collected, ${mintsWithTransfers.size} mints`,
-        );
-      }
-    }
-
-    this.logger.log(
-      `[Solana Hybrid] Phase 3 complete: ${totalParsed} txs parsed, ${collectedTransfers.length} transfers collected, ${mintsWithTransfers.size} mints with transfers`,
-    );
-
-    // --- Phase 3b: Raw getTransaction fallback for mints without detected transfers ---
-    // The Helius batch parse misses most NFT transfers (tokenBalanceChanges is empty).
-    // Fall back to standard getTransaction RPC which has pre/postTokenBalances.
-    const mintsNeedingFallback = [...mintAddressSet].filter(
-      (m) => !mintsWithTransfers.has(m) && !mintsWithHistory.has(m),
-    );
-
-    if (mintsNeedingFallback.length > 0) {
-      // Per-asset fallback using Helius Enhanced Transactions endpoint.
-      // Collects transfers into the same collectedTransfers array as Phase 3.
-      this.logger.log(
-        `[Solana Hybrid] Phase 3b: Per-asset tx fetch for ${mintsNeedingFallback.length} mints`,
-      );
-
-      let fallbackTransferCount = 0;
-      let consecutiveFailures = 0;
-      let diag3bMintsProcessed = 0;
-      let diag3bMintsWithTxs = 0;
-      let diag3bMintsWithTransfers = 0;
-
-      for (let mi = 0; mi < mintsNeedingFallback.length; mi++) {
-        if (mi > 0) await sleep(600);
-
-        if ((mi + 1) % 25 === 0 || mi === mintsNeedingFallback.length - 1) {
-          this.logger.log(
-            `[Solana Hybrid] Phase 3b progress: ${mi + 1}/${mintsNeedingFallback.length} mints | withTxs=${diag3bMintsWithTxs}, withTransfers=${diag3bMintsWithTransfers}, totalCollected=${fallbackTransferCount}`,
-          );
-        }
-
-        const mintAddress = mintsNeedingFallback[mi];
-        let assetTxs: HeliusTransaction[] = [];
-        try {
-          assetTxs = await this.fetchAssetTransactionsWithRetry(mintAddress, heliusApiKey, 0);
-        } catch (err: any) {
-          consecutiveFailures++;
-          if (consecutiveFailures >= 10) {
-            this.logger.warn(
-              `[Solana Hybrid] Phase 3b aborted: 10 consecutive failures. Last error: ${err?.message}`,
-            );
-            break;
-          }
           continue;
         }
-        consecutiveFailures = 0;
-        diag3bMintsProcessed++;
 
-        if (assetTxs.length === 0) continue;
-        diag3bMintsWithTxs++;
+        const transfers = runAllParsers(tx, parserCtx);
+        const txBlockTime = tx.timestamp ? new Date(tx.timestamp * 1000) : sigRow.blockTime;
+        const txSlot = tx.slot ?? sigRow.slot ?? 0;
 
-        let hadTransfer = false;
-        for (const tx of assetTxs) {
-          const transfers = extractSolanaTransfersFromBatch(tx, mintAddressSet);
-          if (transfers.length === 0) continue;
-          hadTransfer = true;
-
-          const txTimestamp = new Date((tx.timestamp ?? Math.floor(Date.now() / 1000)) * 1000);
-          const txSignature = tx.signature || '';
-          const txSlot = tx.slot ?? 0;
-
-          for (const transfer of transfers) {
-            mintsWithTransfers.add(transfer.mintAddress);
-            collectedTransfers.push({
-              mintAddress: transfer.mintAddress,
-              from: transfer.from,
-              to: transfer.to,
-              signature: txSignature,
-              timestamp: txTimestamp,
-              slot: txSlot,
-            });
-            fallbackTransferCount++;
-          }
+        for (const t of transfers) {
+          transfersToInsert.push({
+            collectionId: collection.id,
+            signature: sigRow.signature,
+            mintAddress: t.mintAddress,
+            fromWallet: t.fromWallet || null,
+            toWallet: t.toWallet || null,
+            blockTime: txBlockTime ?? new Date(),
+            slot: txSlot,
+            parserName: t.parserName,
+            programId: t.programId,
+          });
         }
 
-        if (hadTransfer) diag3bMintsWithTransfers++;
+        sigUpdates.push({
+          id: sigRow.id,
+          status: 'success',
+          rawData: tx,
+          transfersFound: transfers.length,
+          error: null,
+          blockTime: txBlockTime,
+          slot: txSlot,
+        });
       }
 
+      // Insert transfers (dedup by unique index)
+      if (transfersToInsert.length > 0) {
+        for (const batch of chunkArray(transfersToInsert, 500)) {
+          await this.db.insert(solanaParsedTransfers).values(batch).onConflictDoNothing();
+        }
+        totalTransfersFound += transfersToInsert.length;
+      }
+
+      // Update signature statuses
+      for (const upd of sigUpdates) {
+        await this.db
+          .update(solanaRawSignatures)
+          .set({
+            parseStatus: upd.status,
+            rawData: upd.rawData,
+            transfersFound: upd.transfersFound,
+            errorMessage: upd.error,
+            lastParsedAt: new Date(),
+            blockTime: upd.blockTime,
+            slot: upd.slot,
+          })
+          .where(eq(solanaRawSignatures.id, upd.id));
+      }
+
+      totalParsedThisRun += toParse.length;
       this.logger.log(
-        `[Solana Hybrid] Phase 3b complete: processed=${diag3bMintsProcessed}, mintsWithTxs=${diag3bMintsWithTxs}, mintsWithTransfers=${diag3bMintsWithTransfers}, collected=${fallbackTransferCount}`,
+        `[Solana] Phase 3 progress: +${toParse.length} sigs, ${transfersToInsert.length} transfers this batch, ${totalTransfersFound} total`,
       );
+      await sleep(500); // rate limit
     }
-
-    // --- Phase 3c: DAS ownership fallback ---
-    // For mints with no detected transfers, synthesize a "mint event" from
-    // DAS current ownership + mint time. Add to collectedTransfers so they
-    // get sorted and processed chronologically alongside real transfers.
-    const nowDate = new Date();
-    let dasFallbackCount = 0;
-    for (const mint of mints) {
-      if (mintsWithTransfers.has(mint.mintAddress)) continue;
-      if (!mint.currentOwner) continue;
-      const mintInfo = mintInfoMap.get(mint.mintAddress);
-      const mintTime = mintInfo?.time ?? nowDate;
-      const mintSlot = mintInfo?.slot ?? 0;
-      collectedTransfers.push({
-        mintAddress: mint.mintAddress,
-        from: '',
-        to: mint.currentOwner,
-        signature: `das-mint:${mint.mintAddress}`,
-        timestamp: mintTime,
-        slot: mintSlot,
-      });
-      dasFallbackCount++;
-    }
-    this.logger.log(`[Solana Hybrid] Phase 3c: Added ${dasFallbackCount} DAS ownership events`);
-
-    // --- Phase 4: Sort collected transfers globally and process chronologically ---
-    // This is CRITICAL for correct balanceAfter values — if transfers are
-    // processed out of order, the running balance won't be monotonic over time.
-    collectedTransfers.sort((a, b) => {
-      const diff = a.timestamp.getTime() - b.timestamp.getTime();
-      if (diff !== 0) return diff;
-      return a.slot - b.slot;
-    });
-
-    // Dedupe via unique constraint (txHash + logIndex + address); also
-    // track per-key logIndex so transfers sharing a signature get unique indices.
-    const perWalletLogIndex = new Map<string, number>();
-    const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
-
     this.logger.log(
-      `[Solana Hybrid] Phase 4: Processing ${collectedTransfers.length} collected transfers in chronological order`,
+      `[Solana] Phase 3 complete: parsed ${totalParsedThisRun} sigs this run, ${totalTransfersFound} transfers extracted`,
     );
 
-    for (const transfer of collectedTransfers) {
-      const { mintAddress, from, to, signature, timestamp, slot } = transfer;
-      const blockNum = slot || maxSlot;
+    // =====================================================================
+    // PHASE 4: Rebuild balance history from parsed transfers
+    // =====================================================================
+    // Deletes all existing balance history rows, reads all parsed transfers
+    // sorted chronologically, and reconstructs the running balance state.
+    this.logger.log(`[Solana] Phase 4: Rebuilding balance history from parsed transfers`);
+    await this.db
+      .delete(collectionHolderBalanceHistory)
+      .where(eq(collectionHolderBalanceHistory.collectionId, collection.id));
+
+    const allTransfers = await this.db.query.solanaParsedTransfers.findMany({
+      where: eq(solanaParsedTransfers.collectionId, collection.id),
+      orderBy: [
+        asc(solanaParsedTransfers.blockTime),
+        asc(solanaParsedTransfers.slot),
+        asc(solanaParsedTransfers.signature),
+      ],
+    });
+    this.logger.log(`[Solana] Phase 4: Processing ${allTransfers.length} transfers chronologically`);
+
+    const summaryState = new Map<string, MutableSummary>();
+    const touched = new Set<string>();
+    const perWalletLogIndex = new Map<string, number>();
+    const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
+    let maxSlot = 0;
+
+    for (const t of allTransfers) {
+      const slot = t.slot ?? 0;
       if (slot > maxSlot) maxSlot = slot;
+      const timestamp = t.blockTime;
+      const from = t.fromWallet || '';
+      const to = t.toWallet || '';
+      const sig = t.signature;
 
       if (from) {
         const summary = ensureSummary(summaryState, from);
         summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
         summary.totalSentCount += 1;
         touched.add(from);
-        const logKey = `${signature}:${from}`;
-        const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
-        perWalletLogIndex.set(logKey, logIndex);
+        const key = `${sig}:${from}`;
+        const logIndex = (perWalletLogIndex.get(key) ?? 0) + 1;
+        perWalletLogIndex.set(key, logIndex);
         historyRows.push({
           collectionId: collection.id,
           chain: collection.chain,
           address: from,
-          blockNumber: blockNum,
+          blockNumber: slot,
           blockTimestamp: timestamp,
-          transactionHash: signature,
+          transactionHash: sig,
           logIndex,
-          tokenId: mintAddress,
+          tokenId: t.mintAddress,
           direction: 'out',
           balanceAfter: summary.currentBalance,
           counterpartyAddress: to || null,
@@ -785,25 +824,25 @@ export class HolderHistoryService {
         const summary = ensureSummary(summaryState, to);
         summary.currentBalance += 1;
         summary.totalReceivedCount += 1;
-        if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
+        if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > slot) {
           summary.firstReceivedAt = timestamp;
-          summary.firstReceivedBlock = blockNum;
+          summary.firstReceivedBlock = slot;
         }
         summary.lastReceivedAt = timestamp;
-        summary.lastReceivedBlock = blockNum;
+        summary.lastReceivedBlock = slot;
         touched.add(to);
-        const logKey = `${signature}:${to}`;
-        const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
-        perWalletLogIndex.set(logKey, logIndex);
+        const key = `${sig}:${to}`;
+        const logIndex = (perWalletLogIndex.get(key) ?? 0) + 1;
+        perWalletLogIndex.set(key, logIndex);
         historyRows.push({
           collectionId: collection.id,
           chain: collection.chain,
           address: to,
-          blockNumber: blockNum,
+          blockNumber: slot,
           blockTimestamp: timestamp,
-          transactionHash: signature,
+          transactionHash: sig,
           logIndex,
-          tokenId: mintAddress,
+          tokenId: t.mintAddress,
           direction: 'in',
           balanceAfter: summary.currentBalance,
           counterpartyAddress: from || null,
@@ -815,20 +854,131 @@ export class HolderHistoryService {
         historyRows.length = 0;
       }
     }
-
     await this.persistHistoryBatch(historyRows);
     historyRows.length = 0;
 
-    job.processedTransfers = collectedTransfers.length;
+    this.logger.log(`[Solana] Phase 4 complete: built balance history for ${touched.size} wallets`);
+
+    // =====================================================================
+    // PHASE 5: Reconcile computed state against DAS current ownership
+    // =====================================================================
+    // For each asset, compute its final owner by walking transfers in order.
+    // Compare against DAS current_owner. Mark mismatches for investigation.
+    this.logger.log(`[Solana] Phase 5: Reconciling computed state vs DAS ownership`);
+
+    // Group transfers by mint, get final owner (last 'to' in chronological order)
+    const computedOwnerByMint = new Map<string, string>();
+    for (const t of allTransfers) {
+      if (t.toWallet) computedOwnerByMint.set(t.mintAddress, t.toWallet);
+      // Note: if to is null/empty (burn), the mint has no owner
+      else if (t.fromWallet) computedOwnerByMint.delete(t.mintAddress);
+    }
+
+    let okCount = 0;
+    let mismatchCount = 0;
+    let noHistoryCount = 0;
+    const reconcileUpdates: Array<{ mintAddress: string; status: string; note: string | null }> = [];
+
+    for (const mint of dbMints) {
+      const dasOwner = mint.currentOwner || '';
+      const computed = computedOwnerByMint.get(mint.mintAddress);
+
+      if (!computed) {
+        // No transfers detected for this mint. If DAS shows an owner, we have
+        // an incomplete picture — probably missing the initial mint event.
+        if (dasOwner) {
+          noHistoryCount++;
+          reconcileUpdates.push({
+            mintAddress: mint.mintAddress,
+            status: 'mismatch',
+            note: `No transfers detected; DAS owner=${dasOwner}`,
+          });
+        } else {
+          reconcileUpdates.push({ mintAddress: mint.mintAddress, status: 'ok', note: null });
+        }
+        continue;
+      }
+
+      if (computed === dasOwner) {
+        okCount++;
+        reconcileUpdates.push({ mintAddress: mint.mintAddress, status: 'ok', note: null });
+      } else {
+        mismatchCount++;
+        reconcileUpdates.push({
+          mintAddress: mint.mintAddress,
+          status: 'mismatch',
+          note: `Computed=${computed} DAS=${dasOwner}`,
+        });
+      }
+    }
+
+    // Batch update reconciliation status
+    for (const batch of chunkArray(reconcileUpdates, 200)) {
+      for (const upd of batch) {
+        await this.db
+          .update(solanaIndexedMints)
+          .set({ reconciliationStatus: upd.status, reconciliationNote: upd.note })
+          .where(
+            and(
+              eq(solanaIndexedMints.collectionId, collection.id),
+              eq(solanaIndexedMints.mintAddress, upd.mintAddress),
+            ),
+          );
+      }
+    }
+
+    this.logger.log(
+      `[Solana] Phase 5 complete: ${okCount} ok, ${mismatchCount} mismatched, ${noHistoryCount} no-history`,
+    );
+
+    // Final: persist summaries and holders
+    job.processedTransfers = allTransfers.length;
     job.touchedWallets = touched.size;
     job.toBlock = maxSlot;
     this.jobs.set(collection.id, { ...job });
 
     this.logger.log(
-      `[Solana Hybrid] Complete: ${collectedTransfers.length} events processed, ${touched.size} wallets, max slot ${maxSlot}`,
+      `[Solana] Scan complete: ${allTransfers.length} transfers, ${touched.size} wallets, reconciliation ${okCount} ok / ${mismatchCount} mismatch`,
     );
 
     await this.persistFinalHolderState(collection, summaryState, touched, maxSlot, job);
+  }
+
+  private async collectSignaturesWithMetadata(
+    mintAddress: string,
+    rpcUrl: string,
+    knownSignatures: Set<string>,
+  ): Promise<Array<{ signature: string; slot: number; blockTime: number | null }>> {
+    const results: Array<{ signature: string; slot: number; blockTime: number | null }> = [];
+    let before: string | undefined;
+
+    while (true) {
+      const params: Record<string, unknown> = { limit: 1000, commitment: 'finalized' };
+      if (before) params.before = before;
+
+      const result = await this.solanaRpcCallWithRetry(rpcUrl, 'getSignaturesForAddress', [mintAddress, params], 0);
+      const entries = (result ?? []) as Array<{
+        signature: string;
+        slot: number;
+        blockTime: number | null;
+        err: unknown;
+      }>;
+
+      let hitKnown = false;
+      for (const entry of entries) {
+        if (entry.err) continue;
+        if (knownSignatures.has(entry.signature)) {
+          hitKnown = true;
+          break;
+        }
+        results.push({ signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime });
+      }
+
+      if (hitKnown || entries.length < 1000) break;
+      before = entries[entries.length - 1].signature;
+    }
+
+    return results;
   }
 
   private getSolanaRpcUrl(): string {
@@ -986,32 +1136,6 @@ export class HolderHistoryService {
   }
 
 
-  private async batchParseSignatures(
-    signatures: string[],
-    heliusApiKey: string,
-    job: InMemoryScanJob,
-    collectionId: string,
-  ): Promise<HeliusTransaction[]> {
-    const allParsed: HeliusTransaction[] = [];
-    const batches = chunkArray(signatures, 100);
-
-    for (let i = 0; i < batches.length; i++) {
-      if (i > 0) await sleep(500); // Respect 2 req/s Helius Enhanced API rate limit
-
-      const parsed = await this.heliusBatchParseWithRetry(batches[i], heliusApiKey, 0);
-      allParsed.push(...parsed);
-
-      job.processedTransfers = allParsed.length;
-      this.jobs.set(collectionId, { ...job });
-
-      if ((i + 1) % 10 === 0 || i === batches.length - 1) {
-        this.logger.log(`[Solana Hybrid] Parsed batch ${i + 1}/${batches.length} (${allParsed.length} total transactions)`);
-      }
-    }
-
-    return allParsed;
-  }
-
   private async heliusBatchParseWithRetry(
     signatures: string[],
     apiKey: string,
@@ -1045,37 +1169,6 @@ export class HolderHistoryService {
     return (await response.json()) as HeliusTransaction[];
   }
 
-  private async fetchAssetTransactionsWithRetry(
-    assetAddress: string,
-    apiKey: string,
-    attempt: number,
-  ): Promise<HeliusTransaction[]> {
-    const response = await this.withTimeout(
-      fetch(`https://api.helius.xyz/v0/addresses/${assetAddress}/transactions?api-key=${apiKey}&limit=100`),
-      30000,
-      `helius asset transactions ${assetAddress}`,
-    );
-
-    if (response.status === 429 || response.status === 413) {
-      if (attempt >= 7) {
-        throw new Error(`Helius asset transactions rate limited for ${assetAddress} after ${attempt} retries`);
-      }
-      const delay = Math.min(2000 * Math.pow(2, attempt), 60000);
-      this.logger.warn(
-        `Helius asset transactions rate limited (${response.status}) for ${assetAddress}, retrying in ${delay}ms (attempt ${attempt + 1})`,
-      );
-      await sleep(delay);
-      return this.fetchAssetTransactionsWithRetry(assetAddress, apiKey, attempt + 1);
-    }
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Helius asset transactions failed for ${assetAddress} (${response.status}): ${text}`);
-    }
-
-    const data = await response.json();
-    return Array.isArray(data) ? (data as HeliusTransaction[]) : [];
-  }
 
   private async getKnownTransactionHashesForCollection(collectionId: string): Promise<Set<string>> {
     const rows = await this.db.query.collectionHolderBalanceHistory.findMany({
@@ -1251,229 +1344,4 @@ function ensureSummary(state: Map<string, MutableSummary>, address: string): Mut
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function extractSolanaTransfersFromBatch(
-  tx: HeliusTransaction,
-  mintAddresses: Set<string>,
-): Array<{ mintAddress: string; from: string; to: string }> {
-  const matches = new Map<string, { mintAddress: string; from: string; to: string }>();
-
-  for (const transfer of tx.tokenTransfers ?? []) {
-    const mint = transfer.mint || transfer.tokenAddress || '';
-    if (!mintAddresses.has(mint)) continue;
-
-    const from = transfer.fromUserAccount || transfer.fromTokenAccount || '';
-    const to = transfer.toUserAccount || transfer.toTokenAccount || '';
-    if (!from && !to) continue;
-
-    matches.set(`${mint}:${from}:${to}`, { mintAddress: mint, from, to });
-  }
-
-  // NFT events: seller/buyer are on the parent events.nft object, not on each nft item
-  const nftEvent = tx.events?.nft;
-  if (nftEvent?.nfts?.length) {
-    const from = nftEvent.seller || '';
-    const to = nftEvent.buyer || '';
-    if (from || to) {
-      for (const nft of nftEvent.nfts) {
-        const mint = nft.mint || '';
-        if (!mintAddresses.has(mint)) continue;
-        const key = `${mint}:${from}:${to}`;
-        if (!matches.has(key)) {
-          matches.set(key, { mintAddress: mint, from, to });
-        }
-      }
-    }
-  }
-
-  // accountData: parse tokenBalanceChanges to catch transfers missed by the above.
-  // Group by mint — negative amount = sender, positive amount = receiver.
-  const balanceChanges = new Map<string, { from: string; to: string }>();
-  for (const account of tx.accountData ?? []) {
-    for (const change of account.tokenBalanceChanges ?? []) {
-      const mint = change.mint || '';
-      if (!mintAddresses.has(mint)) continue;
-      if (!change.userAccount) continue;
-
-      const amount = parseFloat(change.rawTokenAmount?.tokenAmount || '0');
-      if (amount === 0) continue;
-
-      const existing = balanceChanges.get(mint) || { from: '', to: '' };
-      if (amount > 0) {
-        existing.to = change.userAccount;
-      } else {
-        existing.from = change.userAccount;
-      }
-      balanceChanges.set(mint, existing);
-    }
-  }
-  for (const [mint, transfer] of balanceChanges) {
-    if (!transfer.from && !transfer.to) continue;
-    const key = `${mint}:${transfer.from}:${transfer.to}`;
-    if (!matches.has(key)) {
-      matches.set(key, { mintAddress: mint, from: transfer.from, to: transfer.to });
-    }
-  }
-
-  // MPL Core assets: parse TransferV1 instructions directly.
-  // Metaplex Core assets don't use SPL token accounts — they're stored in the
-  // asset account's data and transferred via the MPL Core program's TransferV1
-  // instruction. Helius's enhanced parser classifies these as type=UNKNOWN,
-  // so we decode the instructions ourselves.
-  //
-  // TransferV1 account layout:
-  //   [0] asset    (the NFT address)
-  //   [1] collection (or MPL Core program ID placeholder)
-  //   [2] payer    (the current owner, unless authority overrides)
-  //   [3] authority (optional — if set, this is the actual owner; else placeholder)
-  //   [4] new_owner (the recipient)
-  //   [5] system_program (placeholder if unused)
-  //   [6] log_wrapper   (placeholder if unused)
-  const processMplCoreInstr = (instr: { programId?: string; accounts?: string[]; data?: string }) => {
-    if (instr.programId !== MPL_CORE_PROGRAM_ID) return;
-    if (!instr.accounts || instr.accounts.length < 5) return;
-
-    // Decode discriminator from instruction data (first byte identifies the instruction)
-    let discriminator: number | null = null;
-    if (instr.data) {
-      try {
-        const decoded = bs58.decode(instr.data);
-        if (decoded.length > 0) discriminator = decoded[0];
-      } catch {
-        // ignore bad base58
-      }
-    }
-    if (discriminator !== MPL_CORE_TRANSFER_DISCRIMINATOR) return;
-
-    const asset = instr.accounts[0];
-    if (!mintAddresses.has(asset)) return;
-
-    const payer = instr.accounts[2];
-    const authority = instr.accounts[3];
-    const newOwner = instr.accounts[4];
-
-    // If authority is a real pubkey (not the program ID placeholder), it's the owner
-    const from = authority && authority !== MPL_CORE_PROGRAM_ID ? authority : payer;
-    const to = newOwner;
-
-    if (!from || !to || from === to) return;
-
-    const key = `${asset}:${from}:${to}`;
-    if (!matches.has(key)) {
-      matches.set(key, { mintAddress: asset, from, to });
-    }
-  };
-
-  for (const instr of tx.instructions ?? []) {
-    processMplCoreInstr(instr);
-    for (const inner of instr.innerInstructions ?? []) {
-      processMplCoreInstr(inner);
-    }
-  }
-
-  return Array.from(matches.values());
-}
-
-const MPL_CORE_PROGRAM_ID = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
-const MPL_CORE_TRANSFER_DISCRIMINATOR = 14;
-
-function extractTransfersFromRawTransaction(
-  txData: { slot?: number; blockTime?: number | null; meta?: { preTokenBalances?: any[]; postTokenBalances?: any[] } },
-  mintAddresses: Set<string>,
-): Array<{ mintAddress: string; from: string; to: string }> {
-  const pre = txData.meta?.preTokenBalances ?? [];
-  const post = txData.meta?.postTokenBalances ?? [];
-
-  // Track balance changes per (accountIndex, mint) so we can identify actual
-  // movements (pre=1→post=0 = sender, pre=0→post=1 = receiver). This avoids
-  // false positives from marketplace transactions like Magic Eden Cancel Buy
-  // where escrow token accounts are opened/closed without real NFT movement.
-  type AccountInfo = { preAmount: number; postAmount: number; owner: string; mint: string };
-  const accountStates = new Map<string, AccountInfo>();
-
-  for (const b of pre) {
-    if (!b.mint || !mintAddresses.has(b.mint)) continue;
-    const key = `${b.accountIndex}:${b.mint}`;
-    accountStates.set(key, {
-      preAmount: parseInt(b.uiTokenAmount?.amount || '0'),
-      postAmount: 0,
-      owner: b.owner || '',
-      mint: b.mint,
-    });
-  }
-
-  for (const b of post) {
-    if (!b.mint || !mintAddresses.has(b.mint)) continue;
-    const key = `${b.accountIndex}:${b.mint}`;
-    const existing = accountStates.get(key);
-    if (existing) {
-      existing.postAmount = parseInt(b.uiTokenAmount?.amount || '0');
-      // Prefer post-state owner if present (in case it changed)
-      if (b.owner) existing.owner = b.owner;
-    } else {
-      accountStates.set(key, {
-        preAmount: 0,
-        postAmount: parseInt(b.uiTokenAmount?.amount || '0'),
-        owner: b.owner || '',
-        mint: b.mint,
-      });
-    }
-  }
-
-  // Per mint: find senders (pre>0, post=0) and receivers (pre=0, post>0)
-  const sendersByMint = new Map<string, string>();
-  const receiversByMint = new Map<string, string>();
-
-  for (const info of accountStates.values()) {
-    if (info.preAmount > 0 && info.postAmount === 0 && info.owner) {
-      sendersByMint.set(info.mint, info.owner);
-    } else if (info.preAmount === 0 && info.postAmount > 0 && info.owner) {
-      receiversByMint.set(info.mint, info.owner);
-    }
-  }
-
-  // A valid transfer requires both a sender AND receiver (or just receiver for mint events).
-  // Cancel Buy / Cancel Listing etc. wouldn't have matching sender+receiver.
-  const transfers: Array<{ mintAddress: string; from: string; to: string }> = [];
-  const allMints = new Set([...sendersByMint.keys(), ...receiversByMint.keys()]);
-
-  for (const mint of allMints) {
-    const from = sendersByMint.get(mint) || '';
-    const to = receiversByMint.get(mint) || '';
-
-    // Skip if same wallet (no real transfer)
-    if (from && to && from === to) continue;
-
-    // Skip if neither side is present (shouldn't happen but defensive)
-    if (!from && !to) continue;
-
-    // Real transfer: both sender and receiver exist
-    if (from && to) {
-      transfers.push({ mintAddress: mint, from, to });
-      continue;
-    }
-
-    // Mint event: receiver only, no sender
-    // (Only count as mint if pre has no entries for this mint at all)
-    if (!from && to) {
-      const hadPreEntry = pre.some((b: any) => b.mint === mint);
-      if (!hadPreEntry) {
-        transfers.push({ mintAddress: mint, from: '', to });
-      }
-      // If there was a pre entry but no valid sender, it's likely an escrow
-      // account change (e.g., cancel buy) — skip it.
-    }
-
-    // Burn event: sender only, no receiver
-    // (Only count as burn if post has no entries for this mint at all)
-    if (from && !to) {
-      const hadPostEntry = post.some((b: any) => b.mint === mint);
-      if (!hadPostEntry) {
-        transfers.push({ mintAddress: mint, from, to: '' });
-      }
-    }
-  }
-
-  return transfers;
 }

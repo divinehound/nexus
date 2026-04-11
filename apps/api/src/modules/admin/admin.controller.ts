@@ -168,6 +168,27 @@ export class AdminController {
     return this.holderHistoryService.getCollectionHolderHistoryScanStatus(id);
   }
 
+  @Get('collections/:id/holder-history/reconciliation')
+  @ApiOperation({ summary: 'Get Solana holder history reconciliation summary + mismatches' })
+  getSolanaReconciliation(@Param('id') id: string, @Query('limit') limit?: string) {
+    return this.holderHistoryService.getSolanaReconciliation(id, limit ? parseInt(limit) : 200);
+  }
+
+  @Post('collections/:id/holder-history/mark-for-review')
+  @ApiOperation({ summary: 'Mark specific Solana signatures for re-parsing on next scan' })
+  markSignaturesForReview(
+    @Param('id') id: string,
+    @Body() body: { signatures: string[] },
+  ) {
+    return this.holderHistoryService.markSolanaSignaturesForReview(id, body.signatures || []);
+  }
+
+  @Get('solana/signatures/:signature/raw')
+  @ApiOperation({ summary: 'Get stored raw_data + parsed transfers for a Solana signature' })
+  getSolanaSignatureRawData(@Param('signature') signature: string) {
+    return this.holderHistoryService.getSolanaSignatureRawData(signature);
+  }
+
   @Post('collections/:id/mark-spam')
   @ApiOperation({ summary: 'Mark a collection as spam' })
   markCollectionAsSpam(@Param('id') id: string, @Body() body: { notes?: string }) {
