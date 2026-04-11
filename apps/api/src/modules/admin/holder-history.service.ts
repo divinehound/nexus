@@ -577,24 +577,38 @@ export class HolderHistoryService {
     this.logger.log(`[Solana] Phase 1 complete: ${dbMints.length} assets persisted`);
 
     // =====================================================================
-    // PHASE 2: Signature Collection (incremental)
+    // PHASE 2: Signature Collection (incremental, per-mint)
     // =====================================================================
-    // For each asset, call getSignaturesForAddress newest-first, stopping at
-    // the first signature already stored. Captures block_time and slot for
-    // chronological ordering later.
+    // For each asset, call getSignaturesForAddress with `until` set to the
+    // newest signature we already have for THAT SPECIFIC mint. This gives us
+    // correct incremental semantics and avoids the cross-mint collision that
+    // happens when using a collection-wide "known signatures" set.
     this.logger.log(`[Solana] Phase 2: Collecting signatures for ${dbMints.length} assets`);
-    const knownSignatures = new Set<string>();
-    const existingSigRows = await this.db.query.solanaRawSignatures.findMany({
-      where: eq(solanaRawSignatures.collectionId, collection.id),
-      columns: { signature: true },
-    });
-    for (const row of existingSigRows) knownSignatures.add(row.signature);
+
+    // Build a map of mint → newest known signature (for incremental scans)
+    const newestByMint = new Map<string, string>();
+    const newestRows = await this.db
+      .select({
+        mintAddress: solanaRawSignatures.mintAddress,
+        signature: solanaRawSignatures.signature,
+        blockTime: solanaRawSignatures.blockTime,
+      })
+      .from(solanaRawSignatures)
+      .where(eq(solanaRawSignatures.collectionId, collection.id))
+      .orderBy(desc(solanaRawSignatures.blockTime));
+    for (const row of newestRows) {
+      // orderBy desc means first seen per mint = newest
+      if (!newestByMint.has(row.mintAddress)) {
+        newestByMint.set(row.mintAddress, row.signature);
+      }
+    }
 
     let newSigCount = 0;
     for (let i = 0; i < dbMints.length; i++) {
       const mint = dbMints[i];
       try {
-        const entries = await this.collectSignaturesWithMetadata(mint.mintAddress, solanaRpcUrl, knownSignatures);
+        const untilSig = newestByMint.get(mint.mintAddress);
+        const entries = await this.collectSignaturesWithMetadata(mint.mintAddress, solanaRpcUrl, untilSig);
         if (entries.length > 0) {
           for (const batch of chunkArray(entries, 500)) {
             await this.db
@@ -610,7 +624,6 @@ export class HolderHistoryService {
                 })),
               )
               .onConflictDoNothing();
-            for (const e of batch) knownSignatures.add(e.signature);
             newSigCount += batch.length;
           }
         }
@@ -947,14 +960,24 @@ export class HolderHistoryService {
   private async collectSignaturesWithMetadata(
     mintAddress: string,
     rpcUrl: string,
-    knownSignatures: Set<string>,
+    untilSignature?: string,
   ): Promise<Array<{ signature: string; slot: number; blockTime: number | null }>> {
+    // Use Solana RPC's `until` parameter to bound the search at the newest
+    // signature we already have for THIS mint. This is per-mint, so cross-mint
+    // signature collisions don't cause us to stop too early.
+    //
+    // First-time collection (no untilSignature): walks backward paging through
+    // `before` until the end of available history.
+    //
+    // Incremental: returns only signatures newer than the stored newest,
+    // stopping automatically when the RPC hits our `until` marker.
     const results: Array<{ signature: string; slot: number; blockTime: number | null }> = [];
     let before: string | undefined;
 
     while (true) {
       const params: Record<string, unknown> = { limit: 1000, commitment: 'finalized' };
       if (before) params.before = before;
+      if (untilSignature) params.until = untilSignature;
 
       const result = await this.solanaRpcCallWithRetry(rpcUrl, 'getSignaturesForAddress', [mintAddress, params], 0);
       const entries = (result ?? []) as Array<{
@@ -964,17 +987,12 @@ export class HolderHistoryService {
         err: unknown;
       }>;
 
-      let hitKnown = false;
       for (const entry of entries) {
         if (entry.err) continue;
-        if (knownSignatures.has(entry.signature)) {
-          hitKnown = true;
-          break;
-        }
         results.push({ signature: entry.signature, slot: entry.slot, blockTime: entry.blockTime });
       }
 
-      if (hitKnown || entries.length < 1000) break;
+      if (entries.length < 1000) break;
       before = entries[entries.length - 1].signature;
     }
 
