@@ -27,6 +27,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
   const [page, setPage] = useState(1);
   const [expandedWallet, setExpandedWallet] = useState<string | null>(null);
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+  const [walletSearch, setWalletSearch] = useState('');
 
   useEffect(() => {
     params.then((p) => setCollectionId(p.id));
@@ -56,11 +57,17 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
     return wallets;
   }, [data, sortField, sortDirection]);
 
-  const totalPages = Math.max(1, Math.ceil(sortedWallets.length / PAGE_SIZE));
+  const filteredWallets = useMemo(() => {
+    const query = walletSearch.trim().toLowerCase();
+    if (!query) return sortedWallets;
+    return sortedWallets.filter((w: any) => w.address?.toLowerCase().includes(query));
+  }, [sortedWallets, walletSearch]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredWallets.length / PAGE_SIZE));
   const pagedWallets = useMemo(() => {
     const start = (page - 1) * PAGE_SIZE;
-    return sortedWallets.slice(start, start + PAGE_SIZE);
-  }, [sortedWallets, page]);
+    return filteredWallets.slice(start, start + PAGE_SIZE);
+  }, [filteredWallets, page]);
 
   useEffect(() => {
     if (page > totalPages) {
@@ -214,8 +221,24 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
             </div>
             <div className="text-xs text-gray-500">
               Showing {(page - 1) * PAGE_SIZE + (pagedWallets.length > 0 ? 1 : 0)}-
-              {(page - 1) * PAGE_SIZE + pagedWallets.length} of {sortedWallets.length}
+              {(page - 1) * PAGE_SIZE + pagedWallets.length} of {filteredWallets.length}
+              {walletSearch.trim() && filteredWallets.length !== sortedWallets.length && (
+                <span className="text-gray-600"> (filtered from {sortedWallets.length})</span>
+              )}
             </div>
+          </div>
+
+          <div className="mt-3">
+            <input
+              type="text"
+              value={walletSearch}
+              onChange={(e) => {
+                setWalletSearch(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search wallet address..."
+              className="w-full rounded border border-gray-700 bg-gray-900 px-3 py-2 font-mono text-xs text-white placeholder-gray-500"
+            />
           </div>
 
           <div className="mt-4 overflow-x-auto">
