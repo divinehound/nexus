@@ -461,58 +461,59 @@ export class HolderHistoryService {
     job.processedTransfers = 0;
     this.jobs.set(collection.id, { ...job });
 
-    // --- Phase 1: Mint Discovery (persisted to DB for resume) ---
+    // --- Phase 1: Mint Discovery (always re-runs to catch new mints + updated owners) ---
+    this.logger.log(`[Solana Hybrid] Phase 1: Discovering mints for ${collection.contractAddress}`);
+    const mints = await this.discoverSolanaMints(collection.contractAddress, heliusApiKey);
+    this.logger.log(`[Solana Hybrid] Discovered ${mints.length} mints from DAS`);
+
+    // Upsert all mints: inserts new ones, updates current_owner for existing ones.
+    for (const batch of chunkArray(mints, 500)) {
+      await this.db
+        .insert(solanaIndexedMints)
+        .values(
+          batch.map((m) => ({
+            collectionId: collection.id,
+            mintAddress: m.mintAddress,
+            currentOwner: m.currentOwner || null,
+            sigCollectionStatus: 'pending',
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [solanaIndexedMints.collectionId, solanaIndexedMints.mintAddress],
+          set: {
+            currentOwner: sql`excluded.current_owner`,
+          },
+        });
+    }
+
     let dbMints = await this.db.query.solanaIndexedMints.findMany({
       where: eq(solanaIndexedMints.collectionId, collection.id),
     });
-
-    let mints: SolanaMint[];
-    if (dbMints.length > 0) {
-      this.logger.log(`[Solana Hybrid] Phase 1: Found ${dbMints.length} previously discovered mints in DB`);
-      mints = dbMints.map((m) => ({ mintAddress: m.mintAddress, currentOwner: m.currentOwner || '' }));
-    } else {
-      this.logger.log(`[Solana Hybrid] Phase 1: Discovering mints for ${collection.contractAddress}`);
-      mints = await this.discoverSolanaMints(collection.contractAddress, heliusApiKey);
-      this.logger.log(`[Solana Hybrid] Discovered ${mints.length} mints, persisting to DB`);
-
-      for (const batch of chunkArray(mints, 500)) {
-        await this.db
-          .insert(solanaIndexedMints)
-          .values(
-            batch.map((m) => ({
-              collectionId: collection.id,
-              mintAddress: m.mintAddress,
-              currentOwner: m.currentOwner || null,
-              sigCollectionStatus: 'pending',
-            })),
-          )
-          .onConflictDoNothing();
-      }
-
-      dbMints = await this.db.query.solanaIndexedMints.findMany({
-        where: eq(solanaIndexedMints.collectionId, collection.id),
-      });
-    }
+    this.logger.log(`[Solana Hybrid] Phase 1 complete: ${dbMints.length} mints in DB (${mints.length} from DAS)`);
 
     const mintAddressSet = new Set(mints.map((m) => m.mintAddress));
 
-    // --- Phase 2: Signature Collection (persisted to DB for resume) ---
-    const pendingMints = dbMints.filter((m) => m.sigCollectionStatus !== 'complete');
-    // Track mint times + slots in memory (dbMints snapshot is stale after Phase 2 writes)
+    // --- Phase 2: Signature Collection (incremental — always re-runs) ---
+    // Re-collect signatures for ALL mints on every scan. The knownSignatures
+    // set (from raw_signatures + balance history) causes collectSignaturesForMint
+    // to stop as soon as it hits a known sig, so subsequent scans are cheap and
+    // only pick up NEW transactions since the last scan.
     const mintInfoMap = new Map<string, { time: Date | null; slot: number }>();
     for (const m of dbMints) {
       mintInfoMap.set(m.mintAddress, { time: m.firstMintTime, slot: 0 });
     }
     this.logger.log(
-      `[Solana Hybrid] Phase 2: Collecting signatures for ${pendingMints.length} pending mints (${dbMints.length - pendingMints.length} already complete)`,
+      `[Solana Hybrid] Phase 2: Re-collecting signatures for ${dbMints.length} mints (incremental)`,
     );
 
-    for (let i = 0; i < pendingMints.length; i++) {
-      const mint = pendingMints[i];
+    let phase2NewSigs = 0;
+    for (let i = 0; i < dbMints.length; i++) {
+      const mint = dbMints[i];
       try {
         const { signatures: sigs, oldestBlockTime, oldestSlot } = await this.collectSignaturesForMint(mint.mintAddress, solanaRpcUrl, knownSignatures);
 
         if (sigs.length > 0) {
+          phase2NewSigs += sigs.length;
           for (const sigBatch of chunkArray(sigs, 500)) {
             await this.db
               .insert(solanaRawSignatures)
@@ -529,10 +530,16 @@ export class HolderHistoryService {
           for (const s of sigs) knownSignatures.add(s);
         }
 
-        // Update in-memory mint info map (dbMints snapshot is stale)
+        // Update in-memory mint info map. Preserve existing first_mint_time if
+        // we didn't get an older value (only the very first scan discovers the mint event).
+        const existing = mintInfoMap.get(mint.mintAddress);
+        const newestOldestTime = oldestBlockTime ? new Date(oldestBlockTime * 1000) : null;
+        const useTime = existing?.time && (!newestOldestTime || existing.time < newestOldestTime)
+          ? existing.time
+          : newestOldestTime;
         mintInfoMap.set(mint.mintAddress, {
-          time: oldestBlockTime ? new Date(oldestBlockTime * 1000) : null,
-          slot: oldestSlot ?? 0,
+          time: useTime,
+          slot: oldestSlot ?? existing?.slot ?? 0,
         });
 
         await this.db
@@ -540,7 +547,7 @@ export class HolderHistoryService {
           .set({
             sigCollectionStatus: 'complete',
             sigCount: sigs.length,
-            firstMintTime: oldestBlockTime ? new Date(oldestBlockTime * 1000) : null,
+            ...(useTime ? { firstMintTime: useTime } : {}),
           })
           .where(
             and(eq(solanaIndexedMints.collectionId, collection.id), eq(solanaIndexedMints.mintAddress, mint.mintAddress)),
@@ -557,10 +564,11 @@ export class HolderHistoryService {
 
       await sleep(500);
 
-      if ((i + 1) % 100 === 0 || i === pendingMints.length - 1) {
-        this.logger.log(`[Solana Hybrid] Signature collection progress: ${i + 1}/${pendingMints.length} pending mints`);
+      if ((i + 1) % 100 === 0 || i === dbMints.length - 1) {
+        this.logger.log(`[Solana Hybrid] Signature collection progress: ${i + 1}/${dbMints.length} mints, ${phase2NewSigs} new signatures`);
       }
     }
+    this.logger.log(`[Solana Hybrid] Phase 2 complete: ${phase2NewSigs} new signatures collected`);
 
     // --- Phase 3: Batch Parse (collect transfers only — no state updates yet) ---
     this.logger.log(`[Solana Hybrid] Phase 3: Parsing signatures via Helius batch endpoint`);
