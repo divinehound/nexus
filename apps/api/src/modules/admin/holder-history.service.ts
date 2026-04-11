@@ -415,50 +415,39 @@ export class HolderHistoryService {
       throw new Error('SOLANA_RPC_URL or HELIUS_API_KEY required for Solana hybrid indexing');
     }
 
-    // Delete synthetic DAS fallback rows from previous runs. Phase 3b may now
-    // be able to find real transfers for mints that were previously DAS-only,
-    // so we clear the synthetic rows and let the pipeline rebuild them.
-    const dasDeleted = await this.db
+    // Full reset: delete all history for this collection and reset parsed flags.
+    // We rebuild everything from scratch each scan so we can process transfers
+    // in strict global chronological order (required for correct balanceAfter).
+    await this.db
       .delete(collectionHolderBalanceHistory)
-      .where(
-        and(
-          eq(collectionHolderBalanceHistory.collectionId, collection.id),
-          like(collectionHolderBalanceHistory.transactionHash, 'das-mint:%'),
-        ),
-      );
-    this.logger.log(`[Solana Hybrid] Cleared previous DAS fallback rows: ${JSON.stringify(dasDeleted)}`);
+      .where(eq(collectionHolderBalanceHistory.collectionId, collection.id));
+    await this.db
+      .update(solanaRawSignatures)
+      .set({ parsed: false })
+      .where(eq(solanaRawSignatures.collectionId, collection.id));
+    this.logger.log(`[Solana Hybrid] Reset: cleared history and parsed flags for rebuild`);
 
-    // Rebuild summaryState from actual transfer history records, NOT from the
-    // summaries table. This ensures idempotent re-runs — DAS fallback won't
-    // double-count because we always start from the source of truth.
+    // Start with an empty summaryState — we just deleted all history and will
+    // rebuild chronologically from scratch via the collect-sort-process pattern.
     const summaryState = new Map<string, MutableSummary>();
-    const existingHistory = await this.db.query.collectionHolderBalanceHistory.findMany({
-      where: eq(collectionHolderBalanceHistory.collectionId, collection.id),
-      orderBy: [asc(collectionHolderBalanceHistory.blockNumber), asc(collectionHolderBalanceHistory.logIndex)],
-    });
     const mintsWithHistory = new Set<string>();
-    for (const record of existingHistory) {
-      mintsWithHistory.add(record.tokenId);
-      const summary = ensureSummary(summaryState, record.address);
-      if (record.direction === 'in') {
-        summary.currentBalance += 1;
-        summary.totalReceivedCount += 1;
-        const blockNum = record.blockNumber;
-        if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
-          summary.firstReceivedAt = record.blockTimestamp;
-          summary.firstReceivedBlock = blockNum;
-        }
-        summary.lastReceivedAt = record.blockTimestamp;
-        summary.lastReceivedBlock = blockNum;
-      } else {
-        summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
-        summary.totalSentCount += 1;
-      }
-    }
-    this.logger.log(`[Solana Hybrid] Replayed ${existingHistory.length} existing history records, ${mintsWithHistory.size} mints with transfer history`);
 
     const touched = new Set<string>();
     let maxSlot = collection.holderHistoryLastCheckedBlock ?? 0;
+
+    // Accumulates all transfers extracted from Phase 3 and Phase 3b. We sort
+    // and process these chronologically AFTER extraction so balanceAfter values
+    // form a correct running balance regardless of extraction order.
+    type CollectedTransfer = {
+      mintAddress: string;
+      from: string;
+      to: string;
+      signature: string;
+      timestamp: Date;
+      slot: number;
+    };
+    const collectedTransfers: CollectedTransfer[] = [];
+
 
     // Build known signatures from both balance history and raw_signatures for dedup
     const knownHistorySigs = await this.getKnownTransactionHashesForCollection(collection.id);
@@ -573,20 +562,11 @@ export class HolderHistoryService {
       }
     }
 
-    // --- Phase 3 & 4: Batch Parse + Transfer Extraction (from DB signatures) ---
-    this.logger.log(`[Solana Hybrid] Phase 3: Parsing unparsed signatures via Helius batch endpoint`);
-    const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
+    // --- Phase 3: Batch Parse (collect transfers only — no state updates yet) ---
+    this.logger.log(`[Solana Hybrid] Phase 3: Parsing signatures via Helius batch endpoint`);
     const mintsWithTransfers = new Set<string>();
-    const perWalletLogIndex = new Map<string, number>();
     let totalParsed = 0;
     let batchNum = 0;
-
-    // Diagnostic counters
-    let diagTokenTransferTxs = 0;
-    let diagNftEventTxs = 0;
-    let diagAccountDataTxs = 0;
-    let diagSampleAccountData: string | null = null;
-    const diagSeenMints = new Set<string>();
 
     while (true) {
       const unparsedBatch = await this.db.query.solanaRawSignatures.findMany({
@@ -601,109 +581,25 @@ export class HolderHistoryService {
       const parsed = await this.heliusBatchParseWithRetry(signatures, heliusApiKey, 0);
       totalParsed += parsed.length;
 
-      // Sort by timestamp for chronological processing
-      parsed.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
-
-      // Diagnostics: collect info about parsed structure
-      for (const tx of parsed) {
-        if ((tx.tokenTransfers?.length ?? 0) > 0) diagTokenTransferTxs++;
-        if ((tx.events?.nft?.nfts?.length ?? 0) > 0) diagNftEventTxs++;
-        let hasAccountDataMint = false;
-        for (const t of tx.tokenTransfers ?? []) {
-          if (t.mint) diagSeenMints.add(t.mint);
-          if (t.tokenAddress) diagSeenMints.add(t.tokenAddress);
-        }
-        for (const n of tx.events?.nft?.nfts ?? []) {
-          if (n.mint) diagSeenMints.add(n.mint);
-        }
-        for (const a of tx.accountData ?? []) {
-          for (const c of a.tokenBalanceChanges ?? []) {
-            if (c.mint) {
-              diagSeenMints.add(c.mint);
-              if (mintAddressSet.has(c.mint)) hasAccountDataMint = true;
-            }
-          }
-        }
-        if (hasAccountDataMint) diagAccountDataTxs++;
-        // Capture a sample accountData entry for debugging
-        if (!diagSampleAccountData && (tx.accountData?.length ?? 0) > 0) {
-          const hasAnyTokenChanges = tx.accountData!.some((a) => (a.tokenBalanceChanges?.length ?? 0) > 0);
-          const sampleEntry = tx.accountData![0];
-          const keys = Object.keys(sampleEntry);
-          diagSampleAccountData = `keys=[${keys.join(',')}], entries=${tx.accountData!.length}, anyTokenBalanceChanges=${hasAnyTokenChanges}`;
-          if (hasAnyTokenChanges) {
-            const entryWithChanges = tx.accountData!.find((a) => (a.tokenBalanceChanges?.length ?? 0) > 0);
-            diagSampleAccountData += `, sampleChange=${JSON.stringify(entryWithChanges?.tokenBalanceChanges?.[0])}`;
-          }
-        }
-      }
-
-      // Extract transfers
+      // Extract transfers and accumulate — DO NOT update summaryState or create
+      // history rows yet. We process everything in chronological order after
+      // Phase 3b completes.
       for (const tx of parsed) {
         const transfers = extractSolanaTransfersFromBatch(tx, mintAddressSet);
+        if (transfers.length === 0) continue;
         const timestamp = new Date((tx.timestamp ?? Math.floor(Date.now() / 1000)) * 1000);
         const txSignature = tx.signature || '';
         const slot = tx.slot ?? 0;
-
-        if (slot > maxSlot) maxSlot = slot;
-
         for (const transfer of transfers) {
           mintsWithTransfers.add(transfer.mintAddress);
-          const from = transfer.from; // Solana addresses are case-sensitive (Base58)
-          const to = transfer.to;
-          const blockNum = slot || maxSlot;
-
-          if (from) {
-            const summary = ensureSummary(summaryState, from);
-            summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
-            summary.totalSentCount += 1;
-            touched.add(from);
-            const logKey = `${txSignature}:${from}`;
-            const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
-            perWalletLogIndex.set(logKey, logIndex);
-            historyRows.push({
-              collectionId: collection.id,
-              chain: collection.chain,
-              address: from,
-              blockNumber: blockNum,
-              blockTimestamp: timestamp,
-              transactionHash: txSignature,
-              logIndex,
-              tokenId: transfer.mintAddress,
-              direction: 'out',
-              balanceAfter: summary.currentBalance,
-              counterpartyAddress: to || null,
-            });
-          }
-
-          if (to) {
-            const summary = ensureSummary(summaryState, to);
-            summary.currentBalance += 1;
-            summary.totalReceivedCount += 1;
-            if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
-              summary.firstReceivedAt = timestamp;
-              summary.firstReceivedBlock = blockNum;
-            }
-            summary.lastReceivedAt = timestamp;
-            summary.lastReceivedBlock = blockNum;
-            touched.add(to);
-            const logKey = `${txSignature}:${to}`;
-            const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
-            perWalletLogIndex.set(logKey, logIndex);
-            historyRows.push({
-              collectionId: collection.id,
-              chain: collection.chain,
-              address: to,
-              blockNumber: blockNum,
-              blockTimestamp: timestamp,
-              transactionHash: txSignature,
-              logIndex,
-              tokenId: transfer.mintAddress,
-              direction: 'in',
-              balanceAfter: summary.currentBalance,
-              counterpartyAddress: from || null,
-            });
-          }
+          collectedTransfers.push({
+            mintAddress: transfer.mintAddress,
+            from: transfer.from,
+            to: transfer.to,
+            signature: txSignature,
+            timestamp,
+            slot,
+          });
         }
       }
 
@@ -713,37 +609,18 @@ export class HolderHistoryService {
         .set({ parsed: true })
         .where(inArray(solanaRawSignatures.id, unparsedBatch.map((s) => s.id)));
 
-      // Persist history rows periodically to avoid huge memory buildup
-      if (historyRows.length >= 1000) {
-        await this.persistHistoryBatch(historyRows);
-        historyRows.length = 0;
-      }
-
       await sleep(500); // Rate limit Helius
 
       if (batchNum % 10 === 0) {
-        this.logger.log(`[Solana Hybrid] Parse progress: ${totalParsed} txs parsed, ${mintsWithTransfers.size} mints with transfers`);
+        this.logger.log(
+          `[Solana Hybrid] Phase 3 progress: ${totalParsed} txs parsed, ${collectedTransfers.length} transfers collected, ${mintsWithTransfers.size} mints`,
+        );
       }
     }
 
-    // Persist remaining history rows
-    await this.persistHistoryBatch(historyRows);
-
-    // Log diagnostics
-    const matchingMints = [...diagSeenMints].filter((m) => mintAddressSet.has(m));
-    if (diagSampleAccountData) {
-      this.logger.log(`[Solana Hybrid] AccountData sample: ${diagSampleAccountData}`);
-    }
     this.logger.log(
-      `[Solana Hybrid] Diagnostics: ${diagTokenTransferTxs} txs had tokenTransfers, ${diagNftEventTxs} had events.nft.nfts, ${diagAccountDataTxs} had accountData with matching mints`,
+      `[Solana Hybrid] Phase 3 complete: ${totalParsed} txs parsed, ${collectedTransfers.length} transfers collected, ${mintsWithTransfers.size} mints with transfers`,
     );
-    this.logger.log(
-      `[Solana Hybrid] Unique mints in parsed data: ${diagSeenMints.size}, matching our set: ${matchingMints.length}`,
-    );
-    if (diagSeenMints.size > 0 && matchingMints.length === 0) {
-      this.logger.log(`[Solana Hybrid] Sample seen mints: [${[...diagSeenMints].slice(0, 5).join(', ')}]`);
-      this.logger.log(`[Solana Hybrid] Sample expected mints: [${[...mintAddressSet].slice(0, 5).join(', ')}]`);
-    }
 
     // --- Phase 3b: Raw getTransaction fallback for mints without detected transfers ---
     // The Helius batch parse misses most NFT transfers (tokenBalanceChanges is empty).
@@ -754,12 +631,9 @@ export class HolderHistoryService {
 
     if (mintsNeedingFallback.length > 0) {
       // Per-asset fallback using Helius Enhanced Transactions endpoint.
-      // Works for both standard NFTs and cNFTs (compressed NFTs) where
-      // getSignaturesForAddress on standard RPC won't find actual transfers
-      // because cNFTs don't live in token accounts.
-      // Cost: 100 credits per mint × 1091 = ~109K credits (within 1M free tier).
+      // Collects transfers into the same collectedTransfers array as Phase 3.
       this.logger.log(
-        `[Solana Hybrid] Phase 3b: Per-asset tx fetch for ${mintsNeedingFallback.length} mints via Helius /v0/addresses/{asset}/transactions`,
+        `[Solana Hybrid] Phase 3b: Per-asset tx fetch for ${mintsNeedingFallback.length} mints`,
       );
 
       let fallbackTransferCount = 0;
@@ -769,12 +643,11 @@ export class HolderHistoryService {
       let diag3bMintsWithTransfers = 0;
 
       for (let mi = 0; mi < mintsNeedingFallback.length; mi++) {
-        if (mi > 0) await sleep(600); // ~1.6 req/s, safely under Helius 2 req/s
+        if (mi > 0) await sleep(600);
 
-        // Log progress BEFORE any continues
         if ((mi + 1) % 25 === 0 || mi === mintsNeedingFallback.length - 1) {
           this.logger.log(
-            `[Solana Hybrid] Phase 3b progress: ${mi + 1}/${mintsNeedingFallback.length} mints | withTxs=${diag3bMintsWithTxs}, withTransfers=${diag3bMintsWithTransfers}, transfers=${fallbackTransferCount}, totalMintsWithTransfers=${mintsWithTransfers.size}`,
+            `[Solana Hybrid] Phase 3b progress: ${mi + 1}/${mintsNeedingFallback.length} mints | withTxs=${diag3bMintsWithTxs}, withTransfers=${diag3bMintsWithTransfers}, totalCollected=${fallbackTransferCount}`,
           );
         }
 
@@ -795,17 +668,8 @@ export class HolderHistoryService {
         consecutiveFailures = 0;
         diag3bMintsProcessed++;
 
-        if (mi === 0) {
-          this.logger.log(
-            `[Solana Hybrid] Phase 3b first mint: ${assetTxs.length} txs returned`,
-          );
-        }
-
         if (assetTxs.length === 0) continue;
         diag3bMintsWithTxs++;
-
-        // Sort chronologically so balanceAfter is correct
-        assetTxs.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
 
         let hadTransfer = false;
         for (const tx of assetTxs) {
@@ -816,147 +680,144 @@ export class HolderHistoryService {
           const txTimestamp = new Date((tx.timestamp ?? Math.floor(Date.now() / 1000)) * 1000);
           const txSignature = tx.signature || '';
           const txSlot = tx.slot ?? 0;
-          if (txSlot > maxSlot) maxSlot = txSlot;
 
           for (const transfer of transfers) {
             mintsWithTransfers.add(transfer.mintAddress);
-            const from = transfer.from;
-            const to = transfer.to;
-            const blockNum = txSlot || maxSlot;
-
-            if (from) {
-              const summary = ensureSummary(summaryState, from);
-              summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
-              summary.totalSentCount += 1;
-              touched.add(from);
-              const logKey = `${txSignature}:${from}`;
-              const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
-              perWalletLogIndex.set(logKey, logIndex);
-              historyRows.push({
-                collectionId: collection.id,
-                chain: collection.chain,
-                address: from,
-                blockNumber: blockNum,
-                blockTimestamp: txTimestamp,
-                transactionHash: txSignature,
-                logIndex,
-                tokenId: transfer.mintAddress,
-                direction: 'out',
-                balanceAfter: summary.currentBalance,
-                counterpartyAddress: to || null,
-              });
-            }
-
-            if (to) {
-              const summary = ensureSummary(summaryState, to);
-              summary.currentBalance += 1;
-              summary.totalReceivedCount += 1;
-              if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
-                summary.firstReceivedAt = txTimestamp;
-                summary.firstReceivedBlock = blockNum;
-              }
-              summary.lastReceivedAt = txTimestamp;
-              summary.lastReceivedBlock = blockNum;
-              touched.add(to);
-              const logKey = `${txSignature}:${to}`;
-              const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
-              perWalletLogIndex.set(logKey, logIndex);
-              historyRows.push({
-                collectionId: collection.id,
-                chain: collection.chain,
-                address: to,
-                blockNumber: blockNum,
-                blockTimestamp: txTimestamp,
-                transactionHash: txSignature,
-                logIndex,
-                tokenId: transfer.mintAddress,
-                direction: 'in',
-                balanceAfter: summary.currentBalance,
-                counterpartyAddress: from || null,
-              });
-            }
-
+            collectedTransfers.push({
+              mintAddress: transfer.mintAddress,
+              from: transfer.from,
+              to: transfer.to,
+              signature: txSignature,
+              timestamp: txTimestamp,
+              slot: txSlot,
+            });
             fallbackTransferCount++;
           }
         }
 
         if (hadTransfer) diag3bMintsWithTransfers++;
-
-        // Persist periodically
-        if (historyRows.length >= 1000) {
-          await this.persistHistoryBatch(historyRows);
-          historyRows.length = 0;
-        }
       }
 
-      await this.persistHistoryBatch(historyRows);
-      historyRows.length = 0;
-
       this.logger.log(
-        `[Solana Hybrid] Phase 3b complete: processed=${diag3bMintsProcessed}, mintsWithTxs=${diag3bMintsWithTxs}, mintsWithTransfers=${diag3bMintsWithTransfers}, transferCount=${fallbackTransferCount}`,
+        `[Solana Hybrid] Phase 3b complete: processed=${diag3bMintsProcessed}, mintsWithTxs=${diag3bMintsWithTxs}, mintsWithTransfers=${diag3bMintsWithTransfers}, collected=${fallbackTransferCount}`,
       );
     }
 
-    // For mints with no transfer history (this run or previous), use DAS ownership.
-    // Skips mints already accounted for via transfer records to prevent double-counting.
-    // Sort by mint time so balanceAfter values are chronologically correct.
-    const now = new Date();
-    const dasHistoryRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
-
-    const dasFallbackMints = mints
-      .filter((m) => !mintsWithTransfers.has(m.mintAddress) && !mintsWithHistory.has(m.mintAddress) && m.currentOwner)
-      .sort((a, b) => {
-        const aTime = mintInfoMap.get(a.mintAddress)?.time?.getTime() ?? 0;
-        const bTime = mintInfoMap.get(b.mintAddress)?.time?.getTime() ?? 0;
-        return aTime - bTime;
+    // --- Phase 3c: DAS ownership fallback ---
+    // For mints with no detected transfers, synthesize a "mint event" from
+    // DAS current ownership + mint time. Add to collectedTransfers so they
+    // get sorted and processed chronologically alongside real transfers.
+    const nowDate = new Date();
+    let dasFallbackCount = 0;
+    for (const mint of mints) {
+      if (mintsWithTransfers.has(mint.mintAddress)) continue;
+      if (!mint.currentOwner) continue;
+      const mintInfo = mintInfoMap.get(mint.mintAddress);
+      const mintTime = mintInfo?.time ?? nowDate;
+      const mintSlot = mintInfo?.slot ?? 0;
+      collectedTransfers.push({
+        mintAddress: mint.mintAddress,
+        from: '',
+        to: mint.currentOwner,
+        signature: `das-mint:${mint.mintAddress}`,
+        timestamp: mintTime,
+        slot: mintSlot,
       });
+      dasFallbackCount++;
+    }
+    this.logger.log(`[Solana Hybrid] Phase 3c: Added ${dasFallbackCount} DAS ownership events`);
 
-    for (const mint of dasFallbackMints) {
-      const ownerKey = mint.currentOwner; // Solana addresses are case-sensitive (Base58)
-        const summary = ensureSummary(summaryState, ownerKey);
-        summary.currentBalance += 1;
-        summary.totalReceivedCount += 1;
-        const mintInfo = mintInfoMap.get(mint.mintAddress);
-        const mintTime = mintInfo?.time ?? now;
-        const mintSlot = mintInfo?.slot ?? 0;
-        if (!summary.firstReceivedAt || mintTime < summary.firstReceivedAt) {
-          summary.firstReceivedAt = mintTime;
-          summary.firstReceivedBlock = mintSlot;
-        }
-        if (!summary.lastReceivedAt || mintTime > summary.lastReceivedAt) {
-          summary.lastReceivedAt = mintTime;
-          summary.lastReceivedBlock = mintSlot;
-        }
-        touched.add(ownerKey);
+    // --- Phase 4: Sort collected transfers globally and process chronologically ---
+    // This is CRITICAL for correct balanceAfter values — if transfers are
+    // processed out of order, the running balance won't be monotonic over time.
+    collectedTransfers.sort((a, b) => {
+      const diff = a.timestamp.getTime() - b.timestamp.getTime();
+      if (diff !== 0) return diff;
+      return a.slot - b.slot;
+    });
 
-        // Create a balance history row so the mint shows in "Balance over time"
-        dasHistoryRows.push({
+    // Dedupe via unique constraint (txHash + logIndex + address); also
+    // track per-key logIndex so transfers sharing a signature get unique indices.
+    const perWalletLogIndex = new Map<string, number>();
+    const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
+
+    this.logger.log(
+      `[Solana Hybrid] Phase 4: Processing ${collectedTransfers.length} collected transfers in chronological order`,
+    );
+
+    for (const transfer of collectedTransfers) {
+      const { mintAddress, from, to, signature, timestamp, slot } = transfer;
+      const blockNum = slot || maxSlot;
+      if (slot > maxSlot) maxSlot = slot;
+
+      if (from) {
+        const summary = ensureSummary(summaryState, from);
+        summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
+        summary.totalSentCount += 1;
+        touched.add(from);
+        const logKey = `${signature}:${from}`;
+        const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
+        perWalletLogIndex.set(logKey, logIndex);
+        historyRows.push({
           collectionId: collection.id,
           chain: collection.chain,
-          address: ownerKey,
-          blockNumber: mintSlot,
-          blockTimestamp: mintTime,
-          transactionHash: `das-mint:${mint.mintAddress}`,
-          logIndex: 1,
-          tokenId: mint.mintAddress,
+          address: from,
+          blockNumber: blockNum,
+          blockTimestamp: timestamp,
+          transactionHash: signature,
+          logIndex,
+          tokenId: mintAddress,
+          direction: 'out',
+          balanceAfter: summary.currentBalance,
+          counterpartyAddress: to || null,
+        });
+      }
+
+      if (to) {
+        const summary = ensureSummary(summaryState, to);
+        summary.currentBalance += 1;
+        summary.totalReceivedCount += 1;
+        if (!summary.firstReceivedAt || (summary.firstReceivedBlock ?? Number.MAX_SAFE_INTEGER) > blockNum) {
+          summary.firstReceivedAt = timestamp;
+          summary.firstReceivedBlock = blockNum;
+        }
+        summary.lastReceivedAt = timestamp;
+        summary.lastReceivedBlock = blockNum;
+        touched.add(to);
+        const logKey = `${signature}:${to}`;
+        const logIndex = (perWalletLogIndex.get(logKey) ?? 0) + 1;
+        perWalletLogIndex.set(logKey, logIndex);
+        historyRows.push({
+          collectionId: collection.id,
+          chain: collection.chain,
+          address: to,
+          blockNumber: blockNum,
+          blockTimestamp: timestamp,
+          transactionHash: signature,
+          logIndex,
+          tokenId: mintAddress,
           direction: 'in',
           balanceAfter: summary.currentBalance,
-          counterpartyAddress: null,
+          counterpartyAddress: from || null,
         });
+      }
+
+      if (historyRows.length >= 1000) {
+        await this.persistHistoryBatch(historyRows);
+        historyRows.length = 0;
+      }
     }
 
-    if (dasHistoryRows.length > 0) {
-      this.logger.log(`[Solana Hybrid] Persisting ${dasHistoryRows.length} DAS mint history rows`);
-      await this.persistHistoryBatch(dasHistoryRows);
-    }
+    await this.persistHistoryBatch(historyRows);
+    historyRows.length = 0;
 
-    job.processedTransfers = historyRows.length + dasHistoryRows.length;
+    job.processedTransfers = collectedTransfers.length;
     job.touchedWallets = touched.size;
     job.toBlock = maxSlot;
     this.jobs.set(collection.id, { ...job });
 
     this.logger.log(
-      `[Solana Hybrid] Extracted ${mintsWithTransfers.size} mints with transfers, ${touched.size} wallets, max slot ${maxSlot}`,
+      `[Solana Hybrid] Complete: ${collectedTransfers.length} events processed, ${touched.size} wallets, max slot ${maxSlot}`,
     );
 
     await this.persistFinalHolderState(collection, summaryState, touched, maxSlot, job);
