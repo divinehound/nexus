@@ -183,7 +183,70 @@ const splTokenTransfers: Parser = {
   },
 };
 
-export const PARSERS: Parser[] = [mplCoreTransferV1, heliusEventsNft, splTokenTransfers];
+/**
+ * Parse Helius's accountData[].tokenBalanceChanges — balance-delta approach.
+ *
+ * Critical for CPI contexts where Helius doesn't populate top-level
+ * tokenTransfers but DOES reflect the final post-state in accountData.
+ * Examples: Metaplex Candy Machine V3 mints, LaunchMyNFT, and other
+ * programs that invoke SPL token operations via inner instructions.
+ *
+ * Semantics:
+ *  - Each tokenBalanceChange has `userAccount` (resolved wallet owner),
+ *    `mint`, and a signed `rawTokenAmount.tokenAmount` (positive = received,
+ *    negative = sent)
+ *  - Group changes by mint. For each matching mint:
+ *    - Accounts with positive deltas are receivers
+ *    - Accounts with negative deltas are senders
+ *    - If only a receiver exists, it's a mint event (from='')
+ *    - If only a sender exists, it's a burn event (to='')
+ */
+const accountDataTokenBalances: Parser = {
+  name: 'account_data_token_balances',
+  run(tx, ctx) {
+    const transfers: ParsedTransfer[] = [];
+    const perMint = new Map<string, { from: string | null; to: string | null }>();
+
+    for (const account of tx.accountData ?? []) {
+      for (const change of account.tokenBalanceChanges ?? []) {
+        const mint = change.mint || '';
+        if (!mint || !ctx.mintAddresses.has(mint)) continue;
+        if (!change.userAccount) continue;
+
+        const amount = parseFloat(change.rawTokenAmount?.tokenAmount || '0');
+        if (amount === 0) continue;
+
+        const existing = perMint.get(mint) || { from: null, to: null };
+        if (amount > 0) {
+          existing.to = change.userAccount;
+        } else {
+          existing.from = change.userAccount;
+        }
+        perMint.set(mint, existing);
+      }
+    }
+
+    for (const [mint, { from, to }] of perMint) {
+      if (!from && !to) continue;
+      if (from && to && from === to) continue;
+      transfers.push({
+        mintAddress: mint,
+        fromWallet: from || '',
+        toWallet: to || '',
+        parserName: 'account_data_token_balances',
+        programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', // SPL Token program
+      });
+    }
+    return transfers;
+  },
+};
+
+export const PARSERS: Parser[] = [
+  mplCoreTransferV1,
+  heliusEventsNft,
+  splTokenTransfers,
+  accountDataTokenBalances,
+];
 
 /**
  * Run all parsers against a single transaction, returning all unique transfers found.
