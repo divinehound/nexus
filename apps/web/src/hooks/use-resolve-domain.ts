@@ -2,16 +2,6 @@
 
 import { useEnsName } from 'wagmi';
 import { useQuery } from '@tanstack/react-query';
-import { Connection, PublicKey } from '@solana/web3.js';
-import { getFavoriteDomain } from '@bonfida/spl-name-service';
-
-const SOLANA_RPC = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
-
-let _solanaCon: Connection | null = null;
-function getSolanaConnection(): Connection {
-  if (!_solanaCon) _solanaCon = new Connection(SOLANA_RPC);
-  return _solanaCon;
-}
 
 function isEvmAddress(address: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/i.test(address);
@@ -31,12 +21,16 @@ function detectChainType(address: string, chain?: string): 'evm' | 'solana' | nu
   return null;
 }
 
+/** Resolve a Solana SNS domain via Bonfida's public REST API (no Node.js deps). */
 async function resolveSolanaDomain(address: string): Promise<string | null> {
   try {
-    const connection = getSolanaConnection();
-    const owner = new PublicKey(address);
-    const { reverse } = await getFavoriteDomain(connection, owner);
-    return reverse ? `${reverse}.sol` : null;
+    const res = await fetch(
+      `https://sns-sdk-proxy.bonfida.com/favorite-domain/${address}`,
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    const domain: string | undefined = json?.result?.reverse;
+    return domain ? `${domain}.sol` : null;
   } catch {
     return null;
   }
@@ -66,7 +60,7 @@ export function useResolveDomain(
     },
   });
 
-  // Solana SNS resolution via bonfida (always called, but disabled when not Solana)
+  // Solana SNS resolution via Bonfida REST API (always called, but disabled when not Solana)
   const snsResult = useQuery({
     queryKey: ['sns-domain', address],
     queryFn: () => resolveSolanaDomain(address!),
