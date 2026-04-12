@@ -7,6 +7,7 @@ import { adminGetCollectionHolderHistory, adminGetCollectionHolderHistoryStatus,
 import { truncateAddress } from '@/lib/utils';
 import BalanceLineChart from './balance-line-chart';
 import ReconciliationPanel from './reconciliation-panel';
+import WalletDetailPanel from './wallet-detail-panel';
 
 type SortField = 'currentBalance' | 'firstReceivedAt' | 'lastReceivedAt' | 'address';
 type SortDirection = 'asc' | 'desc';
@@ -19,12 +20,10 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
-  const [selectedWallet, setSelectedWallet] = useState<string>('');
   const [fromBlock, setFromBlock] = useState('');
   const [jobStatus, setJobStatus] = useState<any>(null);
   const [sortField, setSortField] = useState<SortField>('currentBalance');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-  const [historySortDirection, setHistorySortDirection] = useState<SortDirection>('desc');
   const [page, setPage] = useState(1);
   const [expandedWallet, setExpandedWallet] = useState<string | null>(null);
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
@@ -76,24 +75,6 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
       setPage(totalPages);
     }
   }, [page, totalPages]);
-
-  useEffect(() => {
-    const visibleAddresses = new Set(pagedWallets.map((wallet: any) => wallet.address));
-    if (!selectedWallet || !visibleAddresses.has(selectedWallet)) {
-      setSelectedWallet(pagedWallets[0]?.address || '');
-    }
-  }, [pagedWallets, selectedWallet]);
-
-  const walletHistory = useMemo(() => {
-    if (!data || !selectedWallet) return [];
-    const filtered = data.balanceHistory.filter((entry: any) => entry.address === selectedWallet);
-    const modifier = historySortDirection === 'asc' ? 1 : -1;
-    return filtered.sort((a: any, b: any) => {
-      const aTime = a.blockTimestamp ? new Date(a.blockTimestamp).getTime() : 0;
-      const bTime = b.blockTimestamp ? new Date(b.blockTimestamp).getTime() : 0;
-      return (aTime - bTime) * modifier;
-    });
-  }, [data, selectedWallet, historySortDirection]);
 
   const chartXDomain = useMemo((): [Date, Date] => {
     const history = data?.balanceHistory ?? [];
@@ -258,7 +239,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
       )}
 
       {activeTab === 'wallets' && (
-      <div className="grid gap-6 xl:grid-cols-[1.2fr,0.8fr]">
+      <div>
         <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
@@ -306,8 +287,8 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                   return (
                     <WalletRows key={wallet.address}>
                       <tr
-                        onClick={() => setSelectedWallet(wallet.address)}
-                        className={`cursor-pointer border-b border-gray-900 ${selectedWallet === wallet.address ? 'bg-gray-900/70' : 'hover:bg-gray-900/40'}`}
+                        onClick={() => setExpandedWallet(isExpanded ? null : wallet.address)}
+                        className={`cursor-pointer border-b border-gray-900 ${isExpanded ? 'bg-gray-900/70' : 'hover:bg-gray-900/40'}`}
                       >
                         <td className="w-8 py-3 pl-1">
                           <button
@@ -373,9 +354,10 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                       {isExpanded && (
                         <tr>
                           <td colSpan={5} className="border-b border-gray-800 bg-gray-950/60 px-4 py-3">
-                            <BalanceLineChart
+                            <WalletDetailPanel
                               entries={(data?.balanceHistory ?? []).filter((e: any) => e.address === wallet.address)}
                               xDomain={chartXDomain}
+                              chain={chain}
                             />
                           </td>
                         </tr>
@@ -407,47 +389,6 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
               Next
             </button>
           </div>
-        </div>
-
-        <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-5">
-          <div className="flex items-end justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-white">Balance over time</h2>
-              <p className="mt-1 text-sm text-gray-400">Transfer-by-transfer balance checkpoints.</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setHistorySortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-              className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-xs text-gray-400 hover:text-white"
-            >
-              Date {historySortDirection === 'asc' ? '▲' : '▼'}
-            </button>
-          </div>
-          {selectedWallet ? (
-            <div className="mt-4 space-y-3">
-              <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3 font-mono text-xs text-gray-300">
-                {selectedWallet}
-              </div>
-              <div className="max-h-[560px] space-y-3 overflow-y-auto pr-1">
-                {walletHistory.map((entry: any) => (
-                  <div key={`${entry.transactionHash}-${entry.logIndex}-${entry.address}`} className="rounded-lg border border-gray-800 bg-gray-900/40 p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className={`rounded-full px-2 py-1 text-xs ${entry.direction === 'in' ? 'bg-emerald-900/40 text-emerald-300' : 'bg-rose-900/40 text-rose-300'}`}>
-                        {entry.direction.toUpperCase()}
-                      </span>
-                      <span className="text-xs text-gray-500">Block {entry.blockNumber}</span>
-                    </div>
-                    <div className="mt-2 text-sm text-white">Balance after: {entry.balanceAfter}</div>
-                    <div className="mt-1 text-xs text-gray-400">Token #{entry.tokenId}</div>
-                    <div className="mt-1 text-xs text-gray-500">Counterparty: {entry.counterpartyAddress || '—'}</div>
-                    <div className="mt-1 text-xs text-gray-500">{new Date(entry.blockTimestamp).toLocaleString()}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <p className="mt-4 text-sm text-gray-500">Select a wallet to inspect its history.</p>
-          )}
         </div>
       </div>
       )}
