@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
-import { truncateAddress } from '@/lib/utils';
+import { AddressDisplay } from '@/components/ui/address-display';
 
 interface ActivityItem {
   id: string;
@@ -73,7 +73,7 @@ export function ActivityFeed({ projectId }: { projectId: string }) {
                 {item.activityType.replace('_', ' ')}
               </span>
               {item.walletAddress && (
-                <span className="text-xs text-gray-500">{truncateAddress(item.walletAddress)}</span>
+                <AddressDisplay address={item.walletAddress} className="text-xs text-gray-500" />
               )}
             </div>
             <span className="text-xs text-gray-500">

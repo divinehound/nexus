@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/auth-context';
 import { apiFetch } from '@/lib/api';
-import { truncateAddress } from '@/lib/utils';
+import { AddressDisplay } from '@/components/ui/address-display';
 import { chainDisplayName } from '@nexus/types';
 
 interface BlockchainContractInfo {
@@ -138,9 +138,9 @@ function BlockchainResultCard({ info }: { info: BlockchainContractInfo }) {
           </span>
         </div>
         <p className="mt-0.5 text-sm text-gray-500">
-          {truncateAddress(info.contractAddress)}
+          <AddressDisplay address={info.contractAddress} chain={info.chain} className="text-sm text-gray-500" />
           {info.totalSupply !== null && ` · ${info.totalSupply.toLocaleString()} supply`}
-          {info.deployerAddress && ` · Deployer: ${truncateAddress(info.deployerAddress)}`}
+          {info.deployerAddress && <>{' · Deployer: '}<AddressDisplay address={info.deployerAddress} chain={info.chain} className="text-sm text-gray-500" /></>}
         </p>
       </div>
       <div className="flex items-center gap-2">

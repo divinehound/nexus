@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/auth-context';
 import { adminGetCollectionHolderHistory, adminGetCollectionHolderHistoryStatus, adminScanCollectionHolderHistory } from '@/lib/api';
-import { truncateAddress } from '@/lib/utils';
+import { AddressDisplay } from '@/components/ui/address-display';
 import BalanceLineChart from './balance-line-chart';
 import ReconciliationPanel from './reconciliation-panel';
 import WalletDetailPanel from './wallet-detail-panel';
@@ -306,9 +306,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                         </td>
                         <td className="py-3 pr-4">
                           <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs text-gray-200" title={wallet.address}>
-                              {truncateAddress(wallet.address, 6)}
-                            </span>
+                            <AddressDisplay address={wallet.address} chain={chain} chars={6} className="font-mono text-xs text-gray-200" />
                             {explorerUrl && (
                               <a
                                 href={explorerUrl}

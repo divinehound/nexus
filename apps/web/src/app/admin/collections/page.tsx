@@ -23,7 +23,7 @@ import {
   type CollectionVerificationStatus,
 } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
-import { truncateAddress } from '@/lib/utils';
+import { AddressDisplay } from '@/components/ui/address-display';
 import { ConfirmModal } from '@/components/ui/confirm-modal';
 
 interface AdminProject {
@@ -987,7 +987,7 @@ export default function AdminCollectionsPage() {
                   <div>
                     <h3 className="font-medium">{c.name}</h3>
                     <p className="text-sm text-gray-500">
-                      {c.chain} · {truncateAddress(c.contractAddress)}
+                      {c.chain} · <AddressDisplay address={c.contractAddress} chain={c.chain} className="text-sm text-gray-500" />
                       {isInvalidAddress(c.chain, c.contractAddress) && (
                         <span className="ml-2 rounded bg-red-900/50 px-1.5 py-0.5 text-[10px] text-red-300">
                           Invalid Address

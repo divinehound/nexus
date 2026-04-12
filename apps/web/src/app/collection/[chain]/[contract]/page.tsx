@@ -10,6 +10,7 @@ import {
   type CollectionStatsResponse,
 } from '@/lib/api';
 import { chainCurrency, formatPrice, truncateAddress } from '@/lib/utils';
+import { AddressDisplay } from '@/components/ui/address-display';
 import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
 import { CollectionTabs } from '@/components/collections/collection-tabs';
 
@@ -144,7 +145,7 @@ export default function CollectionPage() {
           </div>
 
           <p className="text-sm text-gray-400">
-            {collection.chain} · {truncateAddress(collection.contractAddress, 6)}
+            {collection.chain} · <AddressDisplay address={collection.contractAddress} chain={collection.chain} chars={6} className="text-sm text-gray-400" />
           </p>
 
           <TrustDisclaimer status={collection.verificationStatus} />

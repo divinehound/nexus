@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { AddressDisplay } from '@/components/ui/address-display';
 import BalanceLineChart from './balance-line-chart';
 
 type DetailView = 'graph' | 'table';
@@ -158,9 +159,7 @@ export default function WalletDetailPanel({ entries, xDomain, chain }: Props) {
                     <td className="px-2 py-1.5">
                       {fromAddr ? (
                         <div className="flex items-center gap-1">
-                          <span className="font-mono text-gray-400" title={fromAddr}>
-                            {abbr(fromAddr)}
-                          </span>
+                          <AddressDisplay address={fromAddr} chain={chain} chars={4} className="font-mono text-gray-400" />
                           <CopyBtn value={fromAddr} copied={copiedValue} onCopy={copy} />
                           {walletExplorerUrl(fromAddr) && (
                             <a href={walletExplorerUrl(fromAddr)!} target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-purple-400">↗</a>
@@ -175,9 +174,7 @@ export default function WalletDetailPanel({ entries, xDomain, chain }: Props) {
                     <td className="px-2 py-1.5">
                       {toAddr ? (
                         <div className="flex items-center gap-1">
-                          <span className="font-mono text-gray-400" title={toAddr}>
-                            {abbr(toAddr)}
-                          </span>
+                          <AddressDisplay address={toAddr} chain={chain} chars={4} className="font-mono text-gray-400" />
                           <CopyBtn value={toAddr} copied={copiedValue} onCopy={copy} />
                           {walletExplorerUrl(toAddr) && (
                             <a href={walletExplorerUrl(toAddr)!} target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-purple-400">↗</a>

@@ -14,6 +14,7 @@
   "dependencies": {
     "@abstract-foundation/agw-client": "^1.11.0",
     "@abstract-foundation/agw-react": "^1.11.0",
+    "@bonfida/spl-name-service": "^3.0.21",
     "@nexus/types": "workspace:*",
     "@radix-ui/react-dialog": "^1.1.15",
     "@rainbow-me/rainbowkit": "^2.2.10",

@@ -448,7 +448,7 @@ function MePageContent() {
               <div key={wallet.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-800 p-3">
                 <div>
                   <p className="text-sm font-medium text-white">
-                    {wallet.chain.toUpperCase()} {truncateAddress(wallet.address)}
+                    {wallet.chain.toUpperCase()} {wallet.ensName || wallet.snsName || truncateAddress(wallet.address)}
                     {wallet.isPrimary && <span className="ml-2 text-xs text-green-400">PRIMARY</span>}
                   </p>
                   <p className="text-xs text-gray-500">{wallet.address}</p>
