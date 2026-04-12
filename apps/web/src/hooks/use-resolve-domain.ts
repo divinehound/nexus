@@ -2,6 +2,7 @@
 
 import { useEnsName } from 'wagmi';
 import { useQuery } from '@tanstack/react-query';
+import { apiFetch } from '@/lib/api';
 
 function isEvmAddress(address: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/i.test(address);
@@ -21,16 +22,13 @@ function detectChainType(address: string, chain?: string): 'evm' | 'solana' | nu
   return null;
 }
 
-/** Resolve a Solana SNS domain via Bonfida's public REST API (no Node.js deps). */
+/** Resolve a Solana SNS domain via our backend API. */
 async function resolveSolanaDomain(address: string): Promise<string | null> {
   try {
-    const res = await fetch(
-      `https://sns-sdk-proxy.bonfida.com/favorite-domain/${address}`,
+    const result = await apiFetch<{ domain: string | null }>(
+      `/resolve/domain?address=${encodeURIComponent(address)}`,
     );
-    if (!res.ok) return null;
-    const json = await res.json();
-    const domain: string | undefined = json?.result?.reverse;
-    return domain ? `${domain}.sol` : null;
+    return result.domain;
   } catch {
     return null;
   }
@@ -60,7 +58,7 @@ export function useResolveDomain(
     },
   });
 
-  // Solana SNS resolution via Bonfida REST API (always called, but disabled when not Solana)
+  // Solana SNS resolution via backend API (always called, but disabled when not Solana)
   const snsResult = useQuery({
     queryKey: ['sns-domain', address],
     queryFn: () => resolveSolanaDomain(address!),
