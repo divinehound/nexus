@@ -196,15 +196,35 @@ const mplCoreCreateV1: Parser = {
 };
 
 /**
- * Parse Helius's pre-classified NFT events (marketplace sales, etc.).
+ * Parse Helius's pre-classified NFT events (marketplace sales, mints, transfers).
  * The seller/buyer fields are on events.nft, not on individual NFT items.
+ *
+ * IMPORTANT: Only emit transfers for event types that actually represent
+ * ownership changes. Helius populates events.nft.buyer/seller for many
+ * non-transfer events too (bid placed, bid cancelled, listing, delisting, etc).
+ * Those are just SOL movements or state changes — no NFT moved. If we record
+ * them as transfers, Phase 5 reconciliation breaks because the "computed owner"
+ * for a mint ends up being whoever bid on it last, not whoever actually owns it.
  */
+const NFT_EVENT_TRANSFER_TYPES = new Set([
+  'NFT_SALE',
+  'NFT_MINT',
+  'COMPRESSED_NFT_MINT',
+  'COMPRESSED_NFT_TRANSFER',
+  'TRANSFER', // bare transfer, if Helius classifies it
+]);
+
 const heliusEventsNft: Parser = {
   name: 'helius_events_nft',
   run(tx, ctx) {
     const transfers: ParsedTransfer[] = [];
     const nftEvent = tx.events?.nft;
     if (!nftEvent?.nfts?.length) return transfers;
+
+    // Bail out on non-transfer event types (NFT_BID, NFT_BID_CANCELLED,
+    // NFT_LISTING, NFT_LISTING_CANCELLED, NFT_GLOBAL_BID, etc).
+    const eventType = nftEvent.type || '';
+    if (!NFT_EVENT_TRANSFER_TYPES.has(eventType)) return transfers;
 
     const from = nftEvent.seller || '';
     const to = nftEvent.buyer || '';
