@@ -162,6 +162,9 @@ export default function WalletDetailPanel({ entries, xDomain, chain }: Props) {
                             {abbr(fromAddr)}
                           </span>
                           <CopyBtn value={fromAddr} copied={copiedValue} onCopy={copy} />
+                          {walletExplorerUrl(fromAddr) && (
+                            <a href={walletExplorerUrl(fromAddr)!} target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-purple-400">↗</a>
+                          )}
                         </div>
                       ) : (
                         <span className="text-gray-600">mint</span>
@@ -176,6 +179,9 @@ export default function WalletDetailPanel({ entries, xDomain, chain }: Props) {
                             {abbr(toAddr)}
                           </span>
                           <CopyBtn value={toAddr} copied={copiedValue} onCopy={copy} />
+                          {walletExplorerUrl(toAddr) && (
+                            <a href={walletExplorerUrl(toAddr)!} target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-purple-400">↗</a>
+                          )}
                         </div>
                       ) : (
                         <span className="text-gray-600">burn</span>
