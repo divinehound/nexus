@@ -143,19 +143,18 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
     setSortDirection(field === 'address' ? 'asc' : 'desc');
   };
 
+  const collectionChain = data?.collection?.chain || '';
+
+  // Batch-prefetch SNS domains for all visible wallets to avoid per-row API calls
+  const prefetchAddresses = useMemo(() => pagedWallets.map((w: any) => w.address as string), [pagedWallets]);
+  usePrefetchSolanaDomains(prefetchAddresses, collectionChain);
+
   if (loading) {
     return <div className="p-6 text-sm text-gray-400">Loading holder history...</div>;
   }
 
   const collectionName = data?.collection?.name || 'Unknown collection';
   const collectionContract = data?.collection?.contractAddress || '';
-  const collectionChain = data?.collection?.chain || '';
-
-  // Batch-prefetch SNS domains for all visible wallets to avoid per-row API calls
-  usePrefetchSolanaDomains(
-    useMemo(() => pagedWallets.map((w: any) => w.address as string), [pagedWallets]),
-    collectionChain,
-  );
 
   return (
     <div className="space-y-6 p-6">
