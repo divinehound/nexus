@@ -150,7 +150,7 @@ export default function ReconciliationPanel({ collectionId, accessToken }: Props
                 </thead>
                 <tbody>
                   {mismatches.map((m) => (
-                    <tr key={m.mintAddress} className="border-t border-gray-800 hover:bg-gray-900/40">
+                    <tr key={m.mintAddress} className="border-t border-gray-800 hover:bg-gray-900/40" title={m.reconciliationNote || ''}>
                       <td className="px-3 py-2">
                         <a
                           href={`https://solscan.io/token/${m.mintAddress}`}
@@ -165,8 +165,21 @@ export default function ReconciliationPanel({ collectionId, accessToken }: Props
                       <td className="px-3 py-2 font-mono text-gray-300" title={m.dasOwner || ''}>
                         {m.dasOwner ? truncate(m.dasOwner) : '—'}
                       </td>
-                      <td className="px-3 py-2 font-mono text-gray-300" title={m.computedOwner || ''}>
-                        {m.computedOwner ? truncate(m.computedOwner) : '—'}
+                      <td className="px-3 py-2 font-mono" title={m.computedOwner || ''}>
+                        {m.computedOwner ? (
+                          <span
+                            className={
+                              m.dasOwner && m.computedOwner === m.dasOwner
+                                ? 'text-yellow-300'
+                                : 'text-gray-300'
+                            }
+                          >
+                            {m.dasOwner && m.computedOwner === m.dasOwner ? '⚠ ' : ''}
+                            {truncate(m.computedOwner)}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
                       </td>
                       <td className="px-3 py-2 text-gray-400">
                         {m.signatureCount} / {m.transferCount}
@@ -269,11 +282,23 @@ function InspectModal({
               </a>
             </div>
             <div className="mt-2 text-sm text-gray-400">
-              <span className="text-rose-300">DAS says:</span>{' '}
-              <span className="font-mono">{mint.dasOwner || '—'}</span>
-              {'  '}
-              <span className="text-yellow-300">We computed:</span>{' '}
-              <span className="font-mono">{mint.computedOwner || '—'}</span>
+              <div>
+                <span className="text-rose-300">DAS says:</span>{' '}
+                <span className="font-mono">{mint.dasOwner || '—'}</span>
+                {mint.dasOwner && <span className="ml-2 text-gray-600">(len {mint.dasOwner.length})</span>}
+              </div>
+              <div className="mt-1">
+                <span className="text-yellow-300">We computed:</span>{' '}
+                <span className="font-mono">{mint.computedOwner || '—'}</span>
+                {mint.computedOwner && (
+                  <span className="ml-2 text-gray-600">(len {mint.computedOwner.length})</span>
+                )}
+              </div>
+              {mint.dasOwner && mint.computedOwner && mint.dasOwner === mint.computedOwner && (
+                <div className="mt-1 text-emerald-300">
+                  ✓ Strings match byte-for-byte — mismatch is likely stale, re-run scan
+                </div>
+              )}
             </div>
             {mint.reconciliationNote && (
               <div className="mt-1 text-xs text-gray-500">{mint.reconciliationNote}</div>
