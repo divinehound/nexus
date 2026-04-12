@@ -94,6 +94,8 @@ type HeliusTransaction = {
   }>;
   events?: {
     nft?: {
+      type?: string;
+      source?: string;
       seller?: string;
       buyer?: string;
       nfts?: Array<{
