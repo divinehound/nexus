@@ -895,8 +895,9 @@ export class HolderHistoryService {
     const reconcileUpdates: Array<{ mintAddress: string; status: string; note: string | null }> = [];
 
     for (const mint of dbMints) {
-      const dasOwner = mint.currentOwner || '';
-      const computed = computedOwnerByMint.get(mint.mintAddress);
+      const dasOwner = (mint.currentOwner || '').trim();
+      const computedRaw = computedOwnerByMint.get(mint.mintAddress);
+      const computed = (computedRaw || '').trim();
 
       if (!computed) {
         // No transfers detected for this mint. If DAS shows an owner, we have
@@ -919,10 +920,16 @@ export class HolderHistoryService {
         reconcileUpdates.push({ mintAddress: mint.mintAddress, status: 'ok', note: null });
       } else {
         mismatchCount++;
+        // Diagnostic: include lengths and char codes at any diff positions
+        // so truly subtle differences (whitespace, case, unicode) surface.
+        const diffInfo =
+          computed.length !== dasOwner.length
+            ? ` lenDiff(${computed.length} vs ${dasOwner.length})`
+            : '';
         reconcileUpdates.push({
           mintAddress: mint.mintAddress,
           status: 'mismatch',
-          note: `Computed=${computed} DAS=${dasOwner}`,
+          note: `Computed=${computed} DAS=${dasOwner}${diffInfo}`,
         });
       }
     }
