@@ -1,7 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Connection, PublicKey } from '@solana/web3.js';
-import { getFavoriteDomain, getAllDomains } from '@bonfida/spl-name-service';
+import { getFavoriteDomain, getAllDomains, performReverseLookup } from '@bonfida/spl-name-service';
+
+/** Simple TTL cache for resolved domains. */
+const cache = new Map<string, { domain: string | null; expiresAt: number }>();
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
 @Injectable()
 export class ResolveService {
@@ -29,42 +33,70 @@ export class ResolveService {
   }
 
   async resolveSolanaDomain(address: string): Promise<string | null> {
+    // Check cache first
+    const cached = cache.get(address);
+    if (cached && cached.expiresAt > Date.now()) return cached.domain;
+
     const connection = this.getSolanaConnection();
     if (!connection) {
       this.logger.warn('No Solana RPC configured — cannot resolve SNS');
       return null;
     }
 
+    let domain: string | null = null;
     try {
       const owner = new PublicKey(address);
 
       // Try favorite domain first (fastest)
       try {
         const { reverse } = await getFavoriteDomain(connection, owner);
-        if (reverse) return `${reverse}.sol`;
+        if (reverse) domain = `${reverse}.sol`;
       } catch {
         // No favorite domain set — fall through to getAllDomains
       }
 
       // Fall back to listing all domains owned by this address
-      try {
-        const domains = await getAllDomains(connection, owner);
-        if (domains.length > 0) {
-          // Reverse-lookup the first domain's name account to get the human-readable name
-          const { performReverseLookup } = await import(
-            '@bonfida/spl-name-service'
-          );
-          const name = await performReverseLookup(connection, domains[0]);
-          if (name) return `${name}.sol`;
+      if (!domain) {
+        try {
+          const domains = await getAllDomains(connection, owner);
+          if (domains.length > 0) {
+            const name = await performReverseLookup(connection, domains[0]);
+            if (name) domain = `${name}.sol`;
+          }
+        } catch {
+          // No domains found
         }
-      } catch {
-        // No domains found
       }
-
-      return null;
     } catch (err) {
       this.logger.debug(`SNS resolve failed for ${address}: ${err}`);
-      return null;
     }
+
+    // Cache the result (including nulls to avoid repeated lookups)
+    cache.set(address, { domain, expiresAt: Date.now() + CACHE_TTL });
+    return domain;
+  }
+
+  async resolveBatch(
+    addresses: string[],
+  ): Promise<Record<string, string | null>> {
+    const results: Record<string, string | null> = {};
+    const toResolve: string[] = [];
+
+    // Check cache first for all addresses
+    for (const addr of addresses) {
+      const cached = cache.get(addr);
+      if (cached && cached.expiresAt > Date.now()) {
+        results[addr] = cached.domain;
+      } else {
+        toResolve.push(addr);
+      }
+    }
+
+    // Resolve remaining addresses (sequentially to avoid RPC rate limits)
+    for (const addr of toResolve) {
+      results[addr] = await this.resolveSolanaDomain(addr);
+    }
+
+    return results;
   }
 }

@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useAuth } from '@/context/auth-context';
 import { adminGetCollectionHolderHistory, adminGetCollectionHolderHistoryStatus, adminScanCollectionHolderHistory } from '@/lib/api';
 import { AddressDisplay } from '@/components/ui/address-display';
+import { usePrefetchSolanaDomains } from '@/hooks/use-resolve-domain';
 import BalanceLineChart from './balance-line-chart';
 import ReconciliationPanel from './reconciliation-panel';
 import WalletDetailPanel from './wallet-detail-panel';
@@ -149,6 +150,12 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
   const collectionName = data?.collection?.name || 'Unknown collection';
   const collectionContract = data?.collection?.contractAddress || '';
   const collectionChain = data?.collection?.chain || '';
+
+  // Batch-prefetch SNS domains for all visible wallets to avoid per-row API calls
+  usePrefetchSolanaDomains(
+    useMemo(() => pagedWallets.map((w: any) => w.address as string), [pagedWallets]),
+    collectionChain,
+  );
 
   return (
     <div className="space-y-6 p-6">

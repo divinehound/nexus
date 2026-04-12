@@ -1,7 +1,8 @@
 'use client';
 
+import { useEffect } from 'react';
 import { useEnsName } from 'wagmi';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiFetch } from '@/lib/api';
 
 function isEvmAddress(address: string): boolean {
@@ -22,7 +23,7 @@ function detectChainType(address: string, chain?: string): 'evm' | 'solana' | nu
   return null;
 }
 
-/** Resolve a Solana SNS domain via our backend API. */
+/** Resolve a single Solana SNS domain via our backend API. */
 async function resolveSolanaDomain(address: string): Promise<string | null> {
   try {
     const result = await apiFetch<{ domain: string | null }>(
@@ -31,6 +32,21 @@ async function resolveSolanaDomain(address: string): Promise<string | null> {
     return result.domain;
   } catch {
     return null;
+  }
+}
+
+/** Batch resolve Solana SNS domains via our backend API. */
+async function resolveSolanaDomainsBatch(
+  addresses: string[],
+): Promise<Record<string, string | null>> {
+  try {
+    const result = await apiFetch<{ results: Record<string, string | null> }>(
+      '/resolve/domains',
+      { method: 'POST', body: JSON.stringify({ addresses }) },
+    );
+    return result.results;
+  } catch {
+    return {};
   }
 }
 
@@ -82,4 +98,34 @@ export function useResolveDomain(
   }
 
   return { domain: null, isLoading: false };
+}
+
+/**
+ * Prefetch SNS domains for a batch of Solana addresses.
+ * Call this once with all visible addresses; results are
+ * pushed into the React Query cache so individual
+ * useResolveDomain hooks resolve instantly.
+ */
+export function usePrefetchSolanaDomains(
+  addresses: string[],
+  chain?: string,
+) {
+  const queryClient = useQueryClient();
+  const isSolana = chain === 'solana';
+
+  useEffect(() => {
+    if (!isSolana || addresses.length === 0) return;
+
+    // Only fetch addresses not already cached
+    const uncached = addresses.filter(
+      (addr) => queryClient.getQueryData(['sns-domain', addr]) === undefined,
+    );
+    if (uncached.length === 0) return;
+
+    resolveSolanaDomainsBatch(uncached).then((results) => {
+      for (const [addr, domain] of Object.entries(results)) {
+        queryClient.setQueryData(['sns-domain', addr], domain);
+      }
+    });
+  }, [isSolana, JSON.stringify(addresses), queryClient]);
 }
