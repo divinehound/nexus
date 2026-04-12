@@ -169,6 +169,13 @@
       "when": 1776075000000,
       "tag": "0023_solana_parse_tracking",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1776270000000,
+      "tag": "0024_parsed_transfers_instruction_order",
+      "breakpoints": true
     }
   ]
 }

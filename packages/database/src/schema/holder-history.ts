@@ -132,6 +132,7 @@ export const solanaParsedTransfers = pgTable(
     toWallet: varchar('to_wallet', { length: 64 }),
     blockTime: timestamp('block_time', { withTimezone: true }).notNull(),
     slot: bigint('slot', { mode: 'number' }).notNull(),
+    instructionOrder: integer('instruction_order').default(0).notNull(),
     parserName: varchar('parser_name', { length: 64 }).notNull(),
     programId: varchar('program_id', { length: 64 }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -148,6 +149,7 @@ export const solanaParsedTransfers = pgTable(
       table.collectionId,
       table.blockTime,
       table.slot,
+      table.instructionOrder,
     ),
     index('solana_parsed_transfers_mint_idx').on(
       table.collectionId,

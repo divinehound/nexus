@@ -244,6 +244,7 @@ export class HolderHistoryService {
           orderBy: [
             asc(solanaParsedTransfers.blockTime),
             asc(solanaParsedTransfers.slot),
+            asc(solanaParsedTransfers.instructionOrder),
           ],
         });
         const signatures = await this.db.query.solanaRawSignatures.findMany({
@@ -719,7 +720,14 @@ export class HolderHistoryService {
         const txBlockTime = tx.timestamp ? new Date(tx.timestamp * 1000) : sigRow.blockTime;
         const txSlot = tx.slot ?? sigRow.slot ?? 0;
 
-        for (const t of transfers) {
+        // Assign sequential instructionOrder based on extraction order.
+        // runAllParsers preserves the order each parser found its transfers,
+        // and within a parser the walker iterates instructions in execution
+        // order. This gives us a deterministic intra-tx ordering that we
+        // can later sort by — critical for txs with multiple TransferV1
+        // inner instructions (e.g. Magic Eden V2 CoreSell: seller→escrow
+        // followed by escrow→buyer in the same signature).
+        transfers.forEach((t, idx) => {
           transfersToInsert.push({
             collectionId: collection.id,
             signature: sigRow.signature,
@@ -728,10 +736,11 @@ export class HolderHistoryService {
             toWallet: t.toWallet || null,
             blockTime: txBlockTime ?? new Date(),
             slot: txSlot,
+            instructionOrder: idx,
             parserName: t.parserName,
             programId: t.programId,
           });
-        }
+        });
 
         sigUpdates.push({
           id: sigRow.id,
@@ -793,7 +802,7 @@ export class HolderHistoryService {
       orderBy: [
         asc(solanaParsedTransfers.blockTime),
         asc(solanaParsedTransfers.slot),
-        asc(solanaParsedTransfers.signature),
+        asc(solanaParsedTransfers.instructionOrder),
       ],
     });
     this.logger.log(`[Solana] Phase 4: Processing ${allTransfers.length} transfers chronologically`);
