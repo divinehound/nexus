@@ -25,6 +25,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
   const [historySortDirection, setHistorySortDirection] = useState<SortDirection>('desc');
   const [page, setPage] = useState(1);
   const [walletSearch, setWalletSearch] = useState('');
+  const [activeTab, setActiveTab] = useState<'wallets' | 'reconciliation'>('wallets');
 
   useEffect(() => {
     params.then((p) => setCollectionId(p.id));
@@ -142,16 +143,30 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
     return <div className="p-6 text-sm text-gray-400">Loading holder history...</div>;
   }
 
+  const collectionName = data?.collection?.name || 'Unknown collection';
+  const collectionContract = data?.collection?.contractAddress || '';
+  const collectionChain = data?.collection?.chain || '';
+
   return (
     <div className="space-y-6 p-6">
-      <div className="flex flex-col gap-4 rounded-xl border border-gray-800 bg-gray-950/50 p-5 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-white">Holder history</h1>
-          <p className="mt-2 text-sm text-gray-400">
-            Full holder summary, first received date, last received date, and wallet balance over time.
-          </p>
+      <div className="flex flex-col gap-4 rounded-xl border border-gray-800 bg-gray-950/50 p-5 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="text-xs uppercase tracking-wide text-gray-500">Holder history</div>
+          <h1 className="mt-1 text-2xl font-semibold text-white">{collectionName}</h1>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-400">
+            {collectionChain && (
+              <span className="rounded border border-gray-800 bg-gray-900 px-2 py-0.5 uppercase tracking-wide">
+                {collectionChain}
+              </span>
+            )}
+            {collectionContract && (
+              <span className="truncate font-mono" title={collectionContract}>
+                {collectionContract}
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex gap-3">
+        <div className="flex shrink-0 gap-3">
           <input
             value={fromBlock}
             onChange={(e) => setFromBlock(e.target.value)}
@@ -191,10 +206,36 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
         </div>
       )}
 
-      {data?.collection?.chain === 'solana' && (
+      <div className="flex items-center gap-2 border-b border-gray-800">
+        <button
+          onClick={() => setActiveTab('wallets')}
+          className={`border-b-2 px-4 py-2 text-sm transition-colors ${
+            activeTab === 'wallets'
+              ? 'border-purple-500 text-white'
+              : 'border-transparent text-gray-400 hover:text-white'
+          }`}
+        >
+          Wallets
+        </button>
+        {collectionChain === 'solana' && (
+          <button
+            onClick={() => setActiveTab('reconciliation')}
+            className={`border-b-2 px-4 py-2 text-sm transition-colors ${
+              activeTab === 'reconciliation'
+                ? 'border-purple-500 text-white'
+                : 'border-transparent text-gray-400 hover:text-white'
+            }`}
+          >
+            Reconciliation
+          </button>
+        )}
+      </div>
+
+      {activeTab === 'reconciliation' && collectionChain === 'solana' && (
         <ReconciliationPanel collectionId={collectionId} accessToken={accessToken} />
       )}
 
+      {activeTab === 'wallets' && (
       <div className="grid gap-6 xl:grid-cols-[1.2fr,0.8fr]">
         <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -314,6 +355,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

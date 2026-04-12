@@ -7,7 +7,7 @@ import { useAuth } from '@/context/auth-context';
 
 const navItems = [
   { href: '/admin', label: 'Dashboard' },
-  { href: '/admin/collections', label: 'Curation Review' },
+  { href: '/admin/collections', label: 'Collections' },
   { href: '/admin/projects', label: 'Projects' },
   { href: '/admin/wiki', label: 'Wiki Suggestions' },
   { href: '/admin/events', label: 'Events' },
