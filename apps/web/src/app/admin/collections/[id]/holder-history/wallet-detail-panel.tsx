@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { AddressDisplay } from '@/components/ui/address-display';
+import { usePrefetchSolanaDomains } from '@/hooks/use-resolve-domain';
 import BalanceLineChart from './balance-line-chart';
 
 type DetailView = 'graph' | 'table';
@@ -20,6 +21,17 @@ export default function WalletDetailPanel({ entries, xDomain, chain }: Props) {
   const [sortField, setSortField] = useState<HistorySortField>('blockTimestamp');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [copiedValue, setCopiedValue] = useState<string | null>(null);
+
+  // Batch-prefetch SNS domains for all from/to addresses in the transaction table
+  const txAddresses = useMemo(() => {
+    const addrs = new Set<string>();
+    for (const e of entries) {
+      if (e.fromAddress) addrs.add(e.fromAddress);
+      if (e.toAddress) addrs.add(e.toAddress);
+    }
+    return Array.from(addrs);
+  }, [entries]);
+  usePrefetchSolanaDomains(txAddresses, chain);
 
   const sorted = useMemo(() => {
     const items = [...entries];

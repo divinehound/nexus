@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Body } from '@nestjs/common';
+import { Controller, Post, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { ResolveService } from './resolve.service';
@@ -8,16 +8,6 @@ import { ResolveService } from './resolve.service';
 @Controller('resolve')
 export class ResolveController {
   constructor(private readonly resolveService: ResolveService) {}
-
-  @Get('domain')
-  @ApiOperation({ summary: 'Resolve a Solana SNS domain for a wallet address' })
-  async resolveDomain(
-    @Query('address') address: string,
-  ): Promise<{ domain: string | null }> {
-    if (!address) return { domain: null };
-    const domain = await this.resolveService.resolveSolanaDomain(address);
-    return { domain };
-  }
 
   @Post('domains')
   @ApiOperation({ summary: 'Batch resolve Solana SNS domains for multiple addresses' })

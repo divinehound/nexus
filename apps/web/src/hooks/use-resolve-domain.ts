@@ -23,18 +23,6 @@ function detectChainType(address: string, chain?: string): 'evm' | 'solana' | nu
   return null;
 }
 
-/** Resolve a single Solana SNS domain via our backend API. */
-async function resolveSolanaDomain(address: string): Promise<string | null> {
-  try {
-    const result = await apiFetch<{ domain: string | null }>(
-      `/resolve/domain?address=${encodeURIComponent(address)}`,
-    );
-    return result.domain;
-  } catch {
-    return null;
-  }
-}
-
 /** Batch resolve Solana SNS domains via our backend API. */
 async function resolveSolanaDomainsBatch(
   addresses: string[],
@@ -52,8 +40,10 @@ async function resolveSolanaDomainsBatch(
 
 /**
  * Resolves an ENS or Solana SNS domain name for a wallet address.
- * Returns the domain name if found, null otherwise.
- * Auto-detects chain from address format if not provided.
+ *
+ * For EVM: resolves ENS via wagmi (individual, cached by wagmi).
+ * For Solana: reads from the React Query cache only — call
+ * usePrefetchSolanaDomains() in the parent page to populate it.
  */
 export function useResolveDomain(
   address: string | null | undefined,
@@ -74,17 +64,16 @@ export function useResolveDomain(
     },
   });
 
-  // Solana SNS resolution via backend API (always called, but disabled when not Solana)
-  const snsResult = useQuery({
+  // Solana SNS: read-only from cache (populated by usePrefetchSolanaDomains)
+  // enabled: false means this never fires a fetch — it only reads cache data
+  const snsResult = useQuery<string | null>({
     queryKey: ['sns-domain', address],
-    queryFn: () => resolveSolanaDomain(address!),
-    enabled: isSolana && !!address && !knownDomain,
+    queryFn: () => null,
+    enabled: false,
     staleTime: 5 * 60 * 1000,
     gcTime: 30 * 60 * 1000,
-    retry: false,
   });
 
-  // If known domain is provided, use it directly
   if (knownDomain) {
     return { domain: knownDomain, isLoading: false };
   }
@@ -94,7 +83,7 @@ export function useResolveDomain(
   }
 
   if (isSolana) {
-    return { domain: snsResult.data ?? null, isLoading: snsResult.isLoading };
+    return { domain: snsResult.data ?? null, isLoading: false };
   }
 
   return { domain: null, isLoading: false };
@@ -102,9 +91,9 @@ export function useResolveDomain(
 
 /**
  * Prefetch SNS domains for a batch of Solana addresses.
- * Call this once with all visible addresses; results are
- * pushed into the React Query cache so individual
- * useResolveDomain hooks resolve instantly.
+ * Fires a single POST /api/resolve/domains request, then pushes
+ * results into the React Query cache so individual useResolveDomain
+ * hooks pick them up automatically.
  */
 export function usePrefetchSolanaDomains(
   addresses: string[],
@@ -116,7 +105,6 @@ export function usePrefetchSolanaDomains(
   useEffect(() => {
     if (!isSolana || addresses.length === 0) return;
 
-    // Only fetch addresses not already cached
     const uncached = addresses.filter(
       (addr) => queryClient.getQueryData(['sns-domain', addr]) === undefined,
     );
