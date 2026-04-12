@@ -675,6 +675,21 @@ export class HolderHistoryService {
       if (toParse.length === 0) break;
 
       const signatures = toParse.map((s) => s.signature);
+
+      // Delete any existing parsed_transfer rows for these signatures before
+      // re-running parsers. This is essential for re-parses (parse_status =
+      // needs_review): without deletion, onConflictDoNothing would treat the
+      // re-insert as a no-op, leaving stale rows from removed/fixed parsers
+      // and rows with outdated instruction_order defaults.
+      await this.db
+        .delete(solanaParsedTransfers)
+        .where(
+          and(
+            eq(solanaParsedTransfers.collectionId, collection.id),
+            inArray(solanaParsedTransfers.signature, signatures),
+          ),
+        );
+
       let parsed: any[] = [];
       try {
         parsed = await this.heliusBatchParseWithRetry(signatures, heliusApiKey, 0);
