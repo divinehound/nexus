@@ -176,6 +176,13 @@
       "when": 1776270000000,
       "tag": "0024_parsed_transfers_instruction_order",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1776470000000,
+      "tag": "0025_wallet_nicknames",
+      "breakpoints": true
     }
   ]
 }

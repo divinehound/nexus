@@ -21,6 +21,7 @@ import {
   walletLinkChallenges,
   walletMoveConfirmations,
   walletOwnershipMoves,
+  walletNicknames,
 } from '@nexus/database';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { randomBytes } from 'crypto';
@@ -497,6 +498,60 @@ export class MeService {
         }
       }
     });
+
+    return { success: true };
+  }
+
+  // ── Wallet Nicknames ───────────────────────────────────────────────
+
+  async getNicknames(userId: string): Promise<Record<string, string>> {
+    const rows = await this.db
+      .select({ address: walletNicknames.address, nickname: walletNicknames.nickname })
+      .from(walletNicknames)
+      .where(eq(walletNicknames.userId, userId));
+
+    const map: Record<string, string> = {};
+    for (const r of rows) map[r.address] = r.nickname;
+    return map;
+  }
+
+  async setNickname(
+    userId: string,
+    address: string,
+    nickname: string | null,
+  ): Promise<{ success: boolean }> {
+    const addr = address.trim();
+    if (!addr) throw new BadRequestException('address is required');
+
+    // Empty or null nickname → delete
+    if (!nickname || nickname.trim() === '') {
+      await this.db
+        .delete(walletNicknames)
+        .where(
+          and(
+            eq(walletNicknames.userId, userId),
+            eq(walletNicknames.address, addr),
+          ),
+        );
+      return { success: true };
+    }
+
+    // Upsert nickname
+    await this.db
+      .insert(walletNicknames)
+      .values({
+        userId,
+        address: addr,
+        nickname: nickname.trim().slice(0, 100),
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [walletNicknames.userId, walletNicknames.address],
+        set: {
+          nickname: nickname.trim().slice(0, 100),
+          updatedAt: new Date(),
+        },
+      });
 
     return { success: true };
   }

@@ -113,4 +113,19 @@ export class MeController {
   deleteWallet(@Req() req: AuthRequest, @Param('id') id: string) {
     return this.meService.deleteWallet(req.user.sub, id);
   }
+
+  @Get('nicknames')
+  @ApiOperation({ summary: 'Get all personal wallet nicknames' })
+  getNicknames(@Req() req: AuthRequest) {
+    return this.meService.getNicknames(req.user.sub);
+  }
+
+  @Patch('nicknames')
+  @ApiOperation({ summary: 'Set or delete a personal wallet nickname' })
+  setNickname(
+    @Req() req: AuthRequest,
+    @Body() body: { address: string; nickname: string | null },
+  ) {
+    return this.meService.setNickname(req.user.sub, body.address, body.nickname);
+  }
 }

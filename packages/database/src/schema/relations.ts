@@ -19,6 +19,7 @@ import { events } from './events';
 import { activityFeed, flexReactions } from './activity';
 import { marketSnapshots } from './market';
 import { projectOwners } from './ownership';
+import { walletNicknames } from './wallet-nicknames';
 
 export const projectsRelations = relations(projects, ({ many, one }) => ({
   collections: many(collections, { relationName: 'primary_project' }),
@@ -73,6 +74,14 @@ export const usersRelations = relations(users, ({ many }) => ({
   wikiSuggestions: many(wikiSuggestions),
   ownedProjects: many(projectOwners),
   collectionIntakeRequests: many(collectionIntakeRequests),
+  walletNicknames: many(walletNicknames),
+}));
+
+export const walletNicknamesRelations = relations(walletNicknames, ({ one }) => ({
+  user: one(users, {
+    fields: [walletNicknames.userId],
+    references: [users.id],
+  }),
 }));
 
 export const walletsRelations = relations(wallets, ({ one, many }) => ({

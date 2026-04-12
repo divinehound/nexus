@@ -713,6 +713,22 @@ export function removeWallet(walletId: string, token: string) {
   });
 }
 
+export function getMyNicknames(token: string) {
+  return apiFetch<Record<string, string>>('/me/nicknames', { token });
+}
+
+export function setWalletNickname(
+  address: string,
+  nickname: string | null,
+  token: string,
+) {
+  return apiFetch<{ success: boolean }>('/me/nicknames', {
+    method: 'PATCH',
+    token,
+    body: JSON.stringify({ address, nickname }),
+  });
+}
+
 // --- Collections: Discovery & Recommendations ---
 
 export interface NetworkGraphNode {
