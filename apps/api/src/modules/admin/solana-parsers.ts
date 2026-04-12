@@ -37,7 +37,9 @@ export type Parser = {
 
 export const MPL_CORE_PROGRAM_ID = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
 const MPL_CORE_TRANSFER_DISCRIMINATOR = 14;
-const MPL_CORE_CREATE_V1_DISCRIMINATOR = 0;
+// Both CreateV1 (0) and CreateV2 (20) are mint-to-owner events with the same
+// account layout: [asset, collection, authority, payer, owner, ...]
+const MPL_CORE_CREATE_DISCRIMINATORS = new Set([0, 20]);
 
 /**
  * Parse MPL Core TransferV1 instructions (both top-level and CPI inner).
@@ -116,30 +118,30 @@ const mplCoreTransferV1: Parser = {
 };
 
 /**
- * Parse MPL Core CreateV1 instructions (both top-level and CPI inner).
+ * Parse MPL Core CreateV1 and CreateV2 instructions (both top-level and CPI inner).
  *
- * Critical for collections minted via Candy Machine V3, LaunchMyNFT, or any
- * other launchpad that CPIs into MPL Core. Without this, we see the transfer
- * chain starting from a "random" wallet (if any transfers happened later) or
- * nothing at all, and reconciliation fails because the initial mint-to-owner
- * event is missing.
+ * Critical for collections minted via Candy Machine V3, LaunchMyNFT, Gravemint,
+ * or any other launchpad that creates MPL Core assets. Without this, we see
+ * the transfer chain starting from a "random" wallet (if any transfers
+ * happened later) or nothing at all, and reconciliation fails because the
+ * initial mint-to-owner event is missing.
  *
- * Account layout for CreateV1:
+ * Account layout (identical for V1 and V2):
  *   [0] asset            — the new NFT being created
  *   [1] collection       — the collection (or MPL Core program ID placeholder)
  *   [2] authority        — update authority (or placeholder)
  *   [3] payer            — signer paying fees
- *   [4] owner            — initial owner (usually = payer for Candy Machine mints)
+ *   [4] owner            — initial owner (usually = payer for launchpad mints)
  *   [5] update_authority — (or placeholder)
  *   [6] system_program
  *   [7] log_wrapper      — (or placeholder)
  *
- * Discriminator: first byte of instruction data = 0.
+ * Discriminators: CreateV1 = 0, CreateV2 = 20 (first byte of instruction data).
  *
  * Emits: from='' (mint event), to=owner (or payer if owner is placeholder).
  */
-const mplCoreCreateV1: Parser = {
-  name: 'mpl_core_create_v1',
+const mplCoreCreate: Parser = {
+  name: 'mpl_core_create',
   run(tx, ctx) {
     const transfers: ParsedTransfer[] = [];
     const matches = new Map<string, ParsedTransfer>();
@@ -158,7 +160,7 @@ const mplCoreCreateV1: Parser = {
           // ignore bad base58
         }
       }
-      if (discriminator !== MPL_CORE_CREATE_V1_DISCRIMINATOR) return;
+      if (discriminator === null || !MPL_CORE_CREATE_DISCRIMINATORS.has(discriminator)) return;
 
       const asset = instr.accounts[0];
       if (!ctx.mintAddresses.has(asset)) return;
@@ -177,7 +179,7 @@ const mplCoreCreateV1: Parser = {
           mintAddress: asset,
           fromWallet: '',
           toWallet: to,
-          parserName: 'mpl_core_create_v1',
+          parserName: 'mpl_core_create',
           programId: MPL_CORE_PROGRAM_ID,
         });
       }
@@ -344,7 +346,7 @@ const accountDataTokenBalances: Parser = {
 
 export const PARSERS: Parser[] = [
   mplCoreTransferV1,
-  mplCoreCreateV1,
+  mplCoreCreate,
   heliusEventsNft,
   splTokenTransfers,
   accountDataTokenBalances,
