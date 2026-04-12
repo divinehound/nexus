@@ -1,7 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Connection, PublicKey } from '@solana/web3.js';
-import { getFavoriteDomain, getAllDomains, performReverseLookup } from '@bonfida/spl-name-service';
+import {
+  getFavoriteDomain,
+  getMultipleFavoriteDomains,
+} from '@bonfida/spl-name-service';
 
 /** Simple TTL cache for resolved domains. */
 const cache = new Map<string, { domain: string | null; expiresAt: number }>();
@@ -14,7 +17,7 @@ export class ResolveService {
 
   constructor(private readonly config: ConfigService) {}
 
-  private getSolanaConnection(): Connection | null {
+  private getSolanaConnection(): Connection {
     if (this.solanaConnection) return this.solanaConnection;
 
     const explicit = this.config.get<string>('solana.rpcUrl');
@@ -29,7 +32,11 @@ export class ResolveService {
       );
       return this.solanaConnection;
     }
-    return null;
+    // Fallback to public RPC (rate-limited but functional)
+    this.solanaConnection = new Connection(
+      'https://api.mainnet-beta.solana.com',
+    );
+    return this.solanaConnection;
   }
 
   async resolveSolanaDomain(address: string): Promise<string | null> {
@@ -38,40 +45,16 @@ export class ResolveService {
     if (cached && cached.expiresAt > Date.now()) return cached.domain;
 
     const connection = this.getSolanaConnection();
-    if (!connection) {
-      this.logger.warn('No Solana RPC configured — cannot resolve SNS');
-      return null;
-    }
-
     let domain: string | null = null;
+
     try {
       const owner = new PublicKey(address);
-
-      // Try favorite domain first (fastest)
-      try {
-        const { reverse } = await getFavoriteDomain(connection, owner);
-        if (reverse) domain = `${reverse}.sol`;
-      } catch {
-        // No favorite domain set — fall through to getAllDomains
-      }
-
-      // Fall back to listing all domains owned by this address
-      if (!domain) {
-        try {
-          const domains = await getAllDomains(connection, owner);
-          if (domains.length > 0) {
-            const name = await performReverseLookup(connection, domains[0]);
-            if (name) domain = `${name}.sol`;
-          }
-        } catch {
-          // No domains found
-        }
-      }
-    } catch (err) {
-      this.logger.debug(`SNS resolve failed for ${address}: ${err}`);
+      const { reverse } = await getFavoriteDomain(connection, owner);
+      if (reverse) domain = `${reverse}.sol`;
+    } catch {
+      // No favorite domain or RPC error
     }
 
-    // Cache the result (including nulls to avoid repeated lookups)
     cache.set(address, { domain, expiresAt: Date.now() + CACHE_TTL });
     return domain;
   }
@@ -92,9 +75,30 @@ export class ResolveService {
       }
     }
 
-    // Resolve remaining addresses (sequentially to avoid RPC rate limits)
-    for (const addr of toResolve) {
-      results[addr] = await this.resolveSolanaDomain(addr);
+    if (toResolve.length === 0) return results;
+
+    // Use getMultipleFavoriteDomains for efficient batch resolution
+    // (only a few RPC calls for all addresses instead of 2-3 per address)
+    const connection = this.getSolanaConnection();
+    try {
+      const pubkeys = toResolve.map((addr) => new PublicKey(addr));
+      const domains = await getMultipleFavoriteDomains(connection, pubkeys);
+
+      for (let i = 0; i < toResolve.length; i++) {
+        const domain = domains[i] ? `${domains[i]}.sol` : null;
+        results[toResolve[i]] = domain;
+        cache.set(toResolve[i], {
+          domain,
+          expiresAt: Date.now() + CACHE_TTL,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Batch SNS resolve failed: ${err}`);
+      // On failure, cache all as null to avoid retrying immediately
+      for (const addr of toResolve) {
+        results[addr] = null;
+        cache.set(addr, { domain: null, expiresAt: Date.now() + CACHE_TTL });
+      }
     }
 
     return results;
