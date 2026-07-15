@@ -1248,7 +1248,10 @@ export class HolderHistoryService {
       }
 
       const stillPending: number[] = [];
-      for (const batch of chunkArray(pending, 50)) {
+      // eth_getBlockByNumber costs ~16 CUs; keep each batch under the free
+      // tier's ~330 CU/s throughput cap so items resolve on the first try
+      // instead of churning through per-item 429 retry rounds.
+      for (const batch of chunkArray(pending, 20)) {
         const payload = batch.map((blockNumber) => ({
           jsonrpc: '2.0',
           id: blockNumber,
@@ -1270,7 +1273,7 @@ export class HolderHistoryService {
         for (const blockNumber of batch) {
           if (!resolved.has(blockNumber)) stillPending.push(blockNumber);
         }
-        await sleep(200);
+        await sleep(1000);
       }
 
       pending = stillPending;
