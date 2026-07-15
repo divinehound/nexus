@@ -382,9 +382,21 @@ export class HolderHistoryService {
     const fromBlock = fromBlockInput ?? (collection.holderHistoryLastCheckedBlock ? collection.holderHistoryLastCheckedBlock + 1 : 0);
     job.fromBlock = fromBlock;
 
-    const existingSummaries = await this.db.query.collectionHolderSummaries.findMany({
-      where: eq(collectionHolderSummaries.collectionId, collection.id),
-    });
+    // A from-block-0 scan is a full rebuild: wipe prior history rows so
+    // corrected data can be re-inserted past the unique index, and start
+    // summary state fresh so replayed transfers don't double-count balances.
+    const isFullRescan = fromBlock === 0;
+    if (isFullRescan) {
+      await this.db
+        .delete(collectionHolderBalanceHistory)
+        .where(eq(collectionHolderBalanceHistory.collectionId, collection.id));
+    }
+
+    const existingSummaries = isFullRescan
+      ? []
+      : await this.db.query.collectionHolderSummaries.findMany({
+          where: eq(collectionHolderSummaries.collectionId, collection.id),
+        });
 
     const summaryState = new Map<string, MutableSummary>();
     for (const row of existingSummaries) {
@@ -400,6 +412,7 @@ export class HolderHistoryService {
     }
 
     const touched = new Set<string>();
+    const blockTimestampCache = new Map<number, Date>();
     let maxBlockNumber = collection.holderHistoryLastCheckedBlock ?? fromBlock;
     let pageKey: string | undefined;
     let page = 0;
@@ -453,6 +466,26 @@ export class HolderHistoryService {
       pageKey = data.result?.pageKey;
       job.pageKey = pageKey;
 
+      // Alchemy doesn't return metadata.blockTimestamp on every network
+      // (e.g. Abstract). Resolve missing timestamps from the chain itself —
+      // stamping transfers with the scan time would corrupt the history.
+      const unresolvedBlocks = new Set<number>();
+      for (const transfer of transfers) {
+        const blockNumber = Number.parseInt(transfer.blockNum, 16);
+        if (!parseBlockTimestamp(transfer.metadata?.blockTimestamp) && !blockTimestampCache.has(blockNumber)) {
+          unresolvedBlocks.add(blockNumber);
+        }
+      }
+      if (unresolvedBlocks.size > 0) {
+        this.logger.warn(
+          `Alchemy transfers missing blockTimestamp metadata for ${unresolvedBlocks.size} blocks on page ${page}; fetching via eth_getBlockByNumber`,
+        );
+        const fetched = await this.fetchBlockTimestamps(endpoint, Array.from(unresolvedBlocks));
+        for (const [blockNumber, timestamp] of fetched) {
+          blockTimestampCache.set(blockNumber, timestamp);
+        }
+      }
+
       const historyRows: Array<typeof collectionHolderBalanceHistory.$inferInsert> = [];
       const perWalletLogIndex = new Map<string, number>();
 
@@ -462,7 +495,10 @@ export class HolderHistoryService {
         const tokenId = normalizeTokenId(transfer.erc721TokenId);
         const txHash = transfer.hash;
         const blockNumber = Number.parseInt(transfer.blockNum, 16);
-        const blockTimestamp = transfer.metadata?.blockTimestamp ? new Date(transfer.metadata.blockTimestamp) : new Date();
+        const blockTimestamp = parseBlockTimestamp(transfer.metadata?.blockTimestamp) ?? blockTimestampCache.get(blockNumber);
+        if (!blockTimestamp) {
+          throw new Error(`Could not resolve timestamp for block ${blockNumber} (tx ${txHash})`);
+        }
         maxBlockNumber = Math.max(maxBlockNumber, blockNumber);
 
         if (from && from !== ZERO_ADDRESS) {
@@ -734,6 +770,9 @@ export class HolderHistoryService {
         const transfers = runAllParsers(tx, parserCtx);
         const txBlockTime = tx.timestamp ? new Date(tx.timestamp * 1000) : sigRow.blockTime;
         const txSlot = tx.slot ?? sigRow.slot ?? 0;
+        if (!txBlockTime && transfers.length > 0) {
+          this.logger.warn(`[Solana] No blockTime for ${sigRow.signature}; falling back to scan time`);
+        }
 
         // Assign sequential instructionOrder based on extraction order.
         // runAllParsers preserves the order each parser found its transfers,
@@ -1187,6 +1226,67 @@ export class HolderHistoryService {
   }
 
 
+  /**
+   * Fetches block timestamps via batched eth_getBlockByNumber. Used when
+   * alchemy_getAssetTransfers omits metadata.blockTimestamp (chain-dependent).
+   */
+  private async fetchBlockTimestamps(endpoint: string, blockNumbers: number[]): Promise<Map<number, Date>> {
+    const timestamps = new Map<number, Date>();
+
+    for (const batch of chunkArray(blockNumbers, 100)) {
+      const payload = batch.map((blockNumber) => ({
+        jsonrpc: '2.0',
+        id: blockNumber,
+        method: 'eth_getBlockByNumber',
+        params: [toHexBlock(blockNumber), false],
+      }));
+
+      const responses = await this.evmRpcBatchWithRetry(endpoint, payload, 0);
+      for (const entry of responses) {
+        const timestampHex = entry?.result?.timestamp;
+        if (typeof entry?.id === 'number' && typeof timestampHex === 'string') {
+          timestamps.set(entry.id, new Date(Number.parseInt(timestampHex, 16) * 1000));
+        }
+      }
+    }
+
+    return timestamps;
+  }
+
+  private async evmRpcBatchWithRetry(
+    endpoint: string,
+    payload: Array<Record<string, unknown>>,
+    attempt: number,
+  ): Promise<Array<{ id?: unknown; result?: { timestamp?: string } }>> {
+    const response = await this.withTimeout(
+      fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }),
+      30000,
+      `eth_getBlockByNumber batch (${payload.length} blocks)`,
+    );
+
+    if (response.status === 429) {
+      if (attempt >= 5) {
+        throw new Error('eth_getBlockByNumber batch rate limited after retries');
+      }
+      const delay = Math.min(2000 * Math.pow(2, attempt), 30000);
+      this.logger.warn(`eth_getBlockByNumber batch rate limited, retrying in ${delay}ms (attempt ${attempt + 1})`);
+      await sleep(delay);
+      return this.evmRpcBatchWithRetry(endpoint, payload, attempt + 1);
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`eth_getBlockByNumber batch failed (${response.status}): ${text}`);
+    }
+
+    const data = await response.json();
+    return Array.isArray(data) ? data : [data];
+  }
+
   private async heliusBatchParseWithRetry(
     signatures: string[],
     apiKey: string,
@@ -1358,6 +1458,12 @@ const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 function toHexBlock(block: number): string {
   return `0x${block.toString(16)}`;
+}
+
+function parseBlockTimestamp(value?: string): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function normalizeTokenId(tokenId?: string): string {
