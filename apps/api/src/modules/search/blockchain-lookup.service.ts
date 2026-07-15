@@ -271,12 +271,19 @@ export class BlockchainLookupService {
     if (!meta?.alchemySubdomain) return [];
 
     try {
-      const response = await fetch(
-        `https://${meta.alchemySubdomain}.g.alchemy.com/nft/v3/${alchemyKey}/getNFTsForOwner?owner=${holderAddress}&withMetadata=false&pageSize=${limit}`,
-        { method: 'GET' }
-      );
+      const url = `https://${meta.alchemySubdomain}.g.alchemy.com/nft/v3/${alchemyKey}/getNFTsForOwner?owner=${holderAddress}&withMetadata=false&pageSize=${limit}`;
+      let response = await fetch(url, { method: 'GET' });
+      for (let attempt = 0; attempt < 3 && response.status === 429; attempt++) {
+        const delay = 1000 * Math.pow(2, attempt);
+        this.logger.warn(`getNFTsForOwner rate limited for ${holderAddress}, retrying in ${delay}ms`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        response = await fetch(url, { method: 'GET' });
+      }
 
-      if (!response.ok) return [];
+      if (!response.ok) {
+        this.logger.warn(`getNFTsForOwner failed for ${holderAddress} (HTTP ${response.status}); skipping holder`);
+        return [];
+      }
 
       const data = await response.json();
       const contracts = new Set<string>();
@@ -305,25 +312,33 @@ export class BlockchainLookupService {
     if (!heliusKey) return [];
 
     try {
-      const response = await fetch(
-        `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 'discover',
-            method: 'getAssetsByOwner',
-            params: {
-              ownerAddress: holderAddress,
-              page: 1,
-              limit,
-            },
-          }),
-        }
-      );
+      const url = `https://mainnet.helius-rpc.com/?api-key=${heliusKey}`;
+      const requestInit = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'discover',
+          method: 'getAssetsByOwner',
+          params: {
+            ownerAddress: holderAddress,
+            page: 1,
+            limit,
+          },
+        }),
+      };
+      let response = await fetch(url, requestInit);
+      for (let attempt = 0; attempt < 3 && (response.status === 429 || response.status === 413); attempt++) {
+        const delay = 1000 * Math.pow(2, attempt);
+        this.logger.warn(`getAssetsByOwner rate limited for ${holderAddress}, retrying in ${delay}ms`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        response = await fetch(url, requestInit);
+      }
 
-      if (!response.ok) return [];
+      if (!response.ok) {
+        this.logger.warn(`getAssetsByOwner failed for ${holderAddress} (HTTP ${response.status}); skipping holder`);
+        return [];
+      }
 
       const data = await response.json();
       const contracts = new Set<string>();

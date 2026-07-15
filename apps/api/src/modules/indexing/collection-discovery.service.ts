@@ -9,7 +9,9 @@ interface DiscoveryResult {
   collectionId: string;
   collectionName: string;
   holdersChecked: number;
+  existingCollectionsInDb: number;
   newCollectionsFound: number;
+  spamFiltered: number;
   newCollections: Array<{
     chain: string;
     contractAddress: string;
@@ -36,11 +38,13 @@ export class CollectionDiscoveryService {
     options?: {
       maxHolders?: number;
       maxCollectionsPerHolder?: number;
+      maxNewContracts?: number;
     }
   ): Promise<DiscoveryResult> {
     const startTime = Date.now();
-    const maxHolders = options?.maxHolders || 500; // Increased from 100 to 500
+    const maxHolders = options?.maxHolders; // unset = scan every holder
     const maxPerHolder = options?.maxCollectionsPerHolder || 50;
+    const maxNewContracts = options?.maxNewContracts || 200;
 
     this.logger.log(`Starting collection discovery for ${collectionId}`);
 
@@ -53,26 +57,38 @@ export class CollectionDiscoveryService {
       throw new Error('Collection not found');
     }
 
-    // Get sample of holders
+    // Get holders (all of them unless a cap was requested)
     const holdersResult = await this.db.execute<{ address: string; chain: string }>(
-      sql`
-        SELECT DISTINCT address, chain
-        FROM collection_holders
-        WHERE collection_id = ${collectionId}
-        LIMIT ${maxHolders}
-      `
+      maxHolders
+        ? sql`
+            SELECT DISTINCT address, chain
+            FROM collection_holders
+            WHERE collection_id = ${collectionId}
+            LIMIT ${maxHolders}
+          `
+        : sql`
+            SELECT DISTINCT address, chain
+            FROM collection_holders
+            WHERE collection_id = ${collectionId}
+          `
     );
 
     this.logger.log(`Checking ${holdersResult.length} holders for new collections`);
 
     const discoveredContracts = new Map<string, { chain: string; address: string }>();
+    const existingContracts = new Set<string>();
     let holdersChecked = 0;
 
     // Check each holder's other NFTs
     for (const holder of holdersResult) {
       try {
         holdersChecked++;
-        
+
+        // Pace the per-holder NFT lookups to stay under API throughput limits
+        if (holdersChecked > 1) {
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+
         // Query blockchain for this holder's NFTs
         const nfts = await this.blockchainLookup.getHolderNFTs(
           holder.chain,
@@ -83,18 +99,18 @@ export class CollectionDiscoveryService {
         // Check which contracts we haven't seen before
         for (const nft of nfts) {
           // Preserve case for Solana (base58), lowercase for EVM (hex)
-          const normalizedAddress = nft.chain === 'solana' 
-            ? nft.contractAddress 
+          const normalizedAddress = nft.chain === 'solana'
+            ? nft.contractAddress
             : nft.contractAddress.toLowerCase();
           const key = `${nft.chain}:${normalizedAddress}`;
-          
-          if (discoveredContracts.has(key)) continue;
-          
+
+          if (discoveredContracts.has(key) || existingContracts.has(key)) continue;
+
           // Check if already in our DB
           const existsResult = await this.db.execute(sql`
-            SELECT id FROM collections 
-            WHERE chain = ${nft.chain} 
-              AND CASE 
+            SELECT id FROM collections
+            WHERE chain = ${nft.chain}
+              AND CASE
                 WHEN chain = 'solana' THEN contract_address = ${normalizedAddress}
                 ELSE LOWER(contract_address) = ${normalizedAddress}
               END
@@ -102,7 +118,9 @@ export class CollectionDiscoveryService {
           `);
           const exists = existsResult.length > 0;
 
-          if (!exists) {
+          if (exists) {
+            existingContracts.add(key);
+          } else {
             discoveredContracts.set(key, {
               chain: nft.chain,
               address: normalizedAddress,
@@ -110,8 +128,10 @@ export class CollectionDiscoveryService {
           }
         }
 
-        if (holdersChecked % 10 === 0) {
-          this.logger.log(`Progress: ${holdersChecked}/${holdersResult.length} holders checked, ${discoveredContracts.size} new collections found`);
+        if (holdersChecked % 50 === 0) {
+          this.logger.log(
+            `Progress: ${holdersChecked}/${holdersResult.length} holders checked, ${discoveredContracts.size} new contracts, ${existingContracts.size} already in DB`,
+          );
         }
       } catch (err: any) {
         this.logger.warn(`Failed to check holder ${holder.address}: ${err?.message || 'unknown error'}`);
@@ -129,10 +149,12 @@ export class CollectionDiscoveryService {
       this.logger.log(`Solana contracts to process: ${solanaContracts.map(c => c.address).join(', ')}`);
     }
     
-    // Safety limit: only process first 10 to avoid burning API quota
-    const contractsToProcess = Array.from(discoveredContracts.entries()).slice(0, 10);
+    // Safety limit on metadata fetches per run (override via maxNewContracts)
+    const contractsToProcess = Array.from(discoveredContracts.entries()).slice(0, maxNewContracts);
     if (contractsToProcess.length < discoveredContracts.size) {
-      this.logger.warn(`Limiting to first ${contractsToProcess.length}/${discoveredContracts.size} contracts to conserve API quota`);
+      this.logger.warn(
+        `Limiting to first ${contractsToProcess.length}/${discoveredContracts.size} new contracts to conserve API quota (pass maxNewContracts to raise)`,
+      );
     }
     
     // Add discovered collections to database (after spam filtering)
@@ -232,14 +254,18 @@ export class CollectionDiscoveryService {
     const processingTime = Date.now() - startTime;
 
     this.logger.log(
-      `Discovery complete: ${newCollections.length} new collections added, ${spamFiltered} filtered as spam, ${rateLimitErrors} rate limit errors, in ${processingTime}ms`
+      `Discovery complete for ${sourceCollection.name}: ${holdersChecked} holders checked, ` +
+      `${existingContracts.size} collections already in DB, ${newCollections.length} new collections added, ` +
+      `${spamFiltered} filtered as spam, ${rateLimitErrors} rate limit errors, in ${Math.round(processingTime / 1000)}s`
     );
 
     return {
       collectionId: sourceCollection.id,
       collectionName: sourceCollection.name,
       holdersChecked,
+      existingCollectionsInDb: existingContracts.size,
       newCollectionsFound: newCollections.length,
+      spamFiltered,
       newCollections,
       processingTimeMs: processingTime,
     };
