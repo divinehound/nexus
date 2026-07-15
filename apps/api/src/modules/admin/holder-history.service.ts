@@ -1232,22 +1232,54 @@ export class HolderHistoryService {
    */
   private async fetchBlockTimestamps(endpoint: string, blockNumbers: number[]): Promise<Map<number, Date>> {
     const timestamps = new Map<number, Date>();
+    let pending = [...blockNumbers];
+    let lastError: string | null = null;
 
-    for (const batch of chunkArray(blockNumbers, 100)) {
-      const payload = batch.map((blockNumber) => ({
-        jsonrpc: '2.0',
-        id: blockNumber,
-        method: 'eth_getBlockByNumber',
-        params: [toHexBlock(blockNumber), false],
-      }));
-
-      const responses = await this.evmRpcBatchWithRetry(endpoint, payload, 0);
-      for (const entry of responses) {
-        const timestampHex = entry?.result?.timestamp;
-        if (typeof entry?.id === 'number' && typeof timestampHex === 'string') {
-          timestamps.set(entry.id, new Date(Number.parseInt(timestampHex, 16) * 1000));
-        }
+    // Individual items inside a JSON-RPC batch can fail (throttling, transient
+    // node errors) even when the HTTP request succeeds, so retry unresolved
+    // blocks across rounds instead of failing the whole scan on first miss.
+    for (let round = 0; round < 6 && pending.length > 0; round++) {
+      if (round > 0) {
+        const delay = Math.min(1000 * Math.pow(2, round), 15000);
+        this.logger.warn(
+          `eth_getBlockByNumber: ${pending.length} blocks unresolved (${lastError ?? 'no error returned'}), retrying in ${delay}ms`,
+        );
+        await sleep(delay);
       }
+
+      const stillPending: number[] = [];
+      for (const batch of chunkArray(pending, 50)) {
+        const payload = batch.map((blockNumber) => ({
+          jsonrpc: '2.0',
+          id: blockNumber,
+          method: 'eth_getBlockByNumber',
+          params: [toHexBlock(blockNumber), false],
+        }));
+
+        const responses = await this.evmRpcBatchWithRetry(endpoint, payload, 0);
+        const resolved = new Set<number>();
+        for (const entry of responses) {
+          const timestampHex = entry?.result?.timestamp;
+          if (typeof entry?.id === 'number' && typeof timestampHex === 'string') {
+            timestamps.set(entry.id, new Date(Number.parseInt(timestampHex, 16) * 1000));
+            resolved.add(entry.id);
+          } else if (entry?.error) {
+            lastError = `code ${entry.error.code}: ${entry.error.message}`;
+          }
+        }
+        for (const blockNumber of batch) {
+          if (!resolved.has(blockNumber)) stillPending.push(blockNumber);
+        }
+        await sleep(200);
+      }
+
+      pending = stillPending;
+    }
+
+    if (pending.length > 0) {
+      throw new Error(
+        `Failed to resolve timestamps for ${pending.length} blocks after retries (first: ${pending[0]}, last error: ${lastError ?? 'none returned'})`,
+      );
     }
 
     return timestamps;
@@ -1257,7 +1289,7 @@ export class HolderHistoryService {
     endpoint: string,
     payload: Array<Record<string, unknown>>,
     attempt: number,
-  ): Promise<Array<{ id?: unknown; result?: { timestamp?: string } }>> {
+  ): Promise<Array<{ id?: unknown; result?: { timestamp?: string } | null; error?: { code?: number; message?: string } }>> {
     const response = await this.withTimeout(
       fetch(endpoint, {
         method: 'POST',
@@ -1284,7 +1316,13 @@ export class HolderHistoryService {
     }
 
     const data = await response.json();
-    return Array.isArray(data) ? data : [data];
+    if (!Array.isArray(data)) {
+      // A single object back from a batch request is a top-level error
+      // (e.g. the endpoint rejecting batching) — surface it, don't parse it.
+      const message = (data as { error?: { message?: string } })?.error?.message;
+      throw new Error(`eth_getBlockByNumber batch returned non-array response: ${message ?? JSON.stringify(data).slice(0, 300)}`);
+    }
+    return data;
   }
 
   private async heliusBatchParseWithRetry(
