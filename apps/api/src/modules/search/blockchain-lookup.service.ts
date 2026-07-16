@@ -99,8 +99,10 @@ export class BlockchainLookupService {
 
       const body = (await res.json()) as AlchemyContractMetadata;
 
-      // If the contract has no name, it's likely not an NFT contract
-      if (!body.name && !body.symbol) {
+      // name()/symbol() aren't part of the ERC-1155 standard, so fall back
+      // to the OpenSea collection name before declaring the contract nameless
+      const osName = body.openSeaMetadata?.collectionName;
+      if (!body.name && !body.symbol && !osName) {
         this.logger.log(`Alchemy returned no name/symbol for ${contractAddress} on ${meta.name} (tokenType: ${body.tokenType})`);
         return null;
       }
@@ -112,7 +114,7 @@ export class BlockchainLookupService {
       return {
         contractAddress,
         chain,
-        name: body.name || `Unknown (${contractAddress.slice(0, 8)}...)`,
+        name: body.name || osName || `Unknown (${contractAddress.slice(0, 8)}...)`,
         symbol: body.symbol || '',
         totalSupply: body.totalSupply ? parseInt(body.totalSupply, 10) : null,
         tokenType: tokenType as 'erc721' | 'erc1155',

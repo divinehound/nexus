@@ -1001,7 +1001,7 @@ export class AdminService {
    */
   async discoverCollections(
     idOrContract: string,
-    options?: { maxHolders?: number; maxCollectionsPerHolder?: number; maxNewContracts?: number; minHolderOverlap?: number }
+    options?: { maxHolders?: number; maxCollectionsPerHolder?: number; maxNewContracts?: number; minHolderOverlap?: number; fresh?: boolean }
   ) {
     const collectionId = await this.resolveCollectionId(idOrContract);
 

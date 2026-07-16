@@ -1,7 +1,7 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { eq, sql, and, inArray } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
-import { type Database, collections, collectionHolders } from '@nexus/database';
+import { type Database, collections, collectionHolders, discoveryCheckpoints } from '@nexus/database';
 import { BlockchainLookupService } from '../search/blockchain-lookup.service';
 import { SpamCheckerService } from './spam-checker.service';
 
@@ -49,6 +49,7 @@ export class CollectionDiscoveryService {
       maxCollectionsPerHolder?: number;
       maxNewContracts?: number;
       minHolderOverlap?: number;
+      fresh?: boolean;
     }
   ): Promise<DiscoveryResult> {
     const startTime = Date.now();
@@ -67,27 +68,51 @@ export class CollectionDiscoveryService {
       throw new Error('Collection not found');
     }
 
-    // Get holders (all of them unless a cap was requested)
-    const holdersResult = await this.db.execute<{ address: string; chain: string }>(
-      maxHolders
-        ? sql`
-            SELECT DISTINCT address, chain
-            FROM collection_holders
-            WHERE collection_id = ${collectionId}
-            LIMIT ${maxHolders}
-          `
-        : sql`
-            SELECT DISTINCT address, chain
-            FROM collection_holders
-            WHERE collection_id = ${collectionId}
-          `
-    );
-
-    this.logger.log(`Checking ${holdersResult.length} holders for new collections`);
-
     const discoveredContracts = new Map<string, { chain: string; address: string; holderOverlap: number }>();
     const existingContracts = new Set<string>();
     let holdersChecked = 0;
+    let holderCursor: string | null = null;
+
+    // Resume from a prior interrupted scan's checkpoint unless told otherwise
+    if (options?.fresh) {
+      await this.db.delete(discoveryCheckpoints).where(eq(discoveryCheckpoints.collectionId, collectionId));
+    } else {
+      const checkpoint = await this.db.query.discoveryCheckpoints.findFirst({
+        where: eq(discoveryCheckpoints.collectionId, collectionId),
+      });
+      if (checkpoint) {
+        holdersChecked = checkpoint.holdersChecked;
+        holderCursor = checkpoint.holderCursor;
+        for (const [key, overlap] of Object.entries(checkpoint.discoveredContracts)) {
+          const sep = key.indexOf(':');
+          discoveredContracts.set(key, {
+            chain: key.slice(0, sep),
+            address: key.slice(sep + 1),
+            holderOverlap: overlap,
+          });
+        }
+        for (const key of checkpoint.existingContracts) existingContracts.add(key);
+        this.logger.log(
+          `Resuming discovery from checkpoint: ${holdersChecked} holders already checked, ${discoveredContracts.size} contracts tracked`,
+        );
+      }
+    }
+
+    // Get holders (all of them unless a cap was requested), ordered so the
+    // checkpoint cursor is a stable resume point
+    const holdersResult = await this.db.execute<{ address: string; chain: string }>(sql`
+      SELECT DISTINCT address, chain
+      FROM collection_holders
+      WHERE collection_id = ${collectionId}
+      ${holderCursor ? sql`AND address > ${holderCursor}` : sql``}
+      ORDER BY address
+      ${maxHolders ? sql`LIMIT ${maxHolders}` : sql``}
+    `);
+
+    this.logger.log(
+      `Checking ${holdersResult.length} holders for new collections${holdersChecked > 0 ? ` (${holdersChecked} already done)` : ''}`,
+    );
+    const totalHolders = holdersChecked + holdersResult.length;
 
     // Check each holder's other NFTs
     for (const holder of holdersResult) {
@@ -150,12 +175,25 @@ export class CollectionDiscoveryService {
 
         if (holdersChecked % 50 === 0) {
           this.logger.log(
-            `Progress: ${holdersChecked}/${holdersResult.length} holders checked, ${discoveredContracts.size} new contracts, ${existingContracts.size} already in DB`,
+            `Progress: ${holdersChecked}/${totalHolders} holders checked, ${discoveredContracts.size} new contracts, ${existingContracts.size} already in DB`,
           );
+          await this.saveCheckpoint(collectionId, holdersChecked, holder.address, discoveredContracts, existingContracts);
         }
       } catch (err: any) {
         this.logger.warn(`Failed to check holder ${holder.address}: ${err?.message || 'unknown error'}`);
       }
+    }
+
+    // Persist the finished walk: if the processing phase below crashes, a
+    // resume skips straight here instead of re-walking every holder.
+    if (holdersResult.length > 0) {
+      await this.saveCheckpoint(
+        collectionId,
+        holdersChecked,
+        holdersResult[holdersResult.length - 1].address,
+        discoveredContracts,
+        existingContracts,
+      );
     }
 
     // Selectivity: require a minimum co-holder overlap before a contract is
@@ -292,6 +330,9 @@ export class CollectionDiscoveryService {
       }
     }
 
+    // Scan finished — the checkpoint is no longer needed
+    await this.db.delete(discoveryCheckpoints).where(eq(discoveryCheckpoints.collectionId, collectionId));
+
     const processingTime = Date.now() - startTime;
 
     this.logger.log(
@@ -312,5 +353,39 @@ export class CollectionDiscoveryService {
       newCollections,
       processingTimeMs: processingTime,
     };
+  }
+
+  private async saveCheckpoint(
+    collectionId: string,
+    holdersChecked: number,
+    holderCursor: string | null,
+    discoveredContracts: Map<string, { chain: string; address: string; holderOverlap: number }>,
+    existingContracts: Set<string>,
+  ) {
+    const contractsJson: Record<string, number> = {};
+    for (const [key, contract] of discoveredContracts) {
+      contractsJson[key] = contract.holderOverlap;
+    }
+
+    await this.db
+      .insert(discoveryCheckpoints)
+      .values({
+        collectionId,
+        holdersChecked,
+        holderCursor,
+        discoveredContracts: contractsJson,
+        existingContracts: Array.from(existingContracts),
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: discoveryCheckpoints.collectionId,
+        set: {
+          holdersChecked: sql`excluded.holders_checked`,
+          holderCursor: sql`excluded.holder_cursor`,
+          discoveredContracts: sql`excluded.discovered_contracts`,
+          existingContracts: sql`excluded.existing_contracts`,
+          updatedAt: sql`excluded.updated_at`,
+        },
+      });
   }
 }
