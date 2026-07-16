@@ -4,6 +4,7 @@ import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, collections, collectionHolders, discoveryCheckpoints } from '@nexus/database';
 import { BlockchainLookupService } from '../search/blockchain-lookup.service';
 import { SpamCheckerService } from './spam-checker.service';
+import { HolderIndexerService } from './holder-indexer.service';
 
 interface DiscoveryResult {
   collectionId: string;
@@ -14,6 +15,7 @@ interface DiscoveryResult {
   contractsBelowFloor: number;
   newCollectionsFound: number;
   spamFiltered: number;
+  autoIndexed: number;
   newCollections: Array<{
     chain: string;
     contractAddress: string;
@@ -37,6 +39,7 @@ export class CollectionDiscoveryService {
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly blockchainLookup: BlockchainLookupService,
     private readonly spamChecker: SpamCheckerService,
+    private readonly holderIndexer: HolderIndexerService,
   ) {}
 
   /**
@@ -50,6 +53,7 @@ export class CollectionDiscoveryService {
       maxNewContracts?: number;
       minHolderOverlap?: number;
       fresh?: boolean;
+      autoIndexTop?: number;
     }
   ): Promise<DiscoveryResult> {
     const startTime = Date.now();
@@ -290,17 +294,28 @@ export class CollectionDiscoveryService {
           continue;
         }
 
-        // Check for spam BEFORE adding to database
+        const collectionType = metadata?.tokenType?.toLowerCase() === 'erc1155' ? 'erc1155' : 'erc721';
+
+        // Check for spam BEFORE adding as a live collection
         const spamCheck = await this.spamChecker.checkCollection(contract.chain, contract.address, name);
 
         if (spamCheck.isSpam) {
           spamFiltered++;
           this.logger.log(`Filtered spam: ${name} - ${spamCheck.reason}`);
+          // Persist the verdict: with a flagged row in the DB, future runs
+          // see it in the exists-check and never re-fetch or re-rank it.
+          // False positives can be un-flagged via the spam admin workflow.
+          await this.db.execute(sql`
+            INSERT INTO collections (chain, contract_address, name, image_url, supply, collection_type, verification_status, mapping_status, last_seen_at, is_spam, spam_score, spam_reason, spam_detected_at, spam_detected_by, discovered_overlap_count, discovered_from_collection_id)
+            VALUES (${contract.chain}, ${contract.address}, ${name},
+                    ${metadata?.imageUrl || null}, ${metadata?.totalSupply || null}, ${collectionType},
+                    'tracked_unverified', 'unmapped', NOW(), true, ${spamCheck.score}, ${spamCheck.reason || 'discovery spam check'}, NOW(), 'alchemy', ${contract.holderOverlap}, ${sourceCollection.id})
+            ON CONFLICT (chain, contract_address) DO NOTHING
+          `);
           continue; // Skip this collection
         }
 
         // Add to database as unverified (not spam)
-        const collectionType = metadata?.tokenType?.toLowerCase() === 'erc1155' ? 'erc1155' : 'erc721';
 
         await this.db.execute(sql`
           INSERT INTO collections (chain, contract_address, name, image_url, supply, collection_type, verification_status, mapping_status, last_seen_at, is_spam, discovered_overlap_count, discovered_from_collection_id)
@@ -330,6 +345,33 @@ export class CollectionDiscoveryService {
       }
     }
 
+    // Auto-index holders for the strongest new discoveries so they become
+    // real nodes in the overlap graph immediately (and future discovery
+    // sources). newCollections is already in overlap order.
+    const autoIndexTop = options?.autoIndexTop ?? 10;
+    let autoIndexed = 0;
+    for (const col of newCollections.slice(0, autoIndexTop)) {
+      const row = await this.db.query.collections.findFirst({
+        where: and(
+          eq(collections.chain, col.chain as any),
+          eq(collections.contractAddress, col.contractAddress),
+        ),
+      });
+      if (!row) continue;
+
+      this.logger.log(`Auto-indexing holders for ${col.name} (overlap ${col.holderOverlap})`);
+      try {
+        const indexResult = await this.holderIndexer.indexCollectionHolders(row.id);
+        if (indexResult.success) autoIndexed++;
+      } catch (err: any) {
+        this.logger.warn(`Auto-index failed for ${col.name}: ${err?.message || 'unknown error'}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    if (autoIndexTop > 0) {
+      this.logger.log(`Auto-indexed holders for ${autoIndexed}/${Math.min(newCollections.length, autoIndexTop)} new collections`);
+    }
+
     // Scan finished — the checkpoint is no longer needed
     await this.db.delete(discoveryCheckpoints).where(eq(discoveryCheckpoints.collectionId, collectionId));
 
@@ -337,8 +379,9 @@ export class CollectionDiscoveryService {
 
     this.logger.log(
       `Discovery complete for ${sourceCollection.name}: ${holdersChecked} holders checked, ` +
-      `${existingContracts.size} collections already in DB, ${newCollections.length} new collections added, ` +
-      `${spamFiltered} filtered as spam, ${rateLimitErrors} rate limit errors, in ${Math.round(processingTime / 1000)}s`
+      `${existingContracts.size} collections already in DB, ${newCollections.length} new collections added ` +
+      `(${autoIndexed} auto-indexed), ${spamFiltered} filtered as spam, ${rateLimitErrors} rate limit errors, ` +
+      `in ${Math.round(processingTime / 1000)}s`
     );
 
     return {
@@ -350,6 +393,7 @@ export class CollectionDiscoveryService {
       contractsBelowFloor,
       newCollectionsFound: newCollections.length,
       spamFiltered,
+      autoIndexed,
       newCollections,
       processingTimeMs: processingTime,
     };
