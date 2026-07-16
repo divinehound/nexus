@@ -383,6 +383,35 @@ export class HolderIndexerService {
     let page = 1;
     const limit = 1000;
 
+    // Oversize probe: DAS pages are addressable by number, so one request at
+    // the first page past the cap tells us the collection is too large before
+    // we walk 50+ pages of it. Holders can never exceed asset count, so any
+    // items on that page mean the holder cap is unreachable anyway.
+    if (maxHolders) {
+      const probePage = Math.floor(maxHolders / limit) + 1;
+      const probeResponse = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'oversize-probe',
+          method: 'getAssetsByGroup',
+          params: { groupKey: 'collection', groupValue: collectionMint, page: probePage, limit },
+        }),
+      });
+      if (probeResponse.ok) {
+        const probeData: any = await probeResponse.json();
+        if ((probeData.result?.items?.length ?? 0) > 0) {
+          throw Object.assign(
+            new Error(`Collection exceeds ${(probePage * limit - limit).toLocaleString()} assets (probe page ${probePage} still has items)`),
+            { code: 'HOLDER_CAP_EXCEEDED' },
+          );
+        }
+      }
+      // Probe errors are inconclusive — fall through to normal paging, which
+      // still enforces the running holder cap.
+    }
+
     // Helius DAS API: getAssetsByGroup
     while (true) {
       const response = await fetch(url, {
