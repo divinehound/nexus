@@ -12,6 +12,8 @@ import {
 @Injectable()
 export class BlockchainLookupService {
   private readonly logger = new Logger(BlockchainLookupService.name);
+  /** Set when Alchemy rejects excludeFilters=SPAM (plan-gated feature) */
+  private spamFilterUnavailable = false;
 
   constructor(private readonly config: ConfigService) {}
 
@@ -271,18 +273,27 @@ export class BlockchainLookupService {
     if (!meta?.alchemySubdomain) return [];
 
     try {
-      // Alchemy's spam classifier only runs on certain networks; the filter
-      // param errors elsewhere, so only send it where it's supported.
-      const spamFilter = ['eth-mainnet', 'polygon-mainnet'].includes(meta.alchemySubdomain)
-        ? '&excludeFilters[]=SPAM'
-        : '';
-      const url = `https://${meta.alchemySubdomain}.g.alchemy.com/nft/v3/${alchemyKey}/getNFTsForOwner?owner=${holderAddress}&withMetadata=false&pageSize=${limit}${spamFilter}`;
-      let response = await fetch(url, { method: 'GET' });
+      // Alchemy's spam classifier only runs on certain networks and paid
+      // tiers; requests with the filter param get rejected (403) elsewhere,
+      // so send it only where supported and drop it if the plan refuses it.
+      const spamFilter =
+        !this.spamFilterUnavailable && ['eth-mainnet', 'polygon-mainnet'].includes(meta.alchemySubdomain)
+          ? '&excludeFilters[]=SPAM'
+          : '';
+      const baseUrl = `https://${meta.alchemySubdomain}.g.alchemy.com/nft/v3/${alchemyKey}/getNFTsForOwner?owner=${holderAddress}&withMetadata=false&pageSize=${limit}`;
+      let response = await fetch(`${baseUrl}${spamFilter}`, { method: 'GET' });
+
+      if (response.status === 403 && spamFilter) {
+        this.logger.warn('getNFTsForOwner rejected excludeFilters=SPAM (HTTP 403, likely plan-gated); disabling spam filter param');
+        this.spamFilterUnavailable = true;
+        response = await fetch(baseUrl, { method: 'GET' });
+      }
+
       for (let attempt = 0; attempt < 3 && response.status === 429; attempt++) {
         const delay = 1000 * Math.pow(2, attempt);
         this.logger.warn(`getNFTsForOwner rate limited for ${holderAddress}, retrying in ${delay}ms`);
         await new Promise(resolve => setTimeout(resolve, delay));
-        response = await fetch(url, { method: 'GET' });
+        response = await fetch(baseUrl, { method: 'GET' });
       }
 
       if (!response.ok) {
