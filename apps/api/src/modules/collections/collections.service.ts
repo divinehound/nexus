@@ -546,7 +546,7 @@ export class CollectionsService {
         AND c.verification_status != 'rejected'
         AND c.tracking_tier != 'suppressed'
         AND och.shared_holders >= ${minSharedFloor}
-      ORDER BY overlap_strength DESC, och.shared_holders DESC
+      ORDER BY och.shared_holders DESC, overlap_strength DESC
       LIMIT ${limit}
     `);
 
