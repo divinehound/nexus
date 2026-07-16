@@ -210,26 +210,27 @@ export class CollectionDiscoveryService {
         // Rate limit: wait 500ms between API calls to avoid 429s
         await new Promise(resolve => setTimeout(resolve, 500));
         
-        // Fetch metadata with exponential backoff retry on 429
+        // Fetch metadata with exponential backoff retry on 429. A null
+        // return (contract has no metadata) is a final answer — only a
+        // thrown 429 warrants a retry, otherwise this loops forever.
         let metadata = null;
-        let retries = 0;
         const maxRetries = 5;
-        
-        while (retries < maxRetries && !metadata) {
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
             metadata = await this.blockchainLookup.getContractMetadata(
               contract.chain,
               contract.address
             );
+            break;
           } catch (err: any) {
-            if (err?.message?.includes('429') && retries < maxRetries - 1) {
-              retries++;
-              // Exponential backoff: 5s, 10s, 20s, 40s, 80s
-              const waitTime = 5000 * Math.pow(2, retries - 1);
-              this.logger.warn(`Rate limited on ${contract.address}, waiting ${waitTime/1000}s before retry ${retries}/${maxRetries}...`);
+            if (err?.message?.includes('429') && attempt < maxRetries) {
+              // Exponential backoff: 5s, 10s, 20s, 40s
+              const waitTime = 5000 * Math.pow(2, attempt - 1);
+              this.logger.warn(`Rate limited on ${contract.address}, waiting ${waitTime/1000}s before retry ${attempt}/${maxRetries}...`);
               await new Promise(resolve => setTimeout(resolve, waitTime));
             } else {
-              this.logger.error(`Failed to fetch metadata for ${contract.address} after ${retries} retries: ${err?.message}`);
+              this.logger.error(`Failed to fetch metadata for ${contract.address} after ${attempt} attempts: ${err?.message}`);
               throw err; // Re-throw if not 429 or out of retries
             }
           }
