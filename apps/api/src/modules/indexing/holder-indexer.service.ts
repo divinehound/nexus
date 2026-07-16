@@ -60,12 +60,15 @@ export class HolderIndexerService {
 
     const holderCap = maxHolders ?? DEFAULT_HOLDER_CAP;
 
-    // Skip contracts with degenerate supply (no community / airdrop farms)
+    // Skip anything an admin decided not to track (rejected/suppressed),
+    // contracts with degenerate supply (no community / airdrop farms),
     // and anything a previous run already skipped for being too large.
     const rows = await this.db.execute<{ id: string; name: string }>(sql`
       SELECT c.id, c.name
       FROM collections c
       WHERE c.is_spam IS NOT TRUE
+        AND c.verification_status != 'rejected'
+        AND c.tracking_tier != 'suppressed'
         AND (c.supply IS NULL OR (c.supply >= 2 AND c.supply <= 100000))
         AND c.last_index_status IS DISTINCT FROM 'skipped'
         AND NOT EXISTS (SELECT 1 FROM collection_holders ch WHERE ch.collection_id = c.id)

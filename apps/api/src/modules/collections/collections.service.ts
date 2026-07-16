@@ -125,7 +125,7 @@ export class CollectionsService {
             END
             AND w.chain::text = ch.chain
           WHERE w.user_id = ${wallet.userId}
-            AND c.is_spam = false
+            AND c.is_spam = false AND c.verification_status != 'rejected' AND c.tracking_tier != 'suppressed'
           ORDER BY c.holder_count DESC
           LIMIT ${limit}
         `
@@ -141,7 +141,7 @@ export class CollectionsService {
           INNER JOIN collections c ON c.id = ch.collection_id
           WHERE ch.address = ${normalizedAddress}
             AND ch.chain = ${chain}
-            AND c.is_spam = false
+            AND c.is_spam = false AND c.verification_status != 'rejected' AND c.tracking_tier != 'suppressed'
           ORDER BY c.holder_count DESC
           LIMIT ${limit}
         `
@@ -182,7 +182,7 @@ export class CollectionsService {
             (SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
              FROM collections c
              INNER JOIN collection_holders ch ON ch.collection_id = c.id
-             WHERE c.is_spam = false AND c.chain IN (${sql.join(chains.map(chain => sql`${chain}`), sql`, `)})
+             WHERE c.is_spam = false AND c.verification_status != 'rejected' AND c.tracking_tier != 'suppressed' AND c.chain IN (${sql.join(chains.map(chain => sql`${chain}`), sql`, `)})
              GROUP BY c.id, c.chain
              HAVING COUNT(ch.address) > 0
              ORDER BY holder_count DESC
@@ -192,7 +192,7 @@ export class CollectionsService {
             SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
             FROM collections c
             INNER JOIN collection_holders ch ON ch.collection_id = c.id
-            WHERE c.is_spam = false
+            WHERE c.is_spam = false AND c.verification_status != 'rejected' AND c.tracking_tier != 'suppressed'
             GROUP BY c.id
             HAVING COUNT(ch.address) > 0
             ORDER BY holder_count DESC
@@ -531,6 +531,8 @@ export class CollectionsService {
       INNER JOIN collections c ON och.collection_id = c.id
       CROSS JOIN (SELECT COUNT(*)::numeric as cnt FROM target_holder_groups) target_total
       WHERE c.is_spam IS NOT TRUE
+        AND c.verification_status != 'rejected'
+        AND c.tracking_tier != 'suppressed'
         AND och.shared_holders >= ${minSharedFloor}
       ORDER BY overlap_strength DESC, och.shared_holders DESC
       LIMIT ${limit}
@@ -675,7 +677,7 @@ export class CollectionsService {
                 SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
                 FROM collections c
                 INNER JOIN collection_holders ch ON ch.collection_id = c.id
-                WHERE c.is_spam = false AND c.chain IN (${sql.join(chains.map(chain => sql`${chain}`), sql`, `)})
+                WHERE c.is_spam = false AND c.verification_status != 'rejected' AND c.tracking_tier != 'suppressed' AND c.chain IN (${sql.join(chains.map(chain => sql`${chain}`), sql`, `)})
                 GROUP BY c.id
                 HAVING COUNT(ch.address) > 0
                 ORDER BY holder_count DESC
@@ -685,7 +687,7 @@ export class CollectionsService {
                 SELECT DISTINCT c.id, c.name, c.chain, c.contract_address, c.image_url, COUNT(ch.address) as holder_count
                 FROM collections c
                 INNER JOIN collection_holders ch ON ch.collection_id = c.id
-                WHERE c.is_spam = false
+                WHERE c.is_spam = false AND c.verification_status != 'rejected' AND c.tracking_tier != 'suppressed'
                 GROUP BY c.id
                 HAVING COUNT(ch.address) > 0
                 ORDER BY holder_count DESC
@@ -938,7 +940,7 @@ export class CollectionsService {
           INNER JOIN collections c ON c.id = ch.collection_id
           WHERE ch.address = ${normalizedAddress}
             AND ch.chain = ${chain}
-            AND c.is_spam = false
+            AND c.is_spam = false AND c.verification_status != 'rejected' AND c.tracking_tier != 'suppressed'
         `,
       );
 
@@ -1001,7 +1003,7 @@ export class CollectionsService {
         FROM collections c
         INNER JOIN all_holder_groups ahg ON ahg.collection_id = c.id
         LEFT JOIN user_holder_groups uhg ON uhg.holder_id = ahg.holder_id
-        WHERE c.is_spam = false
+        WHERE c.is_spam = false AND c.verification_status != 'rejected' AND c.tracking_tier != 'suppressed'
           AND c.id NOT IN (${sql.join(userCollectionIds.map(id => sql`${id}`), sql`, `)})
         GROUP BY c.id
         HAVING COUNT(DISTINCT CASE WHEN uhg.holder_id IS NOT NULL THEN ahg.holder_id END) >= ${minOverlap}
