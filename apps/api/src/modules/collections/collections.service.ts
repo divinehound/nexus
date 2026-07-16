@@ -474,37 +474,42 @@ export class CollectionsService {
         WHERE ch.collection_id = ${collectionId}
       ),
       other_holder_groups AS (
-        -- Group all collection holders by user or address
-        SELECT 
+        -- Group all collection holders by user or address, one row per
+        -- holder with their total token count in that collection
+        SELECT
           ch.collection_id,
           COALESCE(
             w.user_id::text,
-            CASE 
+            CASE
               WHEN ch.chain = 'solana' THEN ch.address
               ELSE LOWER(ch.address)
             END
-          ) as holder_id
+          ) as holder_id,
+          SUM(ch.token_count) as tokens
         FROM collection_holders ch
-        LEFT JOIN wallets w ON 
+        LEFT JOIN wallets w ON
           CASE
             WHEN ch.chain = 'solana' THEN w.address = ch.address
             ELSE LOWER(w.address) = LOWER(ch.address)
           END
           AND w.chain::text = ch.chain
         WHERE ch.collection_id != ${collectionId}
+        GROUP BY ch.collection_id, holder_id
       ),
       other_collection_holders AS (
-        SELECT 
+        SELECT
           ohg.collection_id,
-          COUNT(DISTINCT ohg.holder_id) as shared_holders
+          COUNT(*) as shared_holders,
+          SUM(ohg.tokens) as shared_tokens
         FROM other_holder_groups ohg
         INNER JOIN target_holder_groups thg ON ohg.holder_id = thg.holder_id
         GROUP BY ohg.collection_id
       ),
       total_collection_holders AS (
-        SELECT 
+        SELECT
           collection_id,
-          COUNT(DISTINCT holder_id) as total_holders
+          COUNT(*) as total_holders,
+          SUM(tokens) as total_tokens
         FROM other_holder_groups
         WHERE collection_id IN (SELECT collection_id FROM other_collection_holders)
         GROUP BY collection_id
@@ -525,7 +530,13 @@ export class CollectionsService {
         -- Overlap coefficient: shared as a fraction of the SMALLER community.
         -- Ranks a tight 300-holder community that's 80% ducks above a 10k
         -- whale collection sharing 150 holders (1.5%).
-        (och.shared_holders::numeric / LEAST(target_total.cnt, tch.total_holders)::numeric) as overlap_strength
+        (och.shared_holders::numeric / LEAST(target_total.cnt, tch.total_holders)::numeric) as overlap_strength,
+        -- Share of the other collection's tokens owned by the overlapping
+        -- holders: distinguishes "each grabbed one" from "sister collection"
+        ROUND(
+          (och.shared_tokens::numeric / NULLIF(tch.total_tokens, 0)::numeric) * 100,
+          1
+        )::text as shared_supply_pct
       FROM other_collection_holders och
       INNER JOIN total_collection_holders tch ON och.collection_id = tch.collection_id
       INNER JOIN collections c ON och.collection_id = c.id
@@ -548,6 +559,7 @@ export class CollectionsService {
       totalHolders: parseInt(row.total_holders),
       overlapPercentage: parseFloat(row.overlap_percentage),
       overlapStrength: parseFloat(row.overlap_strength),
+      sharedSupplyPct: row.shared_supply_pct != null ? parseFloat(row.shared_supply_pct) : null,
     }));
   }
 
@@ -717,34 +729,45 @@ export class CollectionsService {
     const edgesResult = await this.db.execute(
       sql`
         WITH holder_groups AS (
-          SELECT 
+          SELECT
             ch.collection_id,
             COALESCE(
               w.user_id::text,
-              CASE 
+              CASE
                 WHEN ch.chain = 'solana' THEN ch.address
                 ELSE LOWER(ch.address)
               END
-            ) as holder_id
+            ) as holder_id,
+            SUM(ch.token_count) as tokens
           FROM collection_holders ch
-          LEFT JOIN wallets w ON 
+          LEFT JOIN wallets w ON
             CASE
               WHEN ch.chain = 'solana' THEN w.address = ch.address
               ELSE LOWER(w.address) = LOWER(ch.address)
             END
             AND w.chain::text = ch.chain
           WHERE ch.collection_id IN (${sql.join(collectionIds.map(id => sql`${id}`), sql`, `)})
+          GROUP BY ch.collection_id, holder_id
+        ),
+        totals AS (
+          SELECT collection_id, SUM(tokens) as total_tokens
+          FROM holder_groups
+          GROUP BY collection_id
         )
-        SELECT 
+        SELECT
           a.collection_id as source_id,
           b.collection_id as target_id,
-          COUNT(DISTINCT a.holder_id) as shared_holders
+          COUNT(*) as shared_holders,
+          ROUND((SUM(a.tokens)::numeric / NULLIF(ta.total_tokens, 0)::numeric) * 100, 1) as supply_pct_source,
+          ROUND((SUM(b.tokens)::numeric / NULLIF(tb.total_tokens, 0)::numeric) * 100, 1) as supply_pct_target
         FROM holder_groups a
-        INNER JOIN holder_groups b 
+        INNER JOIN holder_groups b
           ON a.holder_id = b.holder_id
           AND a.collection_id < b.collection_id
-        GROUP BY a.collection_id, b.collection_id
-        HAVING COUNT(DISTINCT a.holder_id) >= ${minShared}
+        INNER JOIN totals ta ON ta.collection_id = a.collection_id
+        INNER JOIN totals tb ON tb.collection_id = b.collection_id
+        GROUP BY a.collection_id, b.collection_id, ta.total_tokens, tb.total_tokens
+        HAVING COUNT(*) >= ${minShared}
         ORDER BY shared_holders DESC
       `,
     );
@@ -779,6 +802,8 @@ export class CollectionsService {
         sharedHolders,
         weight,
         holderDataReliable: smallerCount >= sharedHolders && smallerCount > 0,
+        supplyPctSource: row.supply_pct_source != null ? parseFloat(row.supply_pct_source) : null,
+        supplyPctTarget: row.supply_pct_target != null ? parseFloat(row.supply_pct_target) : null,
       };
     });
 
@@ -844,13 +869,15 @@ export class CollectionsService {
       const edges = filteredRelated.map(r => {
         const smallerCount = Math.min(sourceCollection.holderCount || 0, r.totalHolders);
         const weight = smallerCount > 0 ? Math.min(r.sharedHolders / smallerCount, 1) : 0;
-        
+
         return {
           source: collectionId,
           target: r.id,
           sharedHolders: r.sharedHolders,
           weight,
           holderDataReliable: smallerCount >= r.sharedHolders && smallerCount > 0,
+          // % of the target collection's tokens owned by the shared holders
+          supplyPctTarget: r.sharedSupplyPct,
         };
       });
 
@@ -907,6 +934,9 @@ export class CollectionsService {
               sharedHolders,
               weight,
               holderDataReliable: smallerCount >= sharedHolders && smallerCount > 0,
+              // Cross edges between related collections aren't focus-directed,
+              // so no supply share is computed for them
+              supplyPctTarget: null,
             });
           }
         }

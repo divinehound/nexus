@@ -443,6 +443,11 @@ export function NetworkGraphVisualization({
                         />{' '}
                         {pctOfFocusHolders(edge.sharedHolders) !== null &&
                           `${pctOfFocusHolders(edge.sharedHolders)}% of holders · `}
+                        {(() => {
+                          // supply % of the OTHER collection, whichever side it's on
+                          const supplyPct = edge.source === focusedNode ? edge.supplyPctTarget : edge.supplyPctSource;
+                          return supplyPct != null ? `own ${Math.round(supplyPct)}% of supply · ` : '';
+                        })()}
                         {edge.sharedHolders.toLocaleString()} shared
                       </p>
                     </div>

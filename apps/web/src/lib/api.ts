@@ -773,6 +773,10 @@ export interface NetworkGraphEdge {
   sharedHolders: number;
   weight: number;
   holderDataReliable?: boolean;
+  /** % of the source collection's tokens owned by the shared holders */
+  supplyPctSource?: number | null;
+  /** % of the target collection's tokens owned by the shared holders */
+  supplyPctTarget?: number | null;
 }
 
 export interface NetworkGraph {
