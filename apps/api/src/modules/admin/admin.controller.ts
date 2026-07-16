@@ -209,8 +209,8 @@ export class AdminController {
 
   @Post('collections/index-backlog')
   @ApiOperation({ summary: 'Index holders for all non-spam collections without holder data (background job)' })
-  indexHolderBacklog(@Body() body?: { limit?: number }) {
-    return this.adminService.indexHolderBacklog(body?.limit);
+  indexHolderBacklog(@Body() body?: { limit?: number; maxHolders?: number }) {
+    return this.adminService.indexHolderBacklog(body?.limit, body?.maxHolders);
   }
 
   @Get('collections/index-backlog/status')

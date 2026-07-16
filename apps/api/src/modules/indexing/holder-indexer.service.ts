@@ -10,11 +10,16 @@ type BacklogJob = {
   processed: number;
   succeeded: number;
   failed: number;
+  skipped: number;
   current?: string;
   startedAt?: string;
   finishedAt?: string;
   error?: string;
 };
+
+/** Collections above this holder count are skipped by bulk indexing — they're
+ * utility/airdrop-scale contracts, not communities worth overlap analysis. */
+const DEFAULT_HOLDER_CAP = 50000;
 
 interface AlchemyOwner {
   ownerAddress: string;
@@ -32,7 +37,7 @@ interface AlchemyOwnersResponse {
 @Injectable()
 export class HolderIndexerService {
   private readonly logger = new Logger(HolderIndexerService.name);
-  private backlogJob: BacklogJob = { status: 'idle', total: 0, processed: 0, succeeded: 0, failed: 0 };
+  private backlogJob: BacklogJob = { status: 'idle', total: 0, processed: 0, succeeded: 0, failed: 0, skipped: 0 };
 
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
@@ -48,15 +53,21 @@ export class HolderIndexerService {
    * strongest discovery overlap first. Runs in the background; check
    * getBacklogStatus() or server logs for progress.
    */
-  async indexHolderBacklog(limit?: number): Promise<{ started: boolean; alreadyRunning: boolean; job: BacklogJob }> {
+  async indexHolderBacklog(limit?: number, maxHolders?: number): Promise<{ started: boolean; alreadyRunning: boolean; job: BacklogJob }> {
     if (this.backlogJob.status === 'running') {
       return { started: false, alreadyRunning: true, job: this.backlogJob };
     }
 
+    const holderCap = maxHolders ?? DEFAULT_HOLDER_CAP;
+
+    // Skip contracts with degenerate supply (no community / airdrop farms)
+    // and anything a previous run already skipped for being too large.
     const rows = await this.db.execute<{ id: string; name: string }>(sql`
       SELECT c.id, c.name
       FROM collections c
       WHERE c.is_spam IS NOT TRUE
+        AND (c.supply IS NULL OR (c.supply >= 2 AND c.supply <= 100000))
+        AND c.last_index_status IS DISTINCT FROM 'skipped'
         AND NOT EXISTS (SELECT 1 FROM collection_holders ch WHERE ch.collection_id = c.id)
       ORDER BY c.discovered_overlap_count DESC NULLS LAST, c.first_seen_at ASC
       ${limit ? sql`LIMIT ${limit}` : sql``}
@@ -68,12 +79,13 @@ export class HolderIndexerService {
       processed: 0,
       succeeded: 0,
       failed: 0,
+      skipped: 0,
       startedAt: new Date().toISOString(),
     };
-    this.logger.log(`Holder backlog index started: ${rows.length} collections to index`);
+    this.logger.log(`Holder backlog index started: ${rows.length} collections to index (holder cap ${holderCap})`);
 
     setImmediate(() => {
-      void this.runBacklog(rows as Array<{ id: string; name: string }>).catch((err) => {
+      void this.runBacklog(rows as Array<{ id: string; name: string }>, holderCap).catch((err) => {
         this.logger.error(`Holder backlog index crashed: ${err?.message || err}`);
         this.backlogJob.status = 'failed';
         this.backlogJob.error = err?.message || 'Unknown error';
@@ -84,15 +96,18 @@ export class HolderIndexerService {
     return { started: true, alreadyRunning: false, job: this.backlogJob };
   }
 
-  private async runBacklog(rows: Array<{ id: string; name: string }>) {
+  private async runBacklog(rows: Array<{ id: string; name: string }>, holderCap: number) {
     let consecutiveFailures = 0;
 
     for (const row of rows) {
       this.backlogJob.current = row.name;
       try {
-        const result = await this.indexCollectionHolders(row.id);
+        const result = await this.indexCollectionHolders(row.id, { maxHolders: holderCap });
         if (result.success) {
           this.backlogJob.succeeded++;
+          consecutiveFailures = 0;
+        } else if (result.skipped) {
+          this.backlogJob.skipped++;
           consecutiveFailures = 0;
         } else {
           this.backlogJob.failed++;
@@ -115,7 +130,7 @@ export class HolderIndexerService {
 
       if (this.backlogJob.processed % 25 === 0) {
         this.logger.log(
-          `Holder backlog progress: ${this.backlogJob.processed}/${this.backlogJob.total} (${this.backlogJob.succeeded} ok, ${this.backlogJob.failed} failed)`,
+          `Holder backlog progress: ${this.backlogJob.processed}/${this.backlogJob.total} (${this.backlogJob.succeeded} ok, ${this.backlogJob.skipped} skipped, ${this.backlogJob.failed} failed)`,
         );
       }
 
@@ -126,7 +141,7 @@ export class HolderIndexerService {
     this.backlogJob.current = undefined;
     this.backlogJob.finishedAt = new Date().toISOString();
     this.logger.log(
-      `Holder backlog index complete: ${this.backlogJob.succeeded} indexed, ${this.backlogJob.failed} failed of ${this.backlogJob.total}`,
+      `Holder backlog index complete: ${this.backlogJob.succeeded} indexed, ${this.backlogJob.skipped} skipped (too large), ${this.backlogJob.failed} failed of ${this.backlogJob.total}`,
     );
   }
 
@@ -134,9 +149,10 @@ export class HolderIndexerService {
    * Index all holders for a collection
    * Creates wallet records and holdings snapshots
    */
-  async indexCollectionHolders(collectionId: string): Promise<{
+  async indexCollectionHolders(collectionId: string, options?: { maxHolders?: number }): Promise<{
     success: boolean;
     holdersIndexed: number;
+    skipped?: boolean;
     error?: string;
   }> {
     try {
@@ -153,8 +169,8 @@ export class HolderIndexerService {
 
       // Fetch all holders based on chain
       const holderResult = collection.chain === 'solana'
-        ? await this.fetchSolanaHolders(collection.contractAddress)
-        : await this.fetchEvmHolders(collection.chain, collection.contractAddress);
+        ? await this.fetchSolanaHolders(collection.contractAddress, options?.maxHolders)
+        : await this.fetchEvmHolders(collection.chain, collection.contractAddress, options?.maxHolders);
       
       const holders = holderResult.holders;
       this.logger.log(`Fetched ${holders.length} unique holders for ${collection.name}`);
@@ -210,6 +226,21 @@ export class HolderIndexerService {
 
       return { success: true, holdersIndexed: indexed };
     } catch (error: any) {
+      // Cap exceeded is a deliberate skip, not a failure — mark it so
+      // backlog runs exclude it in the future instead of retrying forever
+      if (error?.code === 'HOLDER_CAP_EXCEEDED') {
+        this.logger.warn(`Skipping collection ${collectionId}: ${error.message}`);
+        await this.db
+          .update(collections)
+          .set({
+            lastIndexFinishedAt: new Date(),
+            lastIndexStatus: 'skipped',
+            lastIndexError: error.message,
+          })
+          .where(eq(collections.id, collectionId));
+        return { success: false, holdersIndexed: 0, skipped: true, error: error.message };
+      }
+
       this.logger.error(`Failed to index holders for collection ${collectionId}:`, error);
 
       // Update error status
@@ -232,6 +263,7 @@ export class HolderIndexerService {
   private async fetchEvmHolders(
     chain: string,
     contractAddress: string,
+    maxHolders?: number,
   ): Promise<{
     holders: Array<{ ownerAddress: string; balance: number }>;
     spamInfo?: { isSpam: boolean; score: number; reason?: string };
@@ -284,6 +316,13 @@ export class HolderIndexerService {
         holders.set(address, (holders.get(address) || 0) + totalBalance);
       }
 
+      if (maxHolders && holders.size > maxHolders) {
+        throw Object.assign(
+          new Error(`Holder count exceeds cap (${holders.size.toLocaleString()}+ holders > ${maxHolders.toLocaleString()})`),
+          { code: 'HOLDER_CAP_EXCEEDED' },
+        );
+      }
+
       pageKey = data.pageKey;
     } while (pageKey);
 
@@ -312,6 +351,7 @@ export class HolderIndexerService {
    */
   private async fetchSolanaHolders(
     collectionMint: string,
+    maxHolders?: number,
   ): Promise<{
     holders: Array<{ ownerAddress: string; balance: number }>;
     spamInfo?: { isSpam: boolean; score: number; reason?: string };
@@ -362,6 +402,13 @@ export class HolderIndexerService {
       }
 
       this.logger.log(`Fetched page ${page}: ${items.length} NFTs, ${holders.size} unique holders so far`);
+
+      if (maxHolders && holders.size > maxHolders) {
+        throw Object.assign(
+          new Error(`Holder count exceeds cap (${holders.size.toLocaleString()}+ holders > ${maxHolders.toLocaleString()})`),
+          { code: 'HOLDER_CAP_EXCEEDED' },
+        );
+      }
 
       // If we got less than limit, we're done
       if (items.length < limit) break;

@@ -333,6 +333,7 @@ export interface HolderBacklogJob {
   processed: number;
   succeeded: number;
   failed: number;
+  skipped: number;
   current?: string;
   startedAt?: string;
   finishedAt?: string;

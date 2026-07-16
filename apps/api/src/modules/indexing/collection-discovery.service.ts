@@ -361,7 +361,7 @@ export class CollectionDiscoveryService {
 
       this.logger.log(`Auto-indexing holders for ${col.name} (overlap ${col.holderOverlap})`);
       try {
-        const indexResult = await this.holderIndexer.indexCollectionHolders(row.id);
+        const indexResult = await this.holderIndexer.indexCollectionHolders(row.id, { maxHolders: 50000 });
         if (indexResult.success) autoIndexed++;
       } catch (err: any) {
         this.logger.warn(`Auto-index failed for ${col.name}: ${err?.message || 'unknown error'}`);

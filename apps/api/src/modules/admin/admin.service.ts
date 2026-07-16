@@ -968,8 +968,8 @@ export class AdminService {
     return { success: true, collection: collection.name };
   }
 
-  async indexHolderBacklog(limit?: number) {
-    return this.holderIndexerService.indexHolderBacklog(limit);
+  async indexHolderBacklog(limit?: number, maxHolders?: number) {
+    return this.holderIndexerService.indexHolderBacklog(limit, maxHolders);
   }
 
   getHolderBacklogStatus() {
