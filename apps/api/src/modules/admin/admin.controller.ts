@@ -390,7 +390,7 @@ export class AdminController {
   @ApiOperation({ summary: 'Discover new collections from this collection\'s holders (async)' })
   discoverCollections(
     @Param('id') id: string,
-    @Body() body?: { maxHolders?: number; maxCollectionsPerHolder?: number }
+    @Body() body?: { maxHolders?: number; maxCollectionsPerHolder?: number; maxNewContracts?: number; minHolderOverlap?: number }
   ) {
     return this.adminService.discoverCollections(id, body);
   }

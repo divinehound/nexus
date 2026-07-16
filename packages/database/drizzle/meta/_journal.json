@@ -183,6 +183,13 @@
       "when": 1776470000000,
       "tag": "0025_wallet_nicknames",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1784073600000,
+      "tag": "0026_discovery_overlap",
+      "breakpoints": true
     }
   ]
 }

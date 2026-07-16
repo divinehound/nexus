@@ -271,7 +271,12 @@ export class BlockchainLookupService {
     if (!meta?.alchemySubdomain) return [];
 
     try {
-      const url = `https://${meta.alchemySubdomain}.g.alchemy.com/nft/v3/${alchemyKey}/getNFTsForOwner?owner=${holderAddress}&withMetadata=false&pageSize=${limit}`;
+      // Alchemy's spam classifier only runs on certain networks; the filter
+      // param errors elsewhere, so only send it where it's supported.
+      const spamFilter = ['eth-mainnet', 'polygon-mainnet'].includes(meta.alchemySubdomain)
+        ? '&excludeFilters[]=SPAM'
+        : '';
+      const url = `https://${meta.alchemySubdomain}.g.alchemy.com/nft/v3/${alchemyKey}/getNFTsForOwner?owner=${holderAddress}&withMetadata=false&pageSize=${limit}${spamFilter}`;
       let response = await fetch(url, { method: 'GET' });
       for (let attempt = 0; attempt < 3 && response.status === 429; attempt++) {
         const delay = 1000 * Math.pow(2, attempt);
@@ -288,9 +293,12 @@ export class BlockchainLookupService {
       const data = await response.json();
       const contracts = new Set<string>();
 
+      // v3 with withMetadata=false returns a flat contractAddress field;
+      // the nested contract.address shape only exists with withMetadata=true.
       data.ownedNfts?.forEach((nft: any) => {
-        if (nft.contract?.address) {
-          contracts.add(nft.contract.address.toLowerCase());
+        const address = nft.contractAddress || nft.contract?.address;
+        if (address) {
+          contracts.add(address.toLowerCase());
         }
       });
 

@@ -11,6 +11,7 @@ import {
   pgEnum,
   numeric,
   uniqueIndex,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
 export const collectionTypeEnum = pgEnum('collection_type', [
@@ -153,6 +154,13 @@ export const collections = pgTable(
     lastIndexJobId: varchar('last_index_job_id', { length: 64 }),
     holderHistoryLastCheckedBlock: bigint('holder_history_last_checked_block', { mode: 'number' }),
     holderHistoryLastScannedAt: timestamp('holder_history_last_scanned_at', { withTimezone: true }),
+    // How many of the source collection's holders also held this contract
+    // when discovery found it, and which collection it was discovered from
+    discoveredOverlapCount: integer('discovered_overlap_count'),
+    discoveredFromCollectionId: uuid('discovered_from_collection_id').references(
+      (): AnyPgColumn => collections.id,
+      { onDelete: 'set null' },
+    ),
     // Collection metadata (social links, description)
     description: text('description'),
     discordUrl: text('discord_url'),

@@ -10,15 +10,24 @@ interface DiscoveryResult {
   collectionName: string;
   holdersChecked: number;
   existingCollectionsInDb: number;
+  overlapFloor: number;
+  contractsBelowFloor: number;
   newCollectionsFound: number;
   spamFiltered: number;
   newCollections: Array<{
     chain: string;
     contractAddress: string;
     name: string;
+    holderOverlap: number;
   }>;
   processingTimeMs: number;
 }
+
+// Burn/zero addresses show up as "holders" but aren't real wallets
+const IGNORED_HOLDER_ADDRESSES = new Set([
+  '0x0000000000000000000000000000000000000000',
+  '0x000000000000000000000000000000000000dead',
+]);
 
 @Injectable()
 export class CollectionDiscoveryService {
@@ -39,11 +48,12 @@ export class CollectionDiscoveryService {
       maxHolders?: number;
       maxCollectionsPerHolder?: number;
       maxNewContracts?: number;
+      minHolderOverlap?: number;
     }
   ): Promise<DiscoveryResult> {
     const startTime = Date.now();
     const maxHolders = options?.maxHolders; // unset = scan every holder
-    const maxPerHolder = options?.maxCollectionsPerHolder || 50;
+    const maxPerHolder = options?.maxCollectionsPerHolder || 100;
     const maxNewContracts = options?.maxNewContracts || 200;
 
     this.logger.log(`Starting collection discovery for ${collectionId}`);
@@ -75,12 +85,14 @@ export class CollectionDiscoveryService {
 
     this.logger.log(`Checking ${holdersResult.length} holders for new collections`);
 
-    const discoveredContracts = new Map<string, { chain: string; address: string }>();
+    const discoveredContracts = new Map<string, { chain: string; address: string; holderOverlap: number }>();
     const existingContracts = new Set<string>();
     let holdersChecked = 0;
 
     // Check each holder's other NFTs
     for (const holder of holdersResult) {
+      if (IGNORED_HOLDER_ADDRESSES.has(holder.address.toLowerCase())) continue;
+
       try {
         holdersChecked++;
 
@@ -96,7 +108,6 @@ export class CollectionDiscoveryService {
           maxPerHolder
         );
 
-        // Check which contracts we haven't seen before
         for (const nft of nfts) {
           // Preserve case for Solana (base58), lowercase for EVM (hex)
           const normalizedAddress = nft.chain === 'solana'
@@ -104,7 +115,15 @@ export class CollectionDiscoveryService {
             : nft.contractAddress.toLowerCase();
           const key = `${nft.chain}:${normalizedAddress}`;
 
-          if (discoveredContracts.has(key) || existingContracts.has(key)) continue;
+          if (existingContracts.has(key)) continue;
+
+          // Count how many of the source collection's holders also hold this
+          // contract — the ranking signal for what's worth adding.
+          const discovered = discoveredContracts.get(key);
+          if (discovered) {
+            discovered.holderOverlap++;
+            continue;
+          }
 
           // Check if already in our DB
           const existsResult = await this.db.execute(sql`
@@ -124,6 +143,7 @@ export class CollectionDiscoveryService {
             discoveredContracts.set(key, {
               chain: nft.chain,
               address: normalizedAddress,
+              holderOverlap: 1,
             });
           }
         }
@@ -138,32 +158,43 @@ export class CollectionDiscoveryService {
       }
     }
 
-    // Log what we're about to process BEFORE we start
-    const totalContracts = discoveredContracts.size;
-    const solanaContracts = Array.from(discoveredContracts.values()).filter(c => c.chain === 'solana');
-    
-    this.logger.log(`Discovery queue: ${totalContracts} total contracts (${solanaContracts.length} Solana)`);
-    
+    // Selectivity: require a minimum co-holder overlap before a contract is
+    // worth a metadata fetch — one-off holdings are noise, genuine community
+    // adjacency shows up as many distinct holders. Default floor: 3 holders
+    // or 0.5% of holders checked, whichever is greater.
+    const overlapFloor = options?.minHolderOverlap ?? Math.max(3, Math.ceil(holdersChecked * 0.005));
+    const eligible = Array.from(discoveredContracts.values())
+      .filter(c => c.holderOverlap >= overlapFloor)
+      .sort((a, b) => b.holderOverlap - a.holderOverlap);
+    const contractsBelowFloor = discoveredContracts.size - eligible.length;
+
+    this.logger.log(
+      `Discovery queue: ${discoveredContracts.size} distinct new contracts; ` +
+      `${eligible.length} meet the >=${overlapFloor}-holder overlap floor (${contractsBelowFloor} dropped as noise)`,
+    );
+
+    const solanaContracts = eligible.filter(c => c.chain === 'solana');
     // Log ALL Solana addresses for inspection (so we can see which ones are bad)
     if (solanaContracts.length > 0) {
       this.logger.log(`Solana contracts to process: ${solanaContracts.map(c => c.address).join(', ')}`);
     }
-    
-    // Safety limit on metadata fetches per run (override via maxNewContracts)
-    const contractsToProcess = Array.from(discoveredContracts.entries()).slice(0, maxNewContracts);
-    if (contractsToProcess.length < discoveredContracts.size) {
+
+    // Safety limit on metadata fetches per run (override via maxNewContracts).
+    // The queue is sorted by overlap, so the cap keeps the best candidates.
+    const contractsToProcess = eligible.slice(0, maxNewContracts);
+    if (contractsToProcess.length < eligible.length) {
       this.logger.warn(
-        `Limiting to first ${contractsToProcess.length}/${discoveredContracts.size} new contracts to conserve API quota (pass maxNewContracts to raise)`,
+        `Limiting to top ${contractsToProcess.length}/${eligible.length} contracts by overlap to conserve API quota (pass maxNewContracts to raise)`,
       );
     }
     
     // Add discovered collections to database (after spam filtering)
-    const newCollections: Array<{ chain: string; contractAddress: string; name: string }> = [];
+    const newCollections: Array<{ chain: string; contractAddress: string; name: string; holderOverlap: number }> = [];
     let spamFiltered = 0;
     let rateLimitErrors = 0;
     const maxRateLimitErrors = 1; // Circuit breaker: stop immediately on first rate limit
-    
-    for (const [key, contract] of contractsToProcess) {
+
+    for (const contract of contractsToProcess) {
       // Circuit breaker: stop discovery if too many rate limits
       if (rateLimitErrors >= maxRateLimitErrors) {
         this.logger.warn(`Circuit breaker triggered: ${rateLimitErrors} rate limit errors. Stopping discovery.`);
@@ -211,10 +242,18 @@ export class CollectionDiscoveryService {
         }
 
         const name = metadata.name;
-        
+
+        // Supply sanity gate: single-token contracts have no community to
+        // analyze, and six-figure supplies are open-edition/airdrop farms.
+        const supply = metadata?.totalSupply ? Number.parseInt(String(metadata.totalSupply), 10) : null;
+        if (supply !== null && Number.isFinite(supply) && (supply < 2 || supply > 100000)) {
+          this.logger.log(`Skipping ${name} (${contract.chain}:${contract.address}) - supply ${supply} out of range`);
+          continue;
+        }
+
         // Check for spam BEFORE adding to database
         const spamCheck = await this.spamChecker.checkCollection(contract.chain, contract.address, name);
-        
+
         if (spamCheck.isSpam) {
           spamFiltered++;
           this.logger.log(`Filtered spam: ${name} - ${spamCheck.reason}`);
@@ -223,12 +262,12 @@ export class CollectionDiscoveryService {
 
         // Add to database as unverified (not spam)
         const collectionType = metadata?.tokenType?.toLowerCase() === 'erc1155' ? 'erc1155' : 'erc721';
-        
+
         await this.db.execute(sql`
-          INSERT INTO collections (chain, contract_address, name, image_url, supply, collection_type, verification_status, mapping_status, last_seen_at, is_spam)
-          VALUES (${contract.chain}, ${contract.address}, ${name}, 
-                  ${metadata?.imageUrl || null}, ${metadata?.totalSupply || null}, ${collectionType}, 
-                  'tracked_unverified', 'unmapped', NOW(), false)
+          INSERT INTO collections (chain, contract_address, name, image_url, supply, collection_type, verification_status, mapping_status, last_seen_at, is_spam, discovered_overlap_count, discovered_from_collection_id)
+          VALUES (${contract.chain}, ${contract.address}, ${name},
+                  ${metadata?.imageUrl || null}, ${metadata?.totalSupply || null}, ${collectionType},
+                  'tracked_unverified', 'unmapped', NOW(), false, ${contract.holderOverlap}, ${sourceCollection.id})
           ON CONFLICT (chain, contract_address) DO NOTHING
         `);
 
@@ -236,9 +275,10 @@ export class CollectionDiscoveryService {
           chain: contract.chain,
           contractAddress: contract.address,
           name: name,
+          holderOverlap: contract.holderOverlap,
         });
 
-        this.logger.log(`Added new collection: ${name}`);
+        this.logger.log(`Added new collection: ${name} (held by ${contract.holderOverlap} of ${holdersChecked} holders)`);
       } catch (err: any) {
         // Track rate limit errors for circuit breaker
         if (err?.message?.includes('429')) {
@@ -264,6 +304,8 @@ export class CollectionDiscoveryService {
       collectionName: sourceCollection.name,
       holdersChecked,
       existingCollectionsInDb: existingContracts.size,
+      overlapFloor,
+      contractsBelowFloor,
       newCollectionsFound: newCollections.length,
       spamFiltered,
       newCollections,

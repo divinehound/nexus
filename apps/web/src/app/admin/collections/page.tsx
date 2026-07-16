@@ -344,7 +344,7 @@ export default function AdminCollectionsPage() {
         try {
           const result = await adminDiscoverCollections(
             collectionId,
-            { maxHolders: 500, maxCollectionsPerHolder: 50 },
+            {}, // no maxHolders — scan the full holder list
             accessToken
           );
           
