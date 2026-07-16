@@ -44,8 +44,30 @@ export class HolderIndexerService {
     private readonly config: ConfigService,
   ) {}
 
-  getBacklogStatus(): BacklogJob {
-    return this.backlogJob;
+  async getBacklogStatus(): Promise<BacklogJob & { queueSize: number }> {
+    return { ...this.backlogJob, queueSize: await this.getBacklogQueueSize() };
+  }
+
+  /** Collections currently eligible for backlog indexing */
+  private async getBacklogQueueSize(): Promise<number> {
+    const result = await this.db.execute<{ count: number }>(sql`
+      SELECT COUNT(*)::int as count FROM collections c WHERE ${this.backlogFilter()}
+    `);
+    return Number(result[0]?.count ?? 0);
+  }
+
+  private backlogFilter() {
+    // Skip anything an admin decided not to track (rejected/suppressed),
+    // contracts with degenerate supply (no community / airdrop farms),
+    // and anything a previous run already skipped for being too large.
+    return sql`
+      c.is_spam IS NOT TRUE
+      AND c.verification_status != 'rejected'
+      AND c.tracking_tier != 'suppressed'
+      AND (c.supply IS NULL OR (c.supply >= 2 AND c.supply <= 100000))
+      AND c.last_index_status IS DISTINCT FROM 'skipped'
+      AND NOT EXISTS (SELECT 1 FROM collection_holders ch WHERE ch.collection_id = c.id)
+    `;
   }
 
   /**
@@ -60,18 +82,10 @@ export class HolderIndexerService {
 
     const holderCap = maxHolders ?? DEFAULT_HOLDER_CAP;
 
-    // Skip anything an admin decided not to track (rejected/suppressed),
-    // contracts with degenerate supply (no community / airdrop farms),
-    // and anything a previous run already skipped for being too large.
     const rows = await this.db.execute<{ id: string; name: string }>(sql`
       SELECT c.id, c.name
       FROM collections c
-      WHERE c.is_spam IS NOT TRUE
-        AND c.verification_status != 'rejected'
-        AND c.tracking_tier != 'suppressed'
-        AND (c.supply IS NULL OR (c.supply >= 2 AND c.supply <= 100000))
-        AND c.last_index_status IS DISTINCT FROM 'skipped'
-        AND NOT EXISTS (SELECT 1 FROM collection_holders ch WHERE ch.collection_id = c.id)
+      WHERE ${this.backlogFilter()}
       ORDER BY c.discovered_overlap_count DESC NULLS LAST, c.first_seen_at ASC
       ${limit ? sql`LIMIT ${limit}` : sql``}
     `);

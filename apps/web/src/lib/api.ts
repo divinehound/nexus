@@ -334,6 +334,7 @@ export interface HolderBacklogJob {
   succeeded: number;
   failed: number;
   skipped: number;
+  queueSize?: number;
   current?: string;
   startedAt?: string;
   finishedAt?: string;

@@ -13,6 +13,8 @@ import {
   adminMarkCollectionAsNotSpam,
   adminBulkCheckSpam,
   adminIndexHolderBacklog,
+  adminGetHolderBacklogStatus,
+  type HolderBacklogJob,
   adminCheckSpamRaw,
   adminDiscoverCollections,
   adminBulkMarkSpam,
@@ -396,13 +398,36 @@ export default function AdminCollectionsPage() {
     }
   };
 
+  const [backlogJob, setBacklogJob] = useState<HolderBacklogJob | null>(null);
+
+  const refreshBacklogStatus = async () => {
+    if (!accessToken) return;
+    try {
+      setBacklogJob(await adminGetHolderBacklogStatus(accessToken));
+    } catch {
+      // status is a nice-to-have; ignore fetch failures
+    }
+  };
+
+  useEffect(() => {
+    refreshBacklogStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (backlogJob?.status !== 'running') return;
+    const interval = setInterval(refreshBacklogStatus, 5000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backlogJob?.status, accessToken]);
+
   const handleIndexBacklog = async () => {
     if (!accessToken) return;
 
     setConfirmModal({
       isOpen: true,
       title: 'Index Holder Backlog',
-      message: 'Index holders for every non-spam collection that has no holder data yet, strongest discovery overlap first. Runs as a background job (~1s per collection); check server logs for progress.',
+      message: `Index holders for ${backlogJob?.queueSize != null ? backlogJob.queueSize.toLocaleString() : 'every'} collection${backlogJob?.queueSize === 1 ? '' : 's'} with no holder data yet (non-spam, not rejected/suppressed), strongest discovery overlap first. Runs as a background job (~1s per collection); check server logs for progress.`,
       confirmText: 'Start Indexing',
       loading: false,
       onConfirm: async () => {
@@ -410,6 +435,7 @@ export default function AdminCollectionsPage() {
           setConfirmModal(prev => ({ ...prev, loading: true }));
           const result = await adminIndexHolderBacklog(accessToken);
           setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          setBacklogJob(result.job);
           if (result.alreadyRunning) {
             toast.info(`Backlog indexing already running (${result.job.processed}/${result.job.total} done)`);
           } else {
@@ -847,10 +873,13 @@ export default function AdminCollectionsPage() {
           </button>
           <button
             onClick={handleIndexBacklog}
-            className="rounded bg-emerald-700 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-600"
+            disabled={backlogJob?.status === 'running'}
+            className="rounded bg-emerald-700 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
             title="Index holders for all non-spam collections with no holder data yet"
           >
-            📥 Index Holder Backlog
+            {backlogJob?.status === 'running'
+              ? `⏳ Indexing ${backlogJob.processed}/${backlogJob.total}...`
+              : `📥 Index Holder Backlog${backlogJob?.queueSize != null ? ` (${backlogJob.queueSize.toLocaleString()})` : ''}`}
           </button>
         </div>
 
