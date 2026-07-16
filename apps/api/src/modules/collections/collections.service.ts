@@ -536,7 +536,8 @@ export class CollectionsService {
         ROUND(
           (och.shared_tokens::numeric / NULLIF(tch.total_tokens, 0)::numeric) * 100,
           1
-        )::text as shared_supply_pct
+        )::text as shared_supply_pct,
+        tch.total_tokens::text as total_tokens
       FROM other_collection_holders och
       INNER JOIN total_collection_holders tch ON och.collection_id = tch.collection_id
       INNER JOIN collections c ON och.collection_id = c.id
@@ -560,6 +561,7 @@ export class CollectionsService {
       overlapPercentage: parseFloat(row.overlap_percentage),
       overlapStrength: parseFloat(row.overlap_strength),
       sharedSupplyPct: row.shared_supply_pct != null ? parseFloat(row.shared_supply_pct) : null,
+      totalTokens: row.total_tokens != null ? parseInt(row.total_tokens) : null,
     }));
   }
 
@@ -759,7 +761,9 @@ export class CollectionsService {
           b.collection_id as target_id,
           COUNT(*) as shared_holders,
           ROUND((SUM(a.tokens)::numeric / NULLIF(ta.total_tokens, 0)::numeric) * 100, 1) as supply_pct_source,
-          ROUND((SUM(b.tokens)::numeric / NULLIF(tb.total_tokens, 0)::numeric) * 100, 1) as supply_pct_target
+          ROUND((SUM(b.tokens)::numeric / NULLIF(tb.total_tokens, 0)::numeric) * 100, 1) as supply_pct_target,
+          ta.total_tokens as supply_total_source,
+          tb.total_tokens as supply_total_target
         FROM holder_groups a
         INNER JOIN holder_groups b
           ON a.holder_id = b.holder_id
@@ -804,6 +808,8 @@ export class CollectionsService {
         holderDataReliable: smallerCount >= sharedHolders && smallerCount > 0,
         supplyPctSource: row.supply_pct_source != null ? parseFloat(row.supply_pct_source) : null,
         supplyPctTarget: row.supply_pct_target != null ? parseFloat(row.supply_pct_target) : null,
+        supplyTotalSource: row.supply_total_source != null ? parseInt(row.supply_total_source) : null,
+        supplyTotalTarget: row.supply_total_target != null ? parseInt(row.supply_total_target) : null,
       };
     });
 
@@ -878,6 +884,7 @@ export class CollectionsService {
           holderDataReliable: smallerCount >= r.sharedHolders && smallerCount > 0,
           // % of the target collection's tokens owned by the shared holders
           supplyPctTarget: r.sharedSupplyPct,
+          supplyTotalTarget: r.totalTokens,
         };
       });
 
@@ -937,6 +944,7 @@ export class CollectionsService {
               // Cross edges between related collections aren't focus-directed,
               // so no supply share is computed for them
               supplyPctTarget: null,
+              supplyTotalTarget: null,
             });
           }
         }

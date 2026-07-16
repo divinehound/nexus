@@ -777,6 +777,9 @@ export interface NetworkGraphEdge {
   supplyPctSource?: number | null;
   /** % of the target collection's tokens owned by the shared holders */
   supplyPctTarget?: number | null;
+  /** Total tokens of the source/target collection (sum over indexed holders) */
+  supplyTotalSource?: number | null;
+  supplyTotalTarget?: number | null;
 }
 
 export interface NetworkGraph {

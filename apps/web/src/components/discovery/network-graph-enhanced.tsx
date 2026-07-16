@@ -441,14 +441,20 @@ export function NetworkGraphVisualization({
                           className="inline-block h-2 w-2 rounded-full"
                           style={{ backgroundColor: getChainColor(node.chain) }}
                         />{' '}
-                        {pctOfFocusHolders(edge.sharedHolders) !== null &&
-                          `${pctOfFocusHolders(edge.sharedHolders)}% of holders · `}
                         {(() => {
-                          // supply % of the OTHER collection, whichever side it's on
-                          const supplyPct = edge.source === focusedNode ? edge.supplyPctTarget : edge.supplyPctSource;
-                          return supplyPct != null ? `own ${Math.round(supplyPct)}% of supply · ` : '';
+                          // "533 holders (33%) own 49% of the 7,777 supply"
+                          const focusPct = pctOfFocusHolders(edge.sharedHolders);
+                          const isFocusSource = edge.source === focusedNode;
+                          const supplyPct = isFocusSource ? edge.supplyPctTarget : edge.supplyPctSource;
+                          const supplyTotal = isFocusSource ? edge.supplyTotalTarget : edge.supplyTotalSource;
+                          let text = `${edge.sharedHolders.toLocaleString()} holders`;
+                          if (focusPct !== null) text += ` (${focusPct}%)`;
+                          if (supplyPct != null) {
+                            text += ` own ${Math.round(supplyPct)}%`;
+                            text += supplyTotal ? ` of the ${supplyTotal.toLocaleString()} supply` : ' of supply';
+                          }
+                          return text;
                         })()}
-                        {edge.sharedHolders.toLocaleString()} shared
                       </p>
                     </div>
                     <div className="text-xs text-purple-400">→</div>
