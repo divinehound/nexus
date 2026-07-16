@@ -327,6 +327,29 @@ export function adminMarkCollectionAsNotSpam(collectionId: string, reason: strin
   );
 }
 
+export interface HolderBacklogJob {
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  current?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+}
+
+export function adminIndexHolderBacklog(token: string, limit?: number) {
+  return apiFetch<{ started: boolean; alreadyRunning: boolean; job: HolderBacklogJob }>(
+    `/admin/collections/index-backlog`,
+    { method: 'POST', token, body: JSON.stringify(limit ? { limit } : {}) },
+  );
+}
+
+export function adminGetHolderBacklogStatus(token: string) {
+  return apiFetch<HolderBacklogJob>(`/admin/collections/index-backlog/status`, { token });
+}
+
 export function adminBulkCheckSpam(token: string) {
   return apiFetch<{ status: string; message: string }>(
     `/admin/collections/bulk-check-spam`,

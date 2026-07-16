@@ -968,6 +968,14 @@ export class AdminService {
     return { success: true, collection: collection.name };
   }
 
+  async indexHolderBacklog(limit?: number) {
+    return this.holderIndexerService.indexHolderBacklog(limit);
+  }
+
+  getHolderBacklogStatus() {
+    return this.holderIndexerService.getBacklogStatus();
+  }
+
   async bulkCheckSpam() {
     this.logger.log('Starting bulk spam check for all collections');
     try {

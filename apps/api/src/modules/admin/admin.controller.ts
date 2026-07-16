@@ -207,6 +207,18 @@ export class AdminController {
     return this.adminService.checkSpamRaw(id);
   }
 
+  @Post('collections/index-backlog')
+  @ApiOperation({ summary: 'Index holders for all non-spam collections without holder data (background job)' })
+  indexHolderBacklog(@Body() body?: { limit?: number }) {
+    return this.adminService.indexHolderBacklog(body?.limit);
+  }
+
+  @Get('collections/index-backlog/status')
+  @ApiOperation({ summary: 'Get holder backlog indexing job status' })
+  getHolderBacklogStatus() {
+    return this.adminService.getHolderBacklogStatus();
+  }
+
   @Post('collections/bulk-check-spam')
   @ApiOperation({ summary: 'Check all existing collections for spam via Alchemy API (background job)' })
   bulkCheckSpam() {

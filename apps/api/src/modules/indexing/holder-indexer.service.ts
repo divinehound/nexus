@@ -1,8 +1,20 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, collections, collectionHolders } from '@nexus/database';
+
+type BacklogJob = {
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  current?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+};
 
 interface AlchemyOwner {
   ownerAddress: string;
@@ -20,11 +32,103 @@ interface AlchemyOwnersResponse {
 @Injectable()
 export class HolderIndexerService {
   private readonly logger = new Logger(HolderIndexerService.name);
+  private backlogJob: BacklogJob = { status: 'idle', total: 0, processed: 0, succeeded: 0, failed: 0 };
 
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly config: ConfigService,
   ) {}
+
+  getBacklogStatus(): BacklogJob {
+    return this.backlogJob;
+  }
+
+  /**
+   * Index holders for every non-spam collection that has no holder data yet,
+   * strongest discovery overlap first. Runs in the background; check
+   * getBacklogStatus() or server logs for progress.
+   */
+  async indexHolderBacklog(limit?: number): Promise<{ started: boolean; alreadyRunning: boolean; job: BacklogJob }> {
+    if (this.backlogJob.status === 'running') {
+      return { started: false, alreadyRunning: true, job: this.backlogJob };
+    }
+
+    const rows = await this.db.execute<{ id: string; name: string }>(sql`
+      SELECT c.id, c.name
+      FROM collections c
+      WHERE c.is_spam IS NOT TRUE
+        AND NOT EXISTS (SELECT 1 FROM collection_holders ch WHERE ch.collection_id = c.id)
+      ORDER BY c.discovered_overlap_count DESC NULLS LAST, c.first_seen_at ASC
+      ${limit ? sql`LIMIT ${limit}` : sql``}
+    `);
+
+    this.backlogJob = {
+      status: 'running',
+      total: rows.length,
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      startedAt: new Date().toISOString(),
+    };
+    this.logger.log(`Holder backlog index started: ${rows.length} collections to index`);
+
+    setImmediate(() => {
+      void this.runBacklog(rows as Array<{ id: string; name: string }>).catch((err) => {
+        this.logger.error(`Holder backlog index crashed: ${err?.message || err}`);
+        this.backlogJob.status = 'failed';
+        this.backlogJob.error = err?.message || 'Unknown error';
+        this.backlogJob.finishedAt = new Date().toISOString();
+      });
+    });
+
+    return { started: true, alreadyRunning: false, job: this.backlogJob };
+  }
+
+  private async runBacklog(rows: Array<{ id: string; name: string }>) {
+    let consecutiveFailures = 0;
+
+    for (const row of rows) {
+      this.backlogJob.current = row.name;
+      try {
+        const result = await this.indexCollectionHolders(row.id);
+        if (result.success) {
+          this.backlogJob.succeeded++;
+          consecutiveFailures = 0;
+        } else {
+          this.backlogJob.failed++;
+          consecutiveFailures++;
+        }
+      } catch (err: any) {
+        this.backlogJob.failed++;
+        consecutiveFailures++;
+        this.logger.warn(`Backlog index failed for ${row.name}: ${err?.message || 'unknown error'}`);
+      }
+      this.backlogJob.processed++;
+
+      if (consecutiveFailures >= 10) {
+        this.backlogJob.status = 'failed';
+        this.backlogJob.error = `Aborted after ${consecutiveFailures} consecutive failures (${this.backlogJob.processed}/${this.backlogJob.total} processed)`;
+        this.backlogJob.finishedAt = new Date().toISOString();
+        this.logger.error(`Holder backlog index aborted: ${this.backlogJob.error}`);
+        return;
+      }
+
+      if (this.backlogJob.processed % 25 === 0) {
+        this.logger.log(
+          `Holder backlog progress: ${this.backlogJob.processed}/${this.backlogJob.total} (${this.backlogJob.succeeded} ok, ${this.backlogJob.failed} failed)`,
+        );
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    this.backlogJob.status = 'completed';
+    this.backlogJob.current = undefined;
+    this.backlogJob.finishedAt = new Date().toISOString();
+    this.logger.log(
+      `Holder backlog index complete: ${this.backlogJob.succeeded} indexed, ${this.backlogJob.failed} failed of ${this.backlogJob.total}`,
+    );
+  }
 
   /**
    * Index all holders for a collection

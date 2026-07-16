@@ -12,6 +12,7 @@ import {
   adminMarkCollectionAsSpam,
   adminMarkCollectionAsNotSpam,
   adminBulkCheckSpam,
+  adminIndexHolderBacklog,
   adminCheckSpamRaw,
   adminDiscoverCollections,
   adminBulkMarkSpam,
@@ -393,6 +394,36 @@ export default function AdminCollectionsPage() {
     } catch (err: any) {
       toast.error(err?.data?.message || err?.message || 'Failed to mark as not spam');
     }
+  };
+
+  const handleIndexBacklog = async () => {
+    if (!accessToken) return;
+
+    setConfirmModal({
+      isOpen: true,
+      title: 'Index Holder Backlog',
+      message: 'Index holders for every non-spam collection that has no holder data yet, strongest discovery overlap first. Runs as a background job (~1s per collection); check server logs for progress.',
+      confirmText: 'Start Indexing',
+      loading: false,
+      onConfirm: async () => {
+        try {
+          setConfirmModal(prev => ({ ...prev, loading: true }));
+          const result = await adminIndexHolderBacklog(accessToken);
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          if (result.alreadyRunning) {
+            toast.info(`Backlog indexing already running (${result.job.processed}/${result.job.total} done)`);
+          } else {
+            toast.success(`Backlog indexing started: ${result.job.total} collections queued`, {
+              description: 'Running in background. Check server logs for progress.',
+              duration: 5000,
+            });
+          }
+        } catch (err: any) {
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          toast.error(err?.data?.message || err?.message || 'Failed to start backlog indexing');
+        }
+      },
+    });
   };
 
   const handleBulkCheckSpam = async () => {
@@ -813,6 +844,13 @@ export default function AdminCollectionsPage() {
             title="Check all collections via Alchemy API and auto-flag spam"
           >
             {bulkChecking ? '⏳ Checking...' : '🔍 Bulk Check Spam'}
+          </button>
+          <button
+            onClick={handleIndexBacklog}
+            className="rounded bg-emerald-700 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-600"
+            title="Index holders for all non-spam collections with no holder data yet"
+          >
+            📥 Index Holder Backlog
           </button>
         </div>
 
