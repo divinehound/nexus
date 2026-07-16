@@ -223,7 +223,7 @@ export class CollectionsService {
       if (depth >= 2) continue;
       
       // Get related collections for this node
-      const related = await this.getRelatedCollections(id, 10);
+      const related = await this.getRelatedCollections(id, 10, minSharedHolders);
       
       // Determine how many to add based on depth
       const limitAtDepth = depth === 0 ? 10 : 5;
@@ -448,9 +448,10 @@ export class CollectionsService {
     return created.id;
   }
 
-  async getRelatedCollections(collectionId: string, limit: number = 10) {
+  async getRelatedCollections(collectionId: string, limit: number = 10, minShared: number = 3) {
     // SQL query to find collections with overlapping holders
     // Multi-wallet aware: addresses linked to same user = same holder
+    const minSharedFloor = Math.max(1, minShared);
     const result = await this.db.execute<any>(sql`
       WITH target_holder_groups AS (
         -- Group target collection holders by user or address
@@ -508,7 +509,7 @@ export class CollectionsService {
         WHERE collection_id IN (SELECT collection_id FROM other_collection_holders)
         GROUP BY collection_id
       )
-      SELECT 
+      SELECT
         c.id,
         c.name,
         c.contract_address,
@@ -516,15 +517,22 @@ export class CollectionsService {
         c.image_url,
         och.shared_holders::text,
         tch.total_holders::text,
+        target_total.cnt::text as target_holders,
         ROUND(
-          (och.shared_holders::numeric / 
-           (SELECT COUNT(*) FROM target_holder_groups)::numeric) * 100, 
+          (och.shared_holders::numeric / target_total.cnt::numeric) * 100,
           1
-        )::text as overlap_percentage
+        )::text as overlap_percentage,
+        -- Overlap coefficient: shared as a fraction of the SMALLER community.
+        -- Ranks a tight 300-holder community that's 80% ducks above a 10k
+        -- whale collection sharing 150 holders (1.5%).
+        (och.shared_holders::numeric / LEAST(target_total.cnt, tch.total_holders)::numeric) as overlap_strength
       FROM other_collection_holders och
       INNER JOIN total_collection_holders tch ON och.collection_id = tch.collection_id
       INNER JOIN collections c ON och.collection_id = c.id
-      ORDER BY och.shared_holders DESC, overlap_percentage DESC
+      CROSS JOIN (SELECT COUNT(*)::numeric as cnt FROM target_holder_groups) target_total
+      WHERE c.is_spam IS NOT TRUE
+        AND och.shared_holders >= ${minSharedFloor}
+      ORDER BY overlap_strength DESC, och.shared_holders DESC
       LIMIT ${limit}
     `);
 
@@ -537,6 +545,7 @@ export class CollectionsService {
       sharedHolders: parseInt(row.shared_holders),
       totalHolders: parseInt(row.total_holders),
       overlapPercentage: parseFloat(row.overlap_percentage),
+      overlapStrength: parseFloat(row.overlap_strength),
     }));
   }
 
@@ -592,7 +601,7 @@ export class CollectionsService {
           // Get overlapping collections for each holding
           const allOverlaps = await Promise.all(
             userHoldings.slice(0, 5).map(h => // Top 5 holdings to keep it manageable
-              this.getRelatedCollections(h.id, Math.floor(maxNodes / 5))
+              this.getRelatedCollections(h.id, Math.floor(maxNodes / 5), minShared)
             )
           );
 
@@ -627,7 +636,7 @@ export class CollectionsService {
           return { nodes: [], edges: [] };
         }
         
-        const related = await this.getRelatedCollections(focusId, maxNodes - 1);
+        const related = await this.getRelatedCollections(focusId, maxNodes - 1, minShared);
         
         // Include the focused collection itself
         nodes = [
@@ -805,11 +814,9 @@ export class CollectionsService {
         return { nodes: [], edges: [] };
       }
 
-      // Get related collections
-      const related = await this.getRelatedCollections(collectionId, limit);
-      
-      // Filter by minSharedHolders
-      const filteredRelated = related.filter(r => r.sharedHolders >= minShared);
+      // Get related collections (already filtered to >= minShared and spam-free)
+      const related = await this.getRelatedCollections(collectionId, limit, minShared);
+      const filteredRelated = related;
 
       // Build nodes array (source + related)
       const nodes = [

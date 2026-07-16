@@ -95,10 +95,11 @@ export function NetworkGraphVisualization({
     setFocusedNode(nodeId);
     
     try {
-      // Fetch ONLY this node + its connections (clear everything else)
+      // Fetch ONLY this node + its connections (clear everything else).
+      // Same cap as the initial load so refocusing doesn't shrink the view.
       const { nodes: newNodes, edges: newEdges } = await getCollectionConnections(nodeId, {
         minSharedHolders,
-        limit: 15, // Show more connections since we're focusing
+        limit: Math.max(15, maxNodes - 1),
       });
 
       // Replace the entire graph (don't accumulate)
@@ -109,7 +110,7 @@ export function NetworkGraphVisualization({
     } finally {
       setExpandingNode(null);
     }
-  }, [minSharedHolders, expandingNode]);
+  }, [minSharedHolders, expandingNode, maxNodes]);
 
   // D3 Force Simulation Rendering
   useEffect(() => {
@@ -328,15 +329,35 @@ export function NetworkGraphVisualization({
 
   const focusedNodeData = data.nodes.find(n => n.id === focusedNode);
 
+  // Collections directly sharing holders with the focused one, strongest first
+  const connectedToFocus = focusedNode
+    ? data.edges
+        .filter(e => e.source === focusedNode || e.target === focusedNode)
+        .map(e => {
+          const otherId = e.source === focusedNode ? e.target : e.source;
+          const node = data.nodes.find(n => n.id === otherId);
+          return node ? { node, edge: e } : null;
+        })
+        .filter((x): x is { node: NetworkGraphNode; edge: NetworkGraph['edges'][number] } => x !== null)
+        .sort(
+          (a, b) =>
+            b.edge.weight - a.edge.weight || b.edge.sharedHolders - a.edge.sharedHolders,
+        )
+    : [];
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-sm font-medium text-gray-300">
-            {data.nodes.length} Collections · {data.edges.length} Connections
+            {focusedNode && focusedNodeData
+              ? `${connectedToFocus.length} collections share holders with ${focusedNodeData.name}`
+              : `${data.nodes.length} Collections · ${data.edges.length} Connections`}
           </h3>
           <p className="mt-1 text-xs text-gray-500">
-            Click node to explore · Drag to reposition · Scroll to zoom · Purple lines = connections
+            {focusedNode
+              ? 'Gray lines are overlaps between the other collections shown · Click a node to refocus'
+              : 'Click node to explore · Drag to reposition · Scroll to zoom · Purple lines = connections'}
           </p>
         </div>
         {focusedNode && (
@@ -381,6 +402,48 @@ export function NetworkGraphVisualization({
               View Details →
             </Link>
           </div>
+
+          {connectedToFocus.length > 0 && (
+            <div className="mt-4">
+              <h5 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">
+                Strongest overlaps
+              </h5>
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
+                {connectedToFocus.map(({ node, edge }) => (
+                  <button
+                    key={node.id}
+                    onClick={() => focusOnNode(node.id)}
+                    className="flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-900/50 p-2 text-left transition-colors hover:border-purple-700 hover:bg-gray-900"
+                  >
+                    {node.imageUrl ? (
+                      <img
+                        src={node.imageUrl}
+                        alt={node.name}
+                        className="h-10 w-10 flex-shrink-0 rounded border border-gray-700 object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded border border-gray-700 bg-gray-800">
+                        <span className="text-xs text-gray-600">NFT</span>
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-gray-200">{node.name}</p>
+                      <p className="text-xs text-gray-500">
+                        <span
+                          className="inline-block h-2 w-2 rounded-full"
+                          style={{ backgroundColor: getChainColor(node.chain) }}
+                        />{' '}
+                        {edge.sharedHolders.toLocaleString()} shared
+                        {edge.holderDataReliable &&
+                          ` · ${Math.round(edge.weight * 100)}% of smaller community`}
+                      </p>
+                    </div>
+                    <div className="text-xs text-purple-400">→</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
