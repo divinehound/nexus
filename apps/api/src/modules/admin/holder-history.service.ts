@@ -132,7 +132,7 @@ export class HolderHistoryService {
 
     if (!collection) throw new NotFoundException('Collection not found');
 
-    const wallets = await this.db.query.collectionHolderSummaries.findMany({
+    const summaries = await this.db.query.collectionHolderSummaries.findMany({
       where: eq(collectionHolderSummaries.collectionId, collectionId),
       orderBy: [desc(collectionHolderSummaries.currentBalance), asc(collectionHolderSummaries.address)],
     });
@@ -142,8 +142,41 @@ export class HolderHistoryService {
       orderBy: [asc(collectionHolderBalanceHistory.blockNumber), asc(collectionHolderBalanceHistory.logIndex)],
     });
 
+    // No history scan yet — fall back to the current-holder snapshot that
+    // "Index Holders" writes to collection_holders. Balances are real; only
+    // the transfer timeline (first/last received, per-wallet history) is
+    // unavailable until a holder history scan runs.
+    let dataSource: 'history' | 'snapshot' | 'none' = summaries.length > 0 ? 'history' : 'none';
+    let wallets: Array<{
+      address: string;
+      currentBalance: number;
+      firstReceivedAt: Date | null;
+      lastReceivedAt: Date | null;
+      totalReceivedCount: number;
+      totalSentCount: number;
+    }> = summaries;
+
+    if (summaries.length === 0) {
+      const snapshot = await this.db.query.collectionHolders.findMany({
+        where: eq(collectionHolders.collectionId, collectionId),
+        orderBy: [desc(collectionHolders.tokenCount), asc(collectionHolders.address)],
+      });
+      if (snapshot.length > 0) {
+        dataSource = 'snapshot';
+        wallets = snapshot.map((h) => ({
+          address: h.address,
+          currentBalance: h.tokenCount,
+          firstReceivedAt: null,
+          lastReceivedAt: null,
+          totalReceivedCount: 0,
+          totalSentCount: 0,
+        }));
+      }
+    }
+
     return {
       collection,
+      dataSource,
       summary: {
         wallets,
         totalWallets: wallets.filter((w) => w.currentBalance > 0).length,

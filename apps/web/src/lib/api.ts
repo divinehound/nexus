@@ -215,8 +215,10 @@ export function adminIndexCollectionHolders(collectionId: string, token: string)
 export function adminGetCollectionHolderHistory(collectionId: string, token: string) {
   return apiFetch<{
     collection: any;
+    dataSource: 'history' | 'snapshot' | 'none';
     summary: { wallets: any[]; totalWallets: number; totalTokensHeld: number };
     balanceHistory: any[];
+    scanJob: any | null;
   }>(`/admin/collections/${collectionId}/holder-history`, { token });
 }
 

@@ -155,6 +155,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
 
   const collectionName = data?.collection?.name || 'Unknown collection';
   const collectionContract = data?.collection?.contractAddress || '';
+  const isSnapshot = data?.dataSource === 'snapshot';
 
   return (
     <div className="space-y-6 p-6">
@@ -246,6 +247,13 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
 
       {activeTab === 'wallets' && (
       <div>
+        {isSnapshot && (
+          <div className="mb-4 rounded-xl border border-amber-900/50 bg-amber-950/30 p-4 text-sm text-amber-200">
+            Showing the current holder snapshot from &ldquo;Index Holders&rdquo;. Balances are accurate as of the
+            last index, but transfer history hasn&rsquo;t been scanned yet &mdash; run Scan / Refresh above to get
+            first/last received dates and per-wallet history graphs.
+          </div>
+        )}
         <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
@@ -278,24 +286,29 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-800 text-left text-xs uppercase tracking-wide text-gray-500">
-                  <th className="w-8 py-3" />
+                  {!isSnapshot && <th className="w-8 py-3" />}
                   <SortableHeader label="Wallet" field="address" activeField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableHeader label="Balance" field="currentBalance" activeField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <SortableHeader label="First received" field="firstReceivedAt" activeField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <SortableHeader label="Last received" field="lastReceivedAt" activeField={sortField} direction={sortDirection} onSort={handleSort} />
+                  {!isSnapshot && (
+                    <>
+                      <SortableHeader label="First received" field="firstReceivedAt" activeField={sortField} direction={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Last received" field="lastReceivedAt" activeField={sortField} direction={sortDirection} onSort={handleSort} />
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {pagedWallets.map((wallet: any) => {
-                  const isExpanded = expandedWallet === wallet.address;
+                  const isExpanded = !isSnapshot && expandedWallet === wallet.address;
                   const chain = data?.collection?.chain ?? '';
                   const explorerUrl = getExplorerLink(chain, wallet.address);
                   return (
                     <WalletRows key={wallet.address}>
                       <tr
-                        onClick={() => setExpandedWallet(isExpanded ? null : wallet.address)}
-                        className={`cursor-pointer border-b border-gray-900 ${isExpanded ? 'bg-gray-900/70' : 'hover:bg-gray-900/40'}`}
+                        onClick={() => !isSnapshot && setExpandedWallet(isExpanded ? null : wallet.address)}
+                        className={`border-b border-gray-900 ${isSnapshot ? '' : 'cursor-pointer'} ${isExpanded ? 'bg-gray-900/70' : 'hover:bg-gray-900/40'}`}
                       >
+                        {!isSnapshot && (
                         <td className="w-8 py-3 pl-1">
                           <button
                             type="button"
@@ -310,6 +323,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                             </svg>
                           </button>
                         </td>
+                        )}
                         <td className="py-3 pr-4">
                           <div className="flex items-center gap-2">
                             <AddressDisplay address={wallet.address} chain={chain} chars={6} className="font-mono text-xs text-gray-200" />
@@ -352,8 +366,12 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                           </div>
                         </td>
                         <td className="py-3 pr-4 font-semibold text-purple-300">{wallet.currentBalance}</td>
-                        <td className="py-3 pr-4 text-gray-300">{formatDate(wallet.firstReceivedAt)}</td>
-                        <td className="py-3 pr-4 text-gray-300">{formatDate(wallet.lastReceivedAt)}</td>
+                        {!isSnapshot && (
+                          <>
+                            <td className="py-3 pr-4 text-gray-300">{formatDate(wallet.firstReceivedAt)}</td>
+                            <td className="py-3 pr-4 text-gray-300">{formatDate(wallet.lastReceivedAt)}</td>
+                          </>
+                        )}
                       </tr>
                       {isExpanded && (
                         <tr>
