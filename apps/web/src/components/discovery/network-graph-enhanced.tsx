@@ -329,7 +329,10 @@ export function NetworkGraphVisualization({
 
   const focusedNodeData = data.nodes.find(n => n.id === focusedNode);
 
-  // Collections directly sharing holders with the focused one, strongest first
+  // Collections directly sharing holders with the focused one. Shared count
+  // over a fixed denominator (the focused collection's holders), so sorting
+  // by shared count IS sorting by percentage, descending.
+  const focusedHolderCount = focusedNodeData?.holderCount ?? 0;
   const connectedToFocus = focusedNode
     ? data.edges
         .filter(e => e.source === focusedNode || e.target === focusedNode)
@@ -339,11 +342,16 @@ export function NetworkGraphVisualization({
           return node ? { node, edge: e } : null;
         })
         .filter((x): x is { node: NetworkGraphNode; edge: NetworkGraph['edges'][number] } => x !== null)
-        .sort(
-          (a, b) =>
-            b.edge.weight - a.edge.weight || b.edge.sharedHolders - a.edge.sharedHolders,
-        )
+        .sort((a, b) => b.edge.sharedHolders - a.edge.sharedHolders)
     : [];
+
+  // % of the focused collection's holders who also hold this one
+  const pctOfFocusHolders = (sharedHolders: number): string | null => {
+    if (focusedHolderCount <= 0) return null;
+    // holderCount can lag the live overlap computation; clamp to 100
+    const pct = Math.min(100, (sharedHolders / focusedHolderCount) * 100);
+    return pct < 1 ? '<1' : String(Math.round(pct));
+  };
 
   return (
     <div className="space-y-4">
@@ -433,9 +441,9 @@ export function NetworkGraphVisualization({
                           className="inline-block h-2 w-2 rounded-full"
                           style={{ backgroundColor: getChainColor(node.chain) }}
                         />{' '}
+                        {pctOfFocusHolders(edge.sharedHolders) !== null &&
+                          `${pctOfFocusHolders(edge.sharedHolders)}% of holders · `}
                         {edge.sharedHolders.toLocaleString()} shared
-                        {edge.holderDataReliable &&
-                          ` · ${Math.round(edge.weight * 100)}% of smaller community`}
                       </p>
                     </div>
                     <div className="text-xs text-purple-400">→</div>
