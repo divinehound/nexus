@@ -107,6 +107,16 @@ day *including unchanged holders* ("for continuity"), projected ~182M rows /
       **drop `project_affinity`** outright unless something starts writing it
       (it is read by `projects.getOverlap` and discovery recommendations but
       no code ever inserts into it — those reads see an empty table today).
+- [ ] **Auto-skip persistently failing holder indexes.** Observed in prod
+      (2026-07-17): Alchemy `getOwnersForContract` returns 500 for certain
+      degenerate contracts (omnichain airdrops on Base), so those
+      collections fail every backlog run forever and burn API calls until
+      manually triaged. Mirror the cap-exceeded pattern: after repeated
+      hard failures (e.g. 5xx on 2+ consecutive backlog runs), set
+      `last_index_status = 'skipped'` with the error preserved — out of
+      backlog rotation, still manually indexable from admin. Prefer this
+      over marking collections `rejected`, which carries product meaning
+      (hidden from surfaces) beyond "we can't index it".
 - [ ] **Add missing FK indexes** flagged in the audit: `flex_reactions
       (activity_id)`, `project_owners (project_id, user_id)`,
       `wiki_suggestions (project_id, submitted_by)`, `events (project_id)`.
