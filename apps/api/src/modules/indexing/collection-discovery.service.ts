@@ -31,6 +31,15 @@ const IGNORED_HOLDER_ADDRESSES = new Set([
   '0x000000000000000000000000000000000000dead',
 ]);
 
+export type DiscoveryOptions = {
+  maxHolders?: number;
+  maxCollectionsPerHolder?: number;
+  maxNewContracts?: number;
+  minHolderOverlap?: number;
+  fresh?: boolean;
+  autoIndexTop?: number;
+};
+
 @Injectable()
 export class CollectionDiscoveryService {
   private readonly logger = new Logger(CollectionDiscoveryService.name);
@@ -47,14 +56,7 @@ export class CollectionDiscoveryService {
    */
   async discoverFromCollection(
     collectionId: string,
-    options?: {
-      maxHolders?: number;
-      maxCollectionsPerHolder?: number;
-      maxNewContracts?: number;
-      minHolderOverlap?: number;
-      fresh?: boolean;
-      autoIndexTop?: number;
-    }
+    options?: DiscoveryOptions
   ): Promise<DiscoveryResult> {
     const startTime = Date.now();
     const maxHolders = options?.maxHolders; // unset = scan every holder

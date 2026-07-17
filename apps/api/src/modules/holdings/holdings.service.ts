@@ -6,6 +6,8 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import {
   chainEnum,
@@ -19,6 +21,7 @@ import {
 } from '@nexus/database';
 import { randomUUID } from 'crypto';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
+import { WALLET_INDEXING_QUEUE } from '../../common/queue/queues';
 import { BlockchainLookupService } from '../search/blockchain-lookup.service';
 import { BlockchainIndexerService } from './blockchain-indexer.service';
 
@@ -40,6 +43,7 @@ export class HoldingsService {
     private readonly configService: ConfigService,
     private readonly blockchainLookup: BlockchainLookupService,
     private readonly blockchainIndexer: BlockchainIndexerService,
+    @InjectQueue(WALLET_INDEXING_QUEUE) private readonly walletIndexingQueue: Queue,
   ) {
     this.maxCollectionsPerRun = Number(
       this.configService.get('holdings.maxCollectionsPerRun') ?? 50,
@@ -94,6 +98,24 @@ export class HoldingsService {
     return job;
   }
 
+  /**
+   * Hands the job to BullMQ. The DB row in wallet_indexing_jobs remains the
+   * admin-visible record; the BullMQ job (same id) is the unit of execution,
+   * giving durability across restarts, automatic retries with backoff, and
+   * bounded concurrency in the processor.
+   */
+  private async enqueueIndexingJob(dbJobId: string) {
+    await this.walletIndexingQueue.add(
+      'index-wallet',
+      { jobId: dbJobId },
+      {
+        jobId: dbJobId,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5_000 },
+      },
+    );
+  }
+
   async queueWalletIndexing(userId: string, walletId: string) {
     const wallet = await this.db.query.wallets.findFirst({
       where: and(eq(wallets.id, walletId), eq(wallets.userId, userId)),
@@ -104,12 +126,7 @@ export class HoldingsService {
     }
 
     const job = await this.createIndexingJob(userId, walletId);
-
-    setTimeout(() => {
-      void this.runIndexingJob(job.id).catch(() => {
-        // intentionally swallowed for fire-and-forget execution
-      });
-    }, 0);
+    await this.enqueueIndexingJob(job.id);
 
     return { queued: true, jobId: job.id };
   }
@@ -141,14 +158,9 @@ export class HoldingsService {
     }
 
     const job = await this.createIndexingJob(wallet.userId, wallet.id);
+    await this.enqueueIndexingJob(job.id);
 
-    setTimeout(() => {
-      void this.runIndexingJob(job.id).catch(() => {
-        // intentionally swallowed for fire-and-forget execution
-      });
-    }, 0);
-
-    return { 
+    return {
       queued: true, 
       jobId: job.id, 
       entityType: 'wallet' as const, 
@@ -171,12 +183,7 @@ export class HoldingsService {
       originalJob.walletId,
       originalJob.id,
     );
-
-    setTimeout(() => {
-      void this.runIndexingJob(retryJob.id).catch(() => {
-        // intentionally swallowed for fire-and-forget execution
-      });
-    }, 0);
+    await this.enqueueIndexingJob(retryJob.id);
 
     return retryJob;
   }

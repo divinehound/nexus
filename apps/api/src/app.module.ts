@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { BullModule } from '@nestjs/bullmq';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
@@ -30,6 +31,20 @@ import { validate } from './config/env.validation';
       validate,
     }),
     ScheduleModule.forRoot(),
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          url: config.get<string>('redis.url'),
+          // Required by BullMQ workers: blocking commands must not time out.
+          maxRetriesPerRequest: null,
+        },
+        defaultJobOptions: {
+          removeOnComplete: { age: 24 * 3600, count: 10_000 },
+          removeOnFail: { age: 7 * 24 * 3600 },
+        },
+      }),
+    }),
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 60 }]),
     DatabaseModule,
     AuthModule,

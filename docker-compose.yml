@@ -8,6 +8,7 @@ services:
       - "${API_PORT:-4000}:4000"
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       JWT_SECRET: ${JWT_SECRET:-nexus-dev-secret-change-in-production}
       API_PORT: "4000"
       NODE_ENV: production
@@ -16,6 +17,8 @@ services:
       TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
       OPENSEA_API_KEY: ${OPENSEA_API_KEY:-}
       RESERVOIR_API_KEY: ${RESERVOIR_API_KEY:-}
+    depends_on:
+      - redis
 
   web:
     build:
@@ -30,3 +33,15 @@ services:
       NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID: ${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID:-697e0d756cf3d408f188870e14793c1c}
     depends_on:
       - api
+
+  redis:
+    image: redis:7-alpine
+    # AOF persistence so queued jobs survive a Redis restart.
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:

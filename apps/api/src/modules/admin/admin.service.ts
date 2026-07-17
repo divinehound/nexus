@@ -5,6 +5,8 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { eq, and, count, sql, desc, or } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import {
@@ -27,6 +29,7 @@ import { BlockchainLookupService } from '../search/blockchain-lookup.service';
 import { HolderIndexerService } from '../indexing/holder-indexer.service';
 import { SpamCheckerService } from '../indexing/spam-checker.service';
 import { CollectionDiscoveryService } from '../indexing/collection-discovery.service';
+import { COLLECTION_DISCOVERY_QUEUE } from '../../common/queue/queues';
 
 @Injectable()
 export class AdminService {
@@ -40,6 +43,7 @@ export class AdminService {
     private readonly holderIndexerService: HolderIndexerService,
     private readonly spamCheckerService: SpamCheckerService,
     private readonly collectionDiscoveryService: CollectionDiscoveryService,
+    @InjectQueue(COLLECTION_DISCOVERY_QUEUE) private readonly collectionDiscoveryQueue: Queue,
   ) {}
 
   /**
@@ -1013,19 +1017,18 @@ export class AdminService {
   ) {
     const collectionId = await this.resolveCollectionId(idOrContract);
 
-    // Run discovery in background
-    setImmediate(async () => {
-      try {
-        await this.collectionDiscoveryService.discoverFromCollection(collectionId, options);
-      } catch (err: any) {
-        this.logger.error(`Collection discovery failed for ${collectionId}: ${err?.message || 'unknown error'}`);
-      }
-    });
+    // Durable background job; deduplication prevents piling up multiple
+    // discovery runs for the same collection while one is pending.
+    await this.collectionDiscoveryQueue.add(
+      'discover',
+      { collectionId, options },
+      { deduplication: { id: collectionId } },
+    );
 
     return {
       status: 'started',
       collectionId,
-      message: 'Collection discovery started in background. Check server logs for progress.',
+      message: 'Collection discovery queued. Check server logs for progress.',
     };
   }
 

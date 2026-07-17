@@ -22,6 +22,10 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule);
 
+  // Close BullMQ workers gracefully on SIGTERM/SIGINT so in-flight jobs
+  // finish (or release their locks for another instance to pick up).
+  app.enableShutdownHooks();
+
   app.setGlobalPrefix('api');
   app.enableCors({
     origin: process.env.WEB_URL || 'http://localhost:3000',

@@ -20,6 +20,10 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
+  REDIS_URL: string = 'redis://localhost:6379';
+
+  @IsString()
+  @IsOptional()
   ALCHEMY_API_KEY?: string;
 
   @IsString()

@@ -3,6 +3,9 @@ export default () => ({
   database: {
     url: process.env.DATABASE_URL || 'postgresql://postgres:password@localhost:5432/nexus',
   },
+  redis: {
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+  },
   jwt: {
     secret: process.env.JWT_SECRET || 'nexus-dev-secret-change-in-production',
   },

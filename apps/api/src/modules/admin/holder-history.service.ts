@@ -1,7 +1,10 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { and, asc, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
+import { HOLDER_HISTORY_SCAN_QUEUE } from '../../common/queue/queues';
 import {
   type Database,
   collections,
@@ -123,6 +126,7 @@ export class HolderHistoryService {
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly config: ConfigService,
+    @InjectQueue(HOLDER_HISTORY_SCAN_QUEUE) private readonly scanQueue: Queue,
   ) {}
 
   async getCollectionHolderHistory(collectionId: string) {
@@ -212,12 +216,15 @@ export class HolderHistoryService {
     this.jobs.set(collectionId, job);
     this.logger.log(`Queued holder history scan for ${collectionId} from block ${fromBlock}`);
 
-    setTimeout(() => {
-      this.logger.log(`Starting async holder history scan for ${collectionId}`);
-      void this.runCollectionHolderHistoryScan(collectionId, fromBlock).catch((error) => {
-        this.logger.error(`Holder history scan failed for ${collectionId}: ${error?.message || error}`);
-      });
-    }, 0);
+    // Durable BullMQ job; deduplication prevents concurrent scans of the
+    // same collection even across API instances. Scans checkpoint their
+    // progress (holder_history_last_checked_block / parse cursors) in the
+    // DB, so a retried or re-queued scan resumes rather than restarts.
+    await this.scanQueue.add(
+      'scan',
+      { collectionId, fromBlock },
+      { deduplication: { id: collectionId } },
+    );
 
     return { queued: true, alreadyRunning: false, job };
   }
@@ -356,7 +363,8 @@ export class HolderHistoryService {
     return { updated: signatures.length, result: JSON.stringify(result ?? {}) };
   }
 
-  private async runCollectionHolderHistoryScan(collectionId: string, fromBlockInput?: number) {
+  /** Invoked by HolderHistoryScanProcessor (BullMQ worker). */
+  async runCollectionHolderHistoryScan(collectionId: string, fromBlockInput?: number) {
     const collection = await this.db.query.collections.findFirst({
       where: eq(collections.id, collectionId),
     });

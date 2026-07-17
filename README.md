@@ -341,8 +341,27 @@ Recent migrations:
 - `HELIUS_API_KEY`: For Solana indexing
 - `WALLETCONNECT_PROJECT_ID`: For WalletConnect integration
 
+### Required infrastructure
+- `REDIS_URL`: Redis connection for BullMQ job queues (default `redis://localhost:6379`; docker-compose provisions a `redis` service)
+
 ### Optional
 - `RUN_MIGRATIONS_ON_BOOT`: `true` (default) or `false`
+- `WALLET_INDEXING_CONCURRENCY`: parallel wallet indexing jobs per instance (default `2`)
+
+---
+
+## Background jobs (BullMQ)
+
+All indexing work runs through Redis-backed BullMQ queues instead of in-process fire-and-forget calls. Jobs survive API restarts, retry with exponential backoff, and are safe to process across multiple API instances.
+
+| Queue | Work | Concurrency |
+|---|---|---|
+| `wallet-indexing` | Wallet holdings refresh (signup, wallet link, admin refresh) | 2 (configurable), 3 attempts |
+| `holder-indexing` | Per-collection holder indexing (admin backlog) | 1, rate-limited to 1 job/sec, 2 attempts |
+| `collection-discovery` | Holder-graph discovery for a source collection | 1, deduped per collection |
+| `holder-history-scan` | EVM/Solana transfer-history scans | 1, deduped per collection |
+
+The `wallet_indexing_jobs` / `indexing_jobs` tables remain the admin-visible status record; BullMQ is the execution layer underneath (wallet jobs share the same job id in both).
 
 ---
 

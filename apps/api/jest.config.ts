@@ -11,8 +11,8 @@ const config: Config = {
   coverageDirectory: '../coverage',
   testEnvironment: 'node',
   moduleNameMapper: {
-    '^@nexus/database$': '<rootDir>/../../packages/database/src/index.ts',
-    '^@nexus/types$': '<rootDir>/../../packages/types/src/index.ts',
+    '^@nexus/database$': '<rootDir>/../../../packages/database/src/index.ts',
+    '^@nexus/types$': '<rootDir>/../../../packages/types/src/index.ts',
   },
 };
 

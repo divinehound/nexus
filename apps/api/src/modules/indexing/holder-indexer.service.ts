@@ -1,7 +1,10 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { eq, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
+import { HOLDER_INDEXING_QUEUE } from '../../common/queue/queues';
 import { type Database, collections, collectionHolders } from '@nexus/database';
 
 type BacklogJob = {
@@ -37,15 +40,49 @@ interface AlchemyOwnersResponse {
 @Injectable()
 export class HolderIndexerService {
   private readonly logger = new Logger(HolderIndexerService.name);
-  private backlogJob: BacklogJob = { status: 'idle', total: 0, processed: 0, succeeded: 0, failed: 0, skipped: 0 };
 
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly config: ConfigService,
+    @InjectQueue(HOLDER_INDEXING_QUEUE) private readonly holderIndexingQueue: Queue,
   ) {}
 
+  /**
+   * Backlog progress derived from BullMQ queue state, mapped onto the shape
+   * the admin UI already consumes. Counts reflect the current run because
+   * indexHolderBacklog clears completed/failed history before enqueueing.
+   * Note: cap-exceeded skips complete successfully, so they are counted in
+   * `succeeded`; `skipped` is kept for response-shape compatibility.
+   */
   async getBacklogStatus(): Promise<BacklogJob & { queueSize: number }> {
-    return { ...this.backlogJob, queueSize: await this.getBacklogQueueSize() };
+    const counts = await this.holderIndexingQueue.getJobCounts(
+      'waiting',
+      'active',
+      'delayed',
+      'completed',
+      'failed',
+    );
+    const pending = (counts.waiting ?? 0) + (counts.active ?? 0) + (counts.delayed ?? 0);
+    const succeeded = counts.completed ?? 0;
+    const failed = counts.failed ?? 0;
+    const processed = succeeded + failed;
+
+    let current: string | undefined;
+    if (counts.active) {
+      const [activeJob] = await this.holderIndexingQueue.getActive(0, 0);
+      current = activeJob?.data?.collectionName;
+    }
+
+    return {
+      status: pending > 0 ? 'running' : processed > 0 ? 'completed' : 'idle',
+      total: pending + processed,
+      processed,
+      succeeded,
+      failed,
+      skipped: 0,
+      current,
+      queueSize: await this.getBacklogQueueSize(),
+    };
   }
 
   /** Collections currently eligible for backlog indexing */
@@ -72,12 +109,16 @@ export class HolderIndexerService {
 
   /**
    * Index holders for every non-spam collection that has no holder data yet,
-   * strongest discovery overlap first. Runs in the background; check
-   * getBacklogStatus() or server logs for progress.
+   * strongest discovery overlap first. Enqueues one durable BullMQ job per
+   * collection; the worker paces external API calls (1/sec) and retries
+   * transient failures with backoff. Safe across restarts and multiple API
+   * instances. Check getBacklogStatus() for progress.
    */
   async indexHolderBacklog(limit?: number, maxHolders?: number): Promise<{ started: boolean; alreadyRunning: boolean; job: BacklogJob }> {
-    if (this.backlogJob.status === 'running') {
-      return { started: false, alreadyRunning: true, job: this.backlogJob };
+    const counts = await this.holderIndexingQueue.getJobCounts('waiting', 'active', 'delayed');
+    const pending = (counts.waiting ?? 0) + (counts.active ?? 0) + (counts.delayed ?? 0);
+    if (pending > 0) {
+      return { started: false, alreadyRunning: true, job: await this.getBacklogStatus() };
     }
 
     const holderCap = maxHolders ?? DEFAULT_HOLDER_CAP;
@@ -90,76 +131,30 @@ export class HolderIndexerService {
       ${limit ? sql`LIMIT ${limit}` : sql``}
     `);
 
-    this.backlogJob = {
-      status: 'running',
-      total: rows.length,
-      processed: 0,
-      succeeded: 0,
-      failed: 0,
-      skipped: 0,
-      startedAt: new Date().toISOString(),
-    };
-    this.logger.log(`Holder backlog index started: ${rows.length} collections to index (holder cap ${holderCap})`);
+    // Reset finished-job history so backlog counters reflect this run only.
+    await this.holderIndexingQueue.clean(0, 100_000, 'completed');
+    await this.holderIndexingQueue.clean(0, 100_000, 'failed');
 
-    setImmediate(() => {
-      void this.runBacklog(rows as Array<{ id: string; name: string }>, holderCap).catch((err) => {
-        this.logger.error(`Holder backlog index crashed: ${err?.message || err}`);
-        this.backlogJob.status = 'failed';
-        this.backlogJob.error = err?.message || 'Unknown error';
-        this.backlogJob.finishedAt = new Date().toISOString();
-      });
-    });
-
-    return { started: true, alreadyRunning: false, job: this.backlogJob };
-  }
-
-  private async runBacklog(rows: Array<{ id: string; name: string }>, holderCap: number) {
-    let consecutiveFailures = 0;
-
-    for (const row of rows) {
-      this.backlogJob.current = row.name;
-      try {
-        const result = await this.indexCollectionHolders(row.id, { maxHolders: holderCap });
-        if (result.success) {
-          this.backlogJob.succeeded++;
-          consecutiveFailures = 0;
-        } else if (result.skipped) {
-          this.backlogJob.skipped++;
-          consecutiveFailures = 0;
-        } else {
-          this.backlogJob.failed++;
-          consecutiveFailures++;
-        }
-      } catch (err: any) {
-        this.backlogJob.failed++;
-        consecutiveFailures++;
-        this.logger.warn(`Backlog index failed for ${row.name}: ${err?.message || 'unknown error'}`);
-      }
-      this.backlogJob.processed++;
-
-      if (consecutiveFailures >= 10) {
-        this.backlogJob.status = 'failed';
-        this.backlogJob.error = `Aborted after ${consecutiveFailures} consecutive failures (${this.backlogJob.processed}/${this.backlogJob.total} processed)`;
-        this.backlogJob.finishedAt = new Date().toISOString();
-        this.logger.error(`Holder backlog index aborted: ${this.backlogJob.error}`);
-        return;
-      }
-
-      if (this.backlogJob.processed % 25 === 0) {
-        this.logger.log(
-          `Holder backlog progress: ${this.backlogJob.processed}/${this.backlogJob.total} (${this.backlogJob.succeeded} ok, ${this.backlogJob.skipped} skipped, ${this.backlogJob.failed} failed)`,
-        );
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+    if (rows.length > 0) {
+      await this.holderIndexingQueue.addBulk(
+        rows.map((row) => ({
+          name: 'index-holders',
+          data: {
+            collectionId: row.id,
+            collectionName: row.name,
+            maxHolders: holderCap,
+          },
+          opts: {
+            attempts: 2,
+            backoff: { type: 'exponential' as const, delay: 10_000 },
+          },
+        })),
+      );
     }
 
-    this.backlogJob.status = 'completed';
-    this.backlogJob.current = undefined;
-    this.backlogJob.finishedAt = new Date().toISOString();
-    this.logger.log(
-      `Holder backlog index complete: ${this.backlogJob.succeeded} indexed, ${this.backlogJob.skipped} skipped (too large), ${this.backlogJob.failed} failed of ${this.backlogJob.total}`,
-    );
+    this.logger.log(`Holder backlog index started: ${rows.length} collections queued (holder cap ${holderCap})`);
+
+    return { started: true, alreadyRunning: false, job: await this.getBacklogStatus() };
   }
 
   /**
