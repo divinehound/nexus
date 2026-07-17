@@ -3,9 +3,6 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   output: 'standalone',
   transpilePackages: ['@nexus/types'],
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   async rewrites() {
     const apiUrl = process.env.API_URL || 'http://localhost:4000/api';
     return [

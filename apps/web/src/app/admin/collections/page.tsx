@@ -51,6 +51,7 @@ interface AdminCollection {
   mappingConfidence: string | null;
   verificationNotes: string | null;
   projectId: string;
+  project?: { id: string; name: string; slug: string } | null;
   lastIndexFinishedAt?: string | null;
   lastIndexStatus?: string | null;
   indexStatus?: string | null;
@@ -99,6 +100,7 @@ export default function AdminCollectionsPage() {
     title: string;
     message: React.ReactNode;
     onConfirm: () => void;
+    onCancel?: () => void;
     variant?: 'default' | 'danger' | 'warning';
     confirmText?: string;
     loading?: boolean;
@@ -1083,7 +1085,7 @@ export default function AdminCollectionsPage() {
                     )}
                     {getExplorerLink(c.chain, c.contractAddress) && (
                       <a
-                        href={getExplorerLink(c.chain, c.contractAddress)}
+                        href={getExplorerLink(c.chain, c.contractAddress) ?? undefined}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="mt-1 inline-block text-xs text-purple-400 hover:text-purple-300"

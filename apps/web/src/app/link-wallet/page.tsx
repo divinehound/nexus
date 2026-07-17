@@ -4,7 +4,7 @@ import { Suspense, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAppKit, useAppKitAccount, useAppKitProvider } from '@reown/appkit/react';
 import type { Provider as SolanaProvider } from '@reown/appkit-adapter-solana';
-import type { Provider as EvmProvider } from '@reown/appkit-adapter-wagmi';
+import type { EvmProvider } from '@/lib/evm-provider';
 import bs58 from 'bs58';
 import { createWalletChallenge, verifyWalletLink, moveWalletLink } from '@/lib/api';
 

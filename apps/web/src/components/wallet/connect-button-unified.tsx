@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useAppKit, useAppKitAccount, useDisconnect, useAppKitProvider } from '@reown/appkit/react';
 import type { Provider } from '@reown/appkit-adapter-solana';
-import type { Provider as EvmProvider } from '@reown/appkit-adapter-wagmi';
+import type { EvmProvider } from '@/lib/evm-provider';
 import { useAuth } from '@/context/auth-context';
 import { truncateAddress } from '@/lib/utils';
 import bs58 from 'bs58';
@@ -11,7 +11,7 @@ import bs58 from 'bs58';
 export function ConnectButton() {
   const { user, isLoading, logout, loginEvm, loginSolana, getNonce } = useAuth();
   const { open } = useAppKit();
-  const { isConnected, address, caipAddress, caipNetworkId } = useAppKitAccount();
+  const { isConnected, address, caipAddress } = useAppKitAccount();
   const { disconnect } = useDisconnect();
   const { walletProvider: solanaProvider } = useAppKitProvider('solana');
   const { walletProvider: evmProvider } = useAppKitProvider('eip155');

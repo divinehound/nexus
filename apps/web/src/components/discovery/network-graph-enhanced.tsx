@@ -37,7 +37,7 @@ type SimulationNode = d3.SimulationNodeDatum & NetworkGraphNode;
 type SimulationLink = d3.SimulationLinkDatum<SimulationNode> & {
   weight: number;
   sharedHolders: number;
-  holderDataReliable: boolean;
+  holderDataReliable?: boolean;
 };
 
 export function NetworkGraphVisualization({
@@ -141,7 +141,7 @@ export function NetworkGraphVisualization({
       )
       .force('charge', d3.forceManyBody().strength(-600)) // Less repulsion
       .force('center', d3.forceCenter(width / 2, height / 2).strength(0.05)) // Weaker centering
-      .force('collision', d3.forceCollide().radius(d => Math.sqrt(d.holderCount || 0) / 3 + 22))
+      .force('collision', d3.forceCollide<SimulationNode>().radius(d => Math.sqrt(d.holderCount || 0) / 3 + 22))
       .velocityDecay(0.6) // Faster decay = settles quicker
       .alphaDecay(0.05); // Faster cooldown
 
@@ -229,7 +229,7 @@ export function NetworkGraphVisualization({
       });
 
     // Add images (if available)
-    node.filter(d => d.imageUrl)
+    node.filter(d => !!d.imageUrl)
       .append('image')
       .attr('xlink:href', d => d.imageUrl!)
       .attr('x', d => -(Math.sqrt(d.holderCount || 0) / 3 + 8))

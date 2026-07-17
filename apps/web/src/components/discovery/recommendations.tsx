@@ -20,10 +20,11 @@ export function PersonalizedRecommendations({ limit = 10, minOverlap = 3 }: Reco
   );
 
   useEffect(() => {
-    if (user?.primaryWallet) {
+    const primaryWallet = user?.wallets?.find((w) => w.id === user.primaryWalletId);
+    if (primaryWallet) {
       setSelectedWallet({
-        chain: user.primaryWallet.chain,
-        address: user.primaryWallet.address,
+        chain: primaryWallet.chain,
+        address: primaryWallet.address,
       });
     } else if (user?.wallets && user.wallets.length > 0) {
       // Fallback to first wallet if no primary wallet set

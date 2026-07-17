@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useAppKitProvider } from '@reown/appkit/react';
 import type { Provider as SolanaProvider } from '@reown/appkit-adapter-solana';
-import type { Provider as EvmProvider } from '@reown/appkit-adapter-wagmi';
+import type { EvmProvider } from '@/lib/evm-provider';
 import bs58 from 'bs58';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
@@ -59,7 +59,7 @@ function MePageContent() {
   const [wallets, setWallets] = useState<LinkedWallet[]>([]);
   const [holdingsSummary, setHoldingsSummary] = useState<HoldingsSummaryResponse | null>(null);
   const [topActiveCollections, setTopActiveCollections] = useState<HoldingsCollectionItem[]>([]);
-  const [profileForm, setProfileForm] = useState<ProfileFormState>({ displayName: '', avatarUrl: '', bio: '' });
+  const [profileForm, setProfileForm] = useState<ProfileFormState>({ email: '', displayName: '', avatarUrl: '', bio: '' });
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -196,64 +196,6 @@ function MePageContent() {
     return signature as string;
   };
 
-  const onAddWallet = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!accessToken) return;
-
-    const normalizedAddress = addChain === 'solana' ? addAddress.trim() : addAddress.trim().toLowerCase();
-    if (!normalizedAddress) {
-      setAddWalletError('Wallet address is required');
-      return;
-    }
-
-    if (addChain !== 'solana' && !connectedAddress) {
-      setAddWalletError('To link an EVM wallet, please connect with an EVM wallet (MetaMask, Coinbase Wallet, etc) using the Connect button above, then try again.');
-      return;
-    }
-
-    setAddWalletLoading(true);
-    setAddWalletError(null);
-    setAddWalletSuccess(null);
-
-    try {
-      const challenge = await createWalletChallenge(
-        { chain: addChain, address: normalizedAddress, purpose: 'link_wallet' },
-        accessToken,
-      );
-
-      const signature = await signWalletChallenge(addChain, challenge.message, normalizedAddress);
-      const verifyResult = await verifyWalletLink(
-        {
-          chain: addChain,
-          address: normalizedAddress,
-          message: challenge.message,
-          signature,
-        },
-        accessToken,
-      );
-
-      await fetchMe();
-      setAddWalletSuccess(
-        verifyResult.idempotent
-          ? 'Wallet already linked to your account'
-          : 'Wallet linked successfully',
-      );
-      setAddAddress('');
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 409 && err.data?.error === 'WALLET_ALREADY_LINKED' && err.data?.confirmationToken) {
-        setMoveConfirmation({
-          chain: addChain,
-          address: normalizedAddress,
-          confirmationToken: err.data.confirmationToken,
-        });
-      } else {
-        setAddWalletError(err instanceof Error ? err.message : 'Failed to link wallet');
-      }
-    } finally {
-      setAddWalletLoading(false);
-    }
-  };
-
   const onConfirmWalletMove = async () => {
     if (!accessToken || !moveConfirmation) return;
 
@@ -285,8 +227,7 @@ function MePageContent() {
 
       await fetchMe();
       setMoveConfirmation(null);
-      setAddWalletSuccess('Wallet moved and linked to your account');
-      setAddAddress('');
+      setLinkSuccess('Wallet moved and linked to your account');
     } catch (err) {
       setMoveError(err instanceof Error ? err.message : 'Failed to move wallet');
     } finally {
