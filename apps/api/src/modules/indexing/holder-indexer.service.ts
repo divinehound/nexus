@@ -2,7 +2,7 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, lt, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { HOLDER_INDEXING_QUEUE } from '../../common/queue/queues';
 import { type Database, collections, collectionHolders } from '@nexus/database';
@@ -192,20 +192,54 @@ export class HolderIndexerService {
         await this.handleSpamDetection(collectionId, holderResult.spamInfo);
       }
 
-      // Upsert holders
+      // Bulk-upsert holders in chunks: one round-trip per 500 holders
+      // instead of one per holder.
+      const now = new Date();
+      const UPSERT_CHUNK = 500;
       let indexed = 0;
-      for (const holder of holders) {
-        await this.upsertHolder(
-          collectionId,
-          collection.chain,
-          holder.ownerAddress,
-          holder.balance,
-        );
-        indexed++;
-
-        if (indexed % 100 === 0) {
+      for (let i = 0; i < holders.length; i += UPSERT_CHUNK) {
+        const chunk = holders.slice(i, i + UPSERT_CHUNK);
+        await this.db
+          .insert(collectionHolders)
+          .values(
+            chunk.map((holder) => ({
+              collectionId,
+              chain: collection.chain,
+              // Solana addresses are case-sensitive; EVM addresses are lowercased
+              address: collection.chain === 'solana' ? holder.ownerAddress : holder.ownerAddress.toLowerCase(),
+              tokenCount: holder.balance,
+              firstSeenAt: now,
+              lastSeenAt: now,
+            })),
+          )
+          .onConflictDoUpdate({
+            target: [collectionHolders.collectionId, collectionHolders.address],
+            set: {
+              tokenCount: sql`excluded.token_count`,
+              lastSeenAt: now,
+            },
+          });
+        indexed += chunk.length;
+        if (holders.length > UPSERT_CHUNK) {
           this.logger.log(`Progress: ${indexed}/${holders.length} holders indexed`);
         }
+      }
+
+      // Reconcile exits: every current holder was just stamped lastSeenAt =
+      // now, so older rows left the collection since the last index. The
+      // fetchers throw on any failure (and cap-exceeded aborts above), so
+      // reaching this point means the holder set is complete.
+      const staleHolders = await this.db
+        .delete(collectionHolders)
+        .where(
+          and(
+            eq(collectionHolders.collectionId, collectionId),
+            lt(collectionHolders.lastSeenAt, now),
+          ),
+        )
+        .returning({ id: collectionHolders.id });
+      if (staleHolders.length > 0) {
+        this.logger.log(`Removed ${staleHolders.length} exited holders for ${collection.name}`);
       }
 
       // Calculate total supply by summing all holder balances
@@ -497,34 +531,6 @@ export class HolderIndexerService {
    * Upsert holder into collection_holders table
    * This table doesn't require userId, so we can index ALL holders
    */
-  private async upsertHolder(
-    collectionId: string,
-    chain: string,
-    address: string,
-    tokenCount: number,
-  ) {
-    // Solana addresses are case-sensitive; EVM addresses should be lowercased
-    const normalizedAddress = chain === 'solana' ? address : address.toLowerCase();
-
-    await this.db
-      .insert(collectionHolders)
-      .values({
-        collectionId,
-        chain: chain as any,
-        address: normalizedAddress,
-        tokenCount,
-        firstSeenAt: new Date(),
-        lastSeenAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: [collectionHolders.collectionId, collectionHolders.address],
-        set: {
-          tokenCount,
-          lastSeenAt: new Date(),
-        },
-      });
-  }
-
   /**
    * Map chain name to Alchemy network identifier
    */

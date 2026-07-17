@@ -361,7 +361,13 @@ All indexing work runs through Redis-backed BullMQ queues instead of in-process 
 | `collection-discovery` | Holder-graph discovery for a source collection | 1, deduped per collection |
 | `holder-history-scan` | EVM/Solana transfer-history scans | 1, deduped per collection |
 
-The `wallet_indexing_jobs` / `indexing_jobs` tables remain the admin-visible status record; BullMQ is the execution layer underneath (wallet jobs share the same job id in both).
+The `wallet_indexing_jobs` / `indexing_jobs` tables remain the admin-visible status record; BullMQ is the execution layer underneath (wallet jobs share the same job id in both). Finished job rows older than 30 days (and expired wallet-link challenges/move confirmations) are pruned by a nightly retention cron.
+
+Indexing correctness notes:
+- Wallet indexing paginates fully through Alchemy/Helius (capped at 5,000 NFTs per EVM chain / 10,000 Solana assets, logged loudly if hit).
+- A fetch failure throws and fails the job (BullMQ retries) — it is never treated as "wallet holds nothing".
+- After a successful fetch, holdings/holders absent from the result are deleted (reconciliation), so sold-out positions and exited holders no longer linger. Reconciliation is skipped for any chain whose fetch was truncated by the page cap.
+- Holder and holdings writes are batched (500-row upserts) instead of one statement per row.
 
 ---
 

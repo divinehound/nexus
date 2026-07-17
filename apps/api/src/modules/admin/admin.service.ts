@@ -596,77 +596,77 @@ export class AdminService {
     const limit = Math.min(100, Math.max(1, input.limit ?? 20));
     const offset = (page - 1) * limit;
 
-    const walletConditions = [] as Array<any>;
-    if (input.status) walletConditions.push(eq(walletIndexingJobs.status, input.status));
-    if (input.walletId) walletConditions.push(eq(walletIndexingJobs.walletId, input.walletId));
-    const walletWhere =
-      walletConditions.length === 0
-        ? undefined
-        : walletConditions.length === 1
-          ? walletConditions[0]
-          : and(...walletConditions);
+    // Union both job tables in SQL with the sort, filters, and pagination
+    // pushed down — these tables are append-heavy, and materializing them
+    // in JS made this endpoint slower with every job ever run.
+    const statusFilter = (alias: ReturnType<typeof sql.raw>) =>
+      input.status ? sql` AND ${alias}.status::text = ${input.status}` : sql``;
+    const walletFilter = (alias: ReturnType<typeof sql.raw>) =>
+      input.walletId ? sql` AND ${alias}.wallet_id = ${input.walletId}` : sql``;
 
-    const generalConditions = [] as Array<any>;
-    if (input.status) generalConditions.push(eq(indexingJobs.status, input.status));
-    if (input.walletId) generalConditions.push(eq(indexingJobs.walletId, input.walletId));
-    const generalWhere =
-      generalConditions.length === 0
-        ? undefined
-        : generalConditions.length === 1
-          ? generalConditions[0]
-          : and(...generalConditions);
+    const rows = await this.db.execute<{
+      id: string;
+      type: string;
+      status: string;
+      startedAt: Date | null;
+      finishedAt: Date | null;
+      userId: string | null;
+      walletId: string | null;
+      statsJson: Record<string, unknown> | null;
+      error: string | null;
+      entityType: string;
+      entityId: string;
+      total: number;
+    }>(sql`
+      WITH combined AS (
+        SELECT
+          w.id,
+          w.type,
+          w.status::text AS status,
+          w.started_at AS "startedAt",
+          w.finished_at AS "finishedAt",
+          w.user_id AS "userId",
+          w.wallet_id AS "walletId",
+          w.stats_json AS "statsJson",
+          w.error,
+          'wallet' AS "entityType",
+          w.wallet_id::text AS "entityId"
+        FROM wallet_indexing_jobs w
+        WHERE TRUE${statusFilter(sql.raw('w'))}${walletFilter(sql.raw('w'))}
+        UNION ALL
+        SELECT
+          j.id,
+          j.type,
+          j.status::text AS status,
+          j.started_at AS "startedAt",
+          j.finished_at AS "finishedAt",
+          j.triggered_by_user_id AS "userId",
+          j.wallet_id AS "walletId",
+          j.stats_json AS "statsJson",
+          j.error,
+          j.entity_type AS "entityType",
+          j.entity_id AS "entityId"
+        FROM indexing_jobs j
+        WHERE TRUE${statusFilter(sql.raw('j'))}${walletFilter(sql.raw('j'))}
+      )
+      SELECT *, COUNT(*) OVER ()::int AS total
+      FROM combined
+      ORDER BY "startedAt" DESC NULLS LAST
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `);
 
-    const [walletItems, generalItems] = await Promise.all([
-      this.db.query.walletIndexingJobs.findMany({
-        where: walletWhere,
-        orderBy: [desc(walletIndexingJobs.startedAt)],
-      }),
-      this.db.query.indexingJobs.findMany({
-        where: generalWhere,
-        orderBy: [desc(indexingJobs.startedAt)],
-      }),
-    ]);
-
-    const combined = [
-      ...walletItems.map((job) => ({
-        id: job.id,
-        type: job.type,
-        status: job.status,
-        startedAt: job.startedAt,
-        finishedAt: job.finishedAt,
-        durationMs:
-          job.startedAt && job.finishedAt
-            ? new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()
-            : null,
-        userId: job.userId,
-        walletId: job.walletId,
-        statsJson: job.statsJson,
-        error: job.error,
-        entityType: 'wallet' as const,
-        entityId: job.walletId,
-      })),
-      ...generalItems.map((job) => ({
-        id: job.id,
-        type: job.type,
-        status: job.status,
-        startedAt: job.startedAt,
-        finishedAt: job.finishedAt,
-        durationMs:
-          job.startedAt && job.finishedAt
-            ? new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()
-            : null,
-        userId: job.triggeredByUserId,
-        walletId: job.walletId,
-        statsJson: job.statsJson,
-        error: job.error,
-        entityType: job.entityType,
-        entityId: job.entityId,
-      })),
-    ].sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+    const items = (rows as any[]).map(({ total: _total, ...job }) => ({
+      ...job,
+      durationMs:
+        job.startedAt && job.finishedAt
+          ? new Date(job.finishedAt).getTime() - new Date(job.startedAt).getTime()
+          : null,
+    }));
 
     return {
-      items: combined.slice(offset, offset + limit),
-      total: combined.length,
+      items,
+      total: Number((rows as any[])[0]?.total ?? 0),
       page,
       limit,
     };

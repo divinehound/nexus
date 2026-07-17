@@ -8,7 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import {
   chainEnum,
   collections,
@@ -303,10 +303,15 @@ export class HoldingsService {
       this.logger.log(`Indexing wallet ${wallet.address} across chains: ${chainsToIndex.join(', ')}`);
 
       const allHoldings: { contractAddress: string; tokenCount: number; chain: string }[] = [];
-      
+      const fullyFetchedChains: string[] = [];
+
       for (const chain of chainsToIndex) {
-        const chainHoldings = await this.blockchainIndexer.fetchWalletHoldings(wallet.address, chain);
+        const { holdings: chainHoldings, complete } = await this.blockchainIndexer.fetchWalletHoldings(
+          wallet.address,
+          chain,
+        );
         allHoldings.push(...chainHoldings.map(h => ({ ...h, chain })));
+        if (complete) fullyFetchedChains.push(chain);
       }
 
       const sorted = allHoldings.sort((a, b) => b.tokenCount - a.tokenCount);
@@ -314,26 +319,49 @@ export class HoldingsService {
       const overflow = sorted.slice(this.maxCollectionsPerRun);
 
       const now = new Date();
-      for (const holding of sorted) {
+      const UPSERT_CHUNK = 500;
+      for (let i = 0; i < sorted.length; i += UPSERT_CHUNK) {
+        const chunk = sorted.slice(i, i + UPSERT_CHUNK);
         await this.db
           .insert(walletHoldingsSnapshots)
-          .values({
-            userId: wallet.userId,
-            walletId: wallet.id,
-            chain: holding.chain as any,
-            contractAddress: holding.contractAddress,
-            tokenCount: holding.tokenCount,
-            firstSeenAt: now,
-            lastSeenAt: now,
-          })
+          .values(
+            chunk.map((holding) => ({
+              userId: wallet.userId!,
+              walletId: wallet.id,
+              chain: holding.chain as any,
+              contractAddress: holding.contractAddress,
+              tokenCount: holding.tokenCount,
+              firstSeenAt: now,
+              lastSeenAt: now,
+            })),
+          )
           .onConflictDoUpdate({
             target: [walletHoldingsSnapshots.walletId, walletHoldingsSnapshots.chain, walletHoldingsSnapshots.contractAddress],
             set: {
               userId: wallet.userId,
-              tokenCount: holding.tokenCount,
+              tokenCount: sql`excluded.token_count`,
               lastSeenAt: now,
             },
           });
+      }
+
+      // Reconcile: everything still held was just stamped lastSeenAt = now,
+      // so older rows were sold/transferred since the last run. The fetch
+      // throws on failure, so an absent holding is genuinely gone — but only
+      // on chains whose fetch wasn't truncated by the page cap.
+      let staleRemoved = 0;
+      if (fullyFetchedChains.length > 0) {
+        const removed = await this.db
+          .delete(walletHoldingsSnapshots)
+          .where(
+            and(
+              eq(walletHoldingsSnapshots.walletId, wallet.id),
+              inArray(walletHoldingsSnapshots.chain, fullyFetchedChains as any),
+              lt(walletHoldingsSnapshots.lastSeenAt, now),
+            ),
+          )
+          .returning({ id: walletHoldingsSnapshots.id });
+        staleRemoved = removed.length;
       }
 
       let active = 0;
@@ -372,6 +400,7 @@ export class HoldingsService {
           statsJson: {
             holdingsDiscovered: allHoldings.length,
             chainsIndexed: chainsToIndex,
+            staleRemoved,
             active,
             lightweight,
             suppressed,
