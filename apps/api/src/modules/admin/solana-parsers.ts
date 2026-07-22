@@ -24,6 +24,9 @@ export type ParsedTransfer = {
   toWallet: string; // '' for burn events
   parserName: string;
   programId: string | null;
+  // Sale/mint price in lamports, when the source event carried one (marketplace
+  // sale or priced mint). Undefined for plain ownership transfers.
+  priceLamports?: number;
 };
 
 export type ParserContext = {
@@ -232,6 +235,16 @@ const heliusEventsNft: Parser = {
     const to = nftEvent.buyer || '';
     if (!from && !to) return transfers;
 
+    // Helius reports the sale/mint total (lamports) on events.nft.amount. It's
+    // the price for the whole event; when the event covers multiple NFTs, split
+    // it evenly across them so per-token cost basis stays consistent.
+    const rawAmount = typeof nftEvent.amount === 'number' ? nftEvent.amount : undefined;
+    const matched = nftEvent.nfts.filter((n: { mint?: string }) => n.mint && ctx.mintAddresses.has(n.mint));
+    const priceLamports =
+      rawAmount !== undefined && rawAmount > 0 && matched.length > 0
+        ? Math.round(rawAmount / matched.length)
+        : undefined;
+
     const seen = new Set<string>();
     for (const nft of nftEvent.nfts) {
       const mint = nft.mint || '';
@@ -246,6 +259,7 @@ const heliusEventsNft: Parser = {
         toWallet: to,
         parserName: 'helius_events_nft',
         programId: nftEvent.source || null,
+        ...(priceLamports !== undefined ? { priceLamports } : {}),
       });
     }
     return transfers;
@@ -358,7 +372,7 @@ export const PARSERS: Parser[] = [
  * same transfer, the first one wins (registry order).
  */
 export function runAllParsers(tx: any, ctx: ParserContext): ParsedTransfer[] {
-  const seen = new Set<string>();
+  const byKey = new Map<string, ParsedTransfer>();
   const results: ParsedTransfer[] = [];
   for (const parser of PARSERS) {
     let transfersFromThisParser: ParsedTransfer[] = [];
@@ -370,8 +384,16 @@ export function runAllParsers(tx: any, ctx: ParserContext): ParsedTransfer[] {
     }
     for (const t of transfersFromThisParser) {
       const key = `${t.mintAddress}:${t.fromWallet}:${t.toWallet}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const existing = byKey.get(key);
+      if (existing) {
+        // A later parser (e.g. helius_events_nft) may carry the sale price that
+        // the first-seen parser lacked — backfill it without duplicating the row.
+        if (existing.priceLamports === undefined && t.priceLamports !== undefined) {
+          existing.priceLamports = t.priceLamports;
+        }
+        continue;
+      }
+      byKey.set(key, t);
       results.push(t);
     }
   }

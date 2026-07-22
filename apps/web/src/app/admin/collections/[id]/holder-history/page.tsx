@@ -10,8 +10,25 @@ import BalanceLineChart from './balance-line-chart';
 import ReconciliationPanel from './reconciliation-panel';
 import WalletDetailPanel from './wallet-detail-panel';
 
-type SortField = 'currentBalance' | 'firstReceivedAt' | 'lastReceivedAt' | 'address';
+type SortField =
+  | 'currentBalance'
+  | 'firstReceivedAt'
+  | 'lastReceivedAt'
+  | 'address'
+  | 'buyCount'
+  | 'sellCount'
+  | 'realizedPnlNative'
+  | 'unrealizedPnlNative'
+  | 'avgHoldTimeSeconds';
 type SortDirection = 'asc' | 'desc';
+
+const PNL_NUMERIC_FIELDS: SortField[] = [
+  'buyCount',
+  'sellCount',
+  'realizedPnlNative',
+  'unrealizedPnlNative',
+  'avgHoldTimeSeconds',
+];
 
 const PAGE_SIZE = 50;
 
@@ -203,6 +220,25 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
         />
       </div>
 
+      {data?.summary?.pnl?.walletsWithPnl > 0 && (
+        <div className="grid gap-4 md:grid-cols-4">
+          <PnlStat
+            label="Realized PnL"
+            native={data.summary.pnl.realizedPnlNative}
+            usd={data.summary.pnl.realizedPnlUsd}
+            symbol={data.summary.pnl.nativeSymbol}
+          />
+          <PnlStat
+            label="Unrealized PnL"
+            native={data.summary.pnl.unrealizedPnlNative}
+            usd={data.summary.pnl.unrealizedPnlUsd}
+            symbol={data.summary.pnl.nativeSymbol}
+          />
+          <Stat label="Total buys" value={String(data.summary.pnl.totalBuys ?? 0)} />
+          <Stat label="Total sells" value={String(data.summary.pnl.totalSells ?? 0)} />
+        </div>
+      )}
+
       {jobStatus && jobStatus.status !== 'idle' && (
         <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-4 text-sm text-gray-300">
           <div className="flex flex-wrap items-center gap-4">
@@ -291,6 +327,11 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                   <SortableHeader label="Balance" field="currentBalance" activeField={sortField} direction={sortDirection} onSort={handleSort} />
                   {!isSnapshot && (
                     <>
+                      <SortableHeader label="Buys" field="buyCount" activeField={sortField} direction={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Sells" field="sellCount" activeField={sortField} direction={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Realized PnL" field="realizedPnlNative" activeField={sortField} direction={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Unrealized PnL" field="unrealizedPnlNative" activeField={sortField} direction={sortDirection} onSort={handleSort} />
+                      <SortableHeader label="Avg hold" field="avgHoldTimeSeconds" activeField={sortField} direction={sortDirection} onSort={handleSort} />
                       <SortableHeader label="First received" field="firstReceivedAt" activeField={sortField} direction={sortDirection} onSort={handleSort} />
                       <SortableHeader label="Last received" field="lastReceivedAt" activeField={sortField} direction={sortDirection} onSort={handleSort} />
                     </>
@@ -368,6 +409,11 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                         <td className="py-3 pr-4 font-semibold text-purple-300">{wallet.currentBalance}</td>
                         {!isSnapshot && (
                           <>
+                            <td className="py-3 pr-4 text-gray-300">{wallet.pnl?.buyCount ?? 0}</td>
+                            <td className="py-3 pr-4 text-gray-300">{wallet.pnl?.sellCount ?? 0}</td>
+                            <PnlCell native={wallet.pnl?.realizedPnlNative} usd={wallet.pnl?.realizedPnlUsd} symbol={wallet.pnl?.nativeSymbol} />
+                            <PnlCell native={wallet.pnl?.unrealizedPnlNative} usd={wallet.pnl?.unrealizedPnlUsd} symbol={wallet.pnl?.nativeSymbol} />
+                            <td className="py-3 pr-4 text-gray-300">{formatHold(wallet.pnl?.avgHoldTimeSeconds)}</td>
                             <td className="py-3 pr-4 text-gray-300">{formatDate(wallet.firstReceivedAt)}</td>
                             <td className="py-3 pr-4 text-gray-300">{formatDate(wallet.lastReceivedAt)}</td>
                           </>
@@ -375,7 +421,7 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
                       </tr>
                       {isExpanded && (
                         <tr>
-                          <td colSpan={5} className="border-b border-gray-800 bg-gray-950/60 px-4 py-3">
+                          <td colSpan={10} className="border-b border-gray-800 bg-gray-950/60 px-4 py-3">
                             <WalletDetailPanel
                               entries={(data?.balanceHistory ?? []).filter((e: any) => e.address === wallet.address)}
                               xDomain={chartXDomain}
@@ -457,6 +503,10 @@ function compareWallets(a: any, b: any, field: SortField, direction: SortDirecti
     return ((a.currentBalance ?? 0) - (b.currentBalance ?? 0)) * modifier;
   }
 
+  if (PNL_NUMERIC_FIELDS.includes(field)) {
+    return (((a.pnl?.[field] ?? 0) as number) - ((b.pnl?.[field] ?? 0) as number)) * modifier;
+  }
+
   const aValue = a[field] ? new Date(a[field]).getTime() : 0;
   const bValue = b[field] ? new Date(b[field]).getTime() : 0;
   return (aValue - bValue) * modifier;
@@ -469,6 +519,55 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="mt-2 text-lg font-semibold text-white">{value}</div>
     </div>
   );
+}
+
+function PnlStat({ label, native, usd, symbol }: { label: string; native?: number | null; usd?: number | null; symbol?: string }) {
+  return (
+    <div className="rounded-xl border border-gray-800 bg-gray-950/50 p-4">
+      <div className="text-xs uppercase tracking-wide text-gray-500">{label}</div>
+      <div className={`mt-2 text-lg font-semibold ${pnlColor(native)}`}>{formatNative(native, symbol)}</div>
+      <div className="text-xs text-gray-500">{formatUsd(usd)}</div>
+    </div>
+  );
+}
+
+function PnlCell({ native, usd, symbol }: { native?: number | null; usd?: number | null; symbol?: string }) {
+  return (
+    <td className="py-3 pr-4">
+      <div className={`font-medium ${pnlColor(native)}`}>{formatNative(native, symbol)}</div>
+      <div className="text-xs text-gray-500">{formatUsd(usd)}</div>
+    </td>
+  );
+}
+
+function pnlColor(value?: number | null): string {
+  if (value == null || value === 0) return 'text-gray-300';
+  return value > 0 ? 'text-green-400' : 'text-red-400';
+}
+
+function formatNative(value?: number | null, symbol?: string): string {
+  if (value == null) return '—';
+  const sign = value > 0 ? '+' : '';
+  const abs = Math.abs(value);
+  // Show more precision for small native amounts, fewer digits for large ones.
+  const digits = abs !== 0 && abs < 1 ? 4 : abs < 1000 ? 3 : 2;
+  return `${sign}${value.toLocaleString(undefined, { maximumFractionDigits: digits })} ${symbol ?? ''}`.trim();
+}
+
+function formatUsd(value?: number | null): string {
+  if (value == null) return '—';
+  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+  return `${sign}$${Math.abs(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function formatHold(seconds?: number | null): string {
+  if (seconds == null) return '—';
+  const days = seconds / 86400;
+  if (days >= 1) return `${days.toLocaleString(undefined, { maximumFractionDigits: days >= 10 ? 0 : 1 })}d`;
+  const hours = seconds / 3600;
+  if (hours >= 1) return `${hours.toLocaleString(undefined, { maximumFractionDigits: 1 })}h`;
+  const mins = Math.max(1, Math.round(seconds / 60));
+  return `${mins}m`;
 }
 
 function formatDate(value?: string | null) {

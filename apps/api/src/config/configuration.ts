@@ -15,6 +15,11 @@ export default () => ({
   helius: {
     apiKey: process.env.HELIUS_API_KEY || '',
   },
+  coingecko: {
+    // Optional. Free public API works without a key (rate-limited); a Pro/Demo
+    // key raises limits and switches to the pro-api host.
+    apiKey: process.env.COINGECKO_API_KEY || '',
+  },
   solana: {
     rpcUrl: process.env.SOLANA_RPC_URL || '',
   },
