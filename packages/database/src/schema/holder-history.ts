@@ -5,7 +5,9 @@ import {
   text,
   integer,
   bigint,
+  real,
   varchar,
+  date,
   uniqueIndex,
   index,
   pgEnum,
@@ -58,6 +60,12 @@ export const collectionHolderBalanceHistory = pgTable(
     direction: holderTransferDirectionEnum('direction').notNull(),
     balanceAfter: integer('balance_after').notNull(),
     counterpartyAddress: text('counterparty_address'),
+    // Sale price attributed to this transfer, in the chain's native token
+    // (SOL/ETH/…) and in USD at the transfer's block time. Null when the
+    // transfer carried no price (airdrop, mint, wallet-to-wallet move, or a
+    // marketplace sale we couldn't recover a price for).
+    priceNative: real('price_native'),
+    priceUsd: real('price_usd'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -135,6 +143,9 @@ export const solanaParsedTransfers = pgTable(
     instructionOrder: integer('instruction_order').default(0).notNull(),
     parserName: varchar('parser_name', { length: 64 }).notNull(),
     programId: varchar('program_id', { length: 64 }),
+    // Sale/mint price in lamports, extracted from the Helius NFT event when the
+    // transfer represents a marketplace sale or a priced mint. Null otherwise.
+    priceLamports: bigint('price_lamports', { mode: 'number' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
@@ -157,4 +168,61 @@ export const solanaParsedTransfers = pgTable(
       table.blockTime,
     ),
   ],
+);
+
+/**
+ * Per-wallet realized/unrealized PnL for a collection, computed when a full
+ * holder transfer history finishes processing. One row per (collection, wallet).
+ *
+ * All *Native amounts are in the collection chain's native token (SOL/ETH/…),
+ * identified by `nativeSymbol`. USD amounts are valued at each transfer's
+ * historical daily rate; unrealized USD is marked against the current spot rate.
+ */
+export const collectionHolderPnl = pgTable(
+  'collection_holder_pnl',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    collectionId: uuid('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    chain: chainEnum('chain').notNull(),
+    address: text('address').notNull(),
+    nativeSymbol: varchar('native_symbol', { length: 16 }).notNull(),
+    // Counts of priced acquisitions/dispositions (a real price was paid/received).
+    buyCount: integer('buy_count').default(0).notNull(),
+    sellCount: integer('sell_count').default(0).notNull(),
+    realizedPnlNative: real('realized_pnl_native').default(0).notNull(),
+    realizedPnlUsd: real('realized_pnl_usd').default(0).notNull(),
+    unrealizedPnlNative: real('unrealized_pnl_native').default(0).notNull(),
+    unrealizedPnlUsd: real('unrealized_pnl_usd').default(0).notNull(),
+    totalBoughtNative: real('total_bought_native').default(0).notNull(),
+    totalSoldNative: real('total_sold_native').default(0).notNull(),
+    // Native cost basis of tokens the wallet still holds.
+    costBasisRemainingNative: real('cost_basis_remaining_native').default(0).notNull(),
+    // Average hold time (seconds) across tokens the wallet has bought and sold.
+    avgHoldTimeSeconds: bigint('avg_hold_time_seconds', { mode: 'number' }),
+    computedAt: timestamp('computed_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('collection_holder_pnl_unique').on(table.collectionId, table.address),
+    index('collection_holder_pnl_realized_idx').on(table.collectionId, table.realizedPnlNative),
+  ],
+);
+
+/**
+ * Cache of daily USD prices for native tokens (SOL, ETH, …). Populated from an
+ * external historical-price API and reused across scans so PnL USD valuation is
+ * both accurate (rate at the transfer date) and cheap (no repeated fetches).
+ */
+export const tokenPriceDaily = pgTable(
+  'token_price_daily',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    symbol: varchar('symbol', { length: 16 }).notNull(),
+    date: date('date').notNull(),
+    usdPrice: real('usd_price').notNull(),
+    source: varchar('source', { length: 32 }).default('coingecko').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex('token_price_daily_unique').on(table.symbol, table.date)],
 );

@@ -11,11 +11,16 @@ import {
   collectionHolderBalanceHistory,
   collectionHolderSummaries,
   collectionHolders,
+  collectionHolderPnl,
   solanaIndexedMints,
   solanaRawSignatures,
   solanaParsedTransfers,
 } from '@nexus/database';
 import { runAllParsers } from './solana-parsers';
+import { PnlAccumulator, type PnlTransfer } from './wallet-pnl';
+import { PriceOracleService, nativeTokenForChain } from './price-oracle.service';
+
+const LAMPORTS_PER_SOL = 1_000_000_000;
 
 type ScanStatus = 'idle' | 'queued' | 'running' | 'completed' | 'failed';
 
@@ -127,6 +132,7 @@ export class HolderHistoryService {
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly config: ConfigService,
     @InjectQueue(HOLDER_HISTORY_SCAN_QUEUE) private readonly scanQueue: Queue,
+    private readonly priceOracle: PriceOracleService,
   ) {}
 
   async getCollectionHolderHistory(collectionId: string) {
@@ -146,10 +152,36 @@ export class HolderHistoryService {
       orderBy: [asc(collectionHolderBalanceHistory.blockNumber), asc(collectionHolderBalanceHistory.logIndex)],
     });
 
+    const pnlRows = await this.db.query.collectionHolderPnl.findMany({
+      where: eq(collectionHolderPnl.collectionId, collectionId),
+    });
+    const pnlByAddress = new Map(pnlRows.map((p) => [p.address, p]));
+    const nativeSymbol = pnlRows[0]?.nativeSymbol ?? nativeTokenForChain(collection.chain).symbol;
+
     // No history scan yet — fall back to the current-holder snapshot that
     // "Index Holders" writes to collection_holders. Balances are real; only
     // the transfer timeline (first/last received, per-wallet history) is
     // unavailable until a holder history scan runs.
+    // Per-wallet PnL attached from collection_holder_pnl. Null when a wallet has
+    // no computed PnL (e.g. snapshot-only data, or an older un-rescanned history).
+    const pnlFor = (address: string) => {
+      const p = pnlByAddress.get(address);
+      if (!p) return null;
+      return {
+        nativeSymbol: p.nativeSymbol,
+        buyCount: p.buyCount,
+        sellCount: p.sellCount,
+        realizedPnlNative: p.realizedPnlNative,
+        realizedPnlUsd: p.realizedPnlUsd,
+        unrealizedPnlNative: p.unrealizedPnlNative,
+        unrealizedPnlUsd: p.unrealizedPnlUsd,
+        totalBoughtNative: p.totalBoughtNative,
+        totalSoldNative: p.totalSoldNative,
+        costBasisRemainingNative: p.costBasisRemainingNative,
+        avgHoldTimeSeconds: p.avgHoldTimeSeconds,
+      };
+    };
+
     let dataSource: 'history' | 'snapshot' | 'none' = summaries.length > 0 ? 'history' : 'none';
     let wallets: Array<{
       address: string;
@@ -158,7 +190,16 @@ export class HolderHistoryService {
       lastReceivedAt: Date | null;
       totalReceivedCount: number;
       totalSentCount: number;
-    }> = summaries;
+      pnl: ReturnType<typeof pnlFor>;
+    }> = summaries.map((s) => ({
+      address: s.address,
+      currentBalance: s.currentBalance,
+      firstReceivedAt: s.firstReceivedAt,
+      lastReceivedAt: s.lastReceivedAt,
+      totalReceivedCount: s.totalReceivedCount,
+      totalSentCount: s.totalSentCount,
+      pnl: pnlFor(s.address),
+    }));
 
     if (summaries.length === 0) {
       const snapshot = await this.db.query.collectionHolders.findMany({
@@ -174,9 +215,24 @@ export class HolderHistoryService {
           lastReceivedAt: null,
           totalReceivedCount: 0,
           totalSentCount: 0,
+          pnl: pnlFor(h.address),
         }));
       }
     }
+
+    // Collection-level PnL rollup across all wallets with computed PnL.
+    const pnlTotals = pnlRows.reduce(
+      (acc, p) => {
+        acc.realizedPnlNative += p.realizedPnlNative;
+        acc.realizedPnlUsd += p.realizedPnlUsd;
+        acc.unrealizedPnlNative += p.unrealizedPnlNative;
+        acc.unrealizedPnlUsd += p.unrealizedPnlUsd;
+        acc.totalBuys += p.buyCount;
+        acc.totalSells += p.sellCount;
+        return acc;
+      },
+      { realizedPnlNative: 0, realizedPnlUsd: 0, unrealizedPnlNative: 0, unrealizedPnlUsd: 0, totalBuys: 0, totalSells: 0 },
+    );
 
     return {
       collection,
@@ -185,6 +241,11 @@ export class HolderHistoryService {
         wallets,
         totalWallets: wallets.filter((w) => w.currentBalance > 0).length,
         totalTokensHeld: wallets.reduce((sum, w) => sum + w.currentBalance, 0),
+        pnl: {
+          nativeSymbol,
+          walletsWithPnl: pnlRows.length,
+          ...pnlTotals,
+        },
       },
       balanceHistory: history,
       scanJob: this.jobs.get(collectionId) ?? null,
@@ -460,6 +521,10 @@ export class HolderHistoryService {
     const network = this.getAlchemyNetwork(collection.chain);
     const endpoint = `https://${network}.g.alchemy.com/v2/${apiKey}`;
 
+    // Sale prices aren't part of the erc721 transfer feed, so fetch them
+    // separately from Alchemy's NFT Sales API and attach by (txHash, tokenId).
+    const salePrices = await this.fetchEvmSalePrices(collection, network, apiKey, fromBlock);
+
     while (true) {
       page += 1;
       const response = await this.withTimeout(
@@ -542,6 +607,9 @@ export class HolderHistoryService {
         }
         maxBlockNumber = Math.max(maxBlockNumber, blockNumber);
 
+        // Same sale price applies to both legs (seller proceeds / buyer cost).
+        const salePrice = salePrices.get(`${txHash.toLowerCase()}:${tokenId}`) ?? null;
+
         if (from && from !== ZERO_ADDRESS) {
           const summary = ensureSummary(summaryState, from);
           summary.currentBalance = Math.max(summary.currentBalance - 1, 0);
@@ -562,6 +630,7 @@ export class HolderHistoryService {
             direction: 'out',
             balanceAfter: summary.currentBalance,
             counterpartyAddress: to || null,
+            priceNative: salePrice,
           });
         }
 
@@ -591,6 +660,7 @@ export class HolderHistoryService {
             direction: 'in',
             balanceAfter: summary.currentBalance,
             counterpartyAddress: from || null,
+            priceNative: salePrice,
           });
         }
       }
@@ -834,6 +904,7 @@ export class HolderHistoryService {
             instructionOrder: idx,
             parserName: t.parserName,
             programId: t.programId,
+            priceLamports: t.priceLamports ?? null,
           });
         });
 
@@ -915,6 +986,8 @@ export class HolderHistoryService {
       const from = t.fromWallet || '';
       const to = t.toWallet || '';
       const sig = t.signature;
+      // Same sale price applies to both legs (seller proceeds / buyer cost).
+      const priceNative = t.priceLamports ? t.priceLamports / LAMPORTS_PER_SOL : null;
 
       if (from) {
         const summary = ensureSummary(summaryState, from);
@@ -936,6 +1009,7 @@ export class HolderHistoryService {
           direction: 'out',
           balanceAfter: summary.currentBalance,
           counterpartyAddress: to || null,
+          priceNative,
         });
       }
 
@@ -965,6 +1039,7 @@ export class HolderHistoryService {
           direction: 'in',
           balanceAfter: summary.currentBalance,
           counterpartyAddress: from || null,
+          priceNative,
         });
       }
 
@@ -1500,10 +1575,170 @@ export class HolderHistoryService {
       })
       .where(eq(collections.id, collection.id));
 
+    // Derive per-wallet PnL from the freshly-written full transfer ledger.
+    // Best-effort: a PnL failure must not fail an otherwise-successful scan.
+    try {
+      await this.recomputeAndPersistWalletPnl(collection);
+    } catch (err) {
+      this.logger.error(`[PnL] Failed to compute wallet PnL for ${collection.id}: ${(err as Error).message}`);
+    }
+
     job.status = 'completed';
     job.finishedAt = new Date().toISOString();
     this.jobs.set(collection.id, { ...job });
     this.logger.log(`Holder history scan completed for ${collection.id}. Transfers: ${job.processedTransfers}, wallets: ${job.touchedWallets}`);
+  }
+
+  /**
+   * Fetch marketplace sale prices for an EVM collection from Alchemy's NFT Sales
+   * API and index them by `${txHash}:${tokenId}` (native token). Sale prices are
+   * not part of the erc721 transfer feed, so this is a separate paginated call.
+   * Non-marketplace transfers (OTC, direct) simply won't have an entry.
+   */
+  private async fetchEvmSalePrices(
+    collection: typeof collections.$inferSelect,
+    network: string,
+    apiKey: string,
+    fromBlock: number,
+  ): Promise<Map<string, number>> {
+    const prices = new Map<string, number>();
+    let pageKey: string | undefined;
+    let page = 0;
+    try {
+      while (true) {
+        page += 1;
+        const url = new URL(`https://${network}.g.alchemy.com/nft/v3/${apiKey}/getNFTSales`);
+        url.searchParams.set('fromBlock', String(fromBlock));
+        url.searchParams.set('toBlock', 'latest');
+        url.searchParams.set('order', 'asc');
+        url.searchParams.set('contractAddress', collection.contractAddress);
+        url.searchParams.set('limit', '1000');
+        if (pageKey) url.searchParams.set('pageKey', pageKey);
+
+        const res = await this.withTimeout(
+          fetch(url.toString(), { headers: { accept: 'application/json' } }),
+          30000,
+          `getNFTSales page ${page}`,
+        );
+        if (!res.ok) {
+          this.logger.warn(`[EVM] getNFTSales failed (${res.status}) for ${collection.id}; continuing without EVM sale prices`);
+          break;
+        }
+        const data = (await res.json()) as { nftSales?: any[]; pageKey?: string };
+        for (const sale of data.nftSales ?? []) {
+          const tokenId = sale.tokenId != null ? String(sale.tokenId) : null;
+          const txHash = typeof sale.transactionHash === 'string' ? sale.transactionHash.toLowerCase() : null;
+          if (!tokenId || !txHash) continue;
+          const price = evmSalePriceToNative(sale);
+          if (price === null) continue;
+          prices.set(`${txHash}:${tokenId}`, price);
+        }
+        pageKey = data.pageKey;
+        if (!pageKey) break;
+      }
+    } catch (err) {
+      this.logger.warn(`[EVM] getNFTSales error for ${collection.id}: ${(err as Error).message}; continuing without EVM sale prices`);
+    }
+    if (prices.size > 0) {
+      this.logger.log(`[EVM] Loaded ${prices.size} sale prices for ${collection.id}`);
+    }
+    return prices;
+  }
+
+  /**
+   * Recompute per-wallet PnL for a collection from its full transfer ledger and
+   * persist a fresh snapshot into `collection_holder_pnl`. Runs at scan
+   * completion so it always reflects the entire history, independent of whether
+   * this scan was a full rebuild or an incremental top-up.
+   */
+  private async recomputeAndPersistWalletPnl(collection: typeof collections.$inferSelect) {
+    const token = nativeTokenForChain(collection.chain);
+
+    const rows = await this.db.query.collectionHolderBalanceHistory.findMany({
+      where: eq(collectionHolderBalanceHistory.collectionId, collection.id),
+      orderBy: [asc(collectionHolderBalanceHistory.blockNumber), asc(collectionHolderBalanceHistory.logIndex)],
+    });
+
+    if (rows.length === 0) {
+      await this.db.delete(collectionHolderPnl).where(eq(collectionHolderPnl.collectionId, collection.id));
+      return;
+    }
+
+    // The ledger stores each transfer twice (an 'out' row for the sender and an
+    // 'in' row for the receiver). Collapse them back into one movement per
+    // (txHash, tokenId, from, to); an empty/zero counterparty means mint/burn.
+    const movements = new Map<string, PnlTransfer & { blockNumber: number }>();
+    let minTime = rows[0].blockTimestamp;
+    let maxTime = rows[0].blockTimestamp;
+    for (const r of rows) {
+      if (r.blockTimestamp < minTime) minTime = r.blockTimestamp;
+      if (r.blockTimestamp > maxTime) maxTime = r.blockTimestamp;
+      const counter = normalizeCounterparty(r.counterpartyAddress);
+      const from = r.direction === 'in' ? counter : r.address;
+      const to = r.direction === 'in' ? r.address : counter;
+      const key = `${r.transactionHash}:${r.tokenId}:${from}:${to}`;
+      const existing = movements.get(key);
+      if (!existing) {
+        movements.set(key, {
+          tokenId: r.tokenId,
+          from,
+          to,
+          priceNative: r.priceNative ?? null,
+          timestamp: r.blockTimestamp,
+          blockNumber: r.blockNumber,
+        });
+      } else if (existing.priceNative == null && r.priceNative != null) {
+        existing.priceNative = r.priceNative;
+      }
+    }
+
+    const ordered = Array.from(movements.values()).sort(
+      (a, b) => a.blockNumber - b.blockNumber || a.timestamp.getTime() - b.timestamp.getTime(),
+    );
+
+    const dailyUsd = await this.priceOracle.getDailyUsdRates(token, minTime, maxTime);
+    const spotUsd = await this.priceOracle.getSpotUsd(token);
+
+    const accumulator = new PnlAccumulator(dailyUsd);
+    for (const m of ordered) {
+      accumulator.recordTransfer({
+        tokenId: m.tokenId,
+        from: m.from,
+        to: m.to,
+        priceNative: m.priceNative,
+        timestamp: m.timestamp,
+      });
+    }
+    const results = accumulator.finalize({
+      floorPriceNative: collection.floorPrice ?? null,
+      spotUsdRate: spotUsd,
+    });
+
+    await this.db.delete(collectionHolderPnl).where(eq(collectionHolderPnl.collectionId, collection.id));
+    const pnlRows: Array<typeof collectionHolderPnl.$inferInsert> = results
+      .filter((r) => r.address)
+      .map((r) => ({
+        collectionId: collection.id,
+        chain: collection.chain,
+        address: r.address,
+        nativeSymbol: token.symbol,
+        buyCount: r.buyCount,
+        sellCount: r.sellCount,
+        realizedPnlNative: r.realizedPnlNative,
+        realizedPnlUsd: r.realizedPnlUsd,
+        unrealizedPnlNative: r.unrealizedPnlNative,
+        unrealizedPnlUsd: r.unrealizedPnlUsd,
+        totalBoughtNative: r.totalBoughtNative,
+        totalSoldNative: r.totalSoldNative,
+        costBasisRemainingNative: r.costBasisRemainingNative,
+        avgHoldTimeSeconds: r.avgHoldTimeSeconds,
+      }));
+    if (pnlRows.length > 0) {
+      for (const batch of chunkArray(pnlRows, 500)) {
+        await this.db.insert(collectionHolderPnl).values(batch).onConflictDoNothing();
+      }
+    }
+    this.logger.log(`[PnL] Computed wallet PnL for ${pnlRows.length} wallets in ${collection.id} (${token.symbol})`);
   }
 
   private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -1554,6 +1789,36 @@ function normalizeTokenId(tokenId?: string): string {
     return BigInt(tokenId).toString();
   }
   return tokenId;
+}
+
+/** Treat a null / zero-address counterparty as a mint/burn (empty wallet). */
+function normalizeCounterparty(addr: string | null): string {
+  if (!addr) return '';
+  return addr.toLowerCase() === ZERO_ADDRESS ? '' : addr;
+}
+
+/**
+ * Gross native sale price for an Alchemy getNFTSales record: what the buyer paid
+ * = seller proceeds + protocol fee + royalty fee, normalized from base units.
+ * Returns null when the record carries no fee amounts.
+ */
+function evmSalePriceToNative(sale: any): number | null {
+  const fees = [sale?.sellerFee, sale?.protocolFee, sale?.royaltyFee];
+  let totalBaseUnits = 0n;
+  let decimals = 18;
+  let sawAmount = false;
+  for (const fee of fees) {
+    if (!fee || fee.amount == null) continue;
+    try {
+      totalBaseUnits += BigInt(fee.amount);
+      sawAmount = true;
+      if (typeof fee.decimals === 'number') decimals = fee.decimals;
+    } catch {
+      // non-integer amount — skip this fee component
+    }
+  }
+  if (!sawAmount) return null;
+  return Number(totalBaseUnits) / 10 ** decimals;
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {
