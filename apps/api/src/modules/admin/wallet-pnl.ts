@@ -19,7 +19,12 @@ export type PnlTransfer = {
   tokenId: string;
   from: string; // '' for a mint
   to: string; // '' for a burn
-  priceNative: number | null; // sale/mint price in native token, null/0 when unpriced
+  // A trade has two native amounts that can differ: what the buyer paid all-in
+  // (their cost basis) and what the seller actually received (gross minus
+  // marketplace fee and royalty). They're equal when no fees are broken out
+  // (e.g. Solana, or plain transfers). Null/0 when the leg is unpriced.
+  buyerCostNative: number | null; // cost basis assigned to `to`
+  sellerProceedsNative: number | null; // proceeds credited to `from`
   timestamp: Date;
 };
 
@@ -97,20 +102,22 @@ export class PnlAccumulator {
 
   /** Record a single transfer. Disposal (seller) is booked before acquisition (buyer). */
   recordTransfer(t: PnlTransfer): void {
-    const price = t.priceNative && t.priceNative > 0 ? t.priceNative : 0;
-    const priceUsd = price > 0 ? this.usdAt(price, t.timestamp) : 0;
+    const proceeds = t.sellerProceedsNative && t.sellerProceedsNative > 0 ? t.sellerProceedsNative : 0;
+    const acquireCost = t.buyerCostNative && t.buyerCostNative > 0 ? t.buyerCostNative : 0;
+    const proceedsUsd = proceeds > 0 ? this.usdAt(proceeds, t.timestamp) : 0;
+    const acquireUsd = acquireCost > 0 ? this.usdAt(acquireCost, t.timestamp) : 0;
 
-    // Disposal: the `from` wallet parts with the token.
+    // Disposal: the `from` wallet parts with the token, receiving net proceeds.
     if (t.from) {
       const w = this.ensureWallet(t.from);
       const token = this.tokens.get(t.tokenId);
       // Unknown cost basis (token acquired before this history window) → treat as 0.
       const costNative = token?.costNative ?? 0;
       const costUsd = token?.costUsd ?? 0;
-      w.realizedNative += price - costNative;
-      w.realizedUsd += priceUsd - costUsd;
-      w.totalSoldNative += price;
-      if (price > 0) w.sellCount += 1;
+      w.realizedNative += proceeds - costNative;
+      w.realizedUsd += proceedsUsd - costUsd;
+      w.totalSoldNative += proceeds;
+      if (proceeds > 0) w.sellCount += 1;
       if (token) {
         const heldSeconds = Math.max(0, (t.timestamp.getTime() - token.acquiredAt.getTime()) / 1000);
         w.totalHoldSeconds += heldSeconds;
@@ -119,15 +126,15 @@ export class PnlAccumulator {
       this.tokens.delete(t.tokenId);
     }
 
-    // Acquisition: the `to` wallet takes ownership; this price becomes its cost basis.
+    // Acquisition: the `to` wallet takes ownership at its all-in cost basis.
     if (t.to) {
       const w = this.ensureWallet(t.to);
-      w.totalBoughtNative += price;
-      if (price > 0) w.buyCount += 1;
+      w.totalBoughtNative += acquireCost;
+      if (acquireCost > 0) w.buyCount += 1;
       this.tokens.set(t.tokenId, {
         owner: t.to,
-        costNative: price,
-        costUsd: priceUsd,
+        costNative: acquireCost,
+        costUsd: acquireUsd,
         acquiredAt: t.timestamp,
       });
     }

@@ -607,7 +607,8 @@ export class HolderHistoryService {
         }
         maxBlockNumber = Math.max(maxBlockNumber, blockNumber);
 
-        // Same sale price applies to both legs (seller proceeds / buyer cost).
+        // The seller's leg records net proceeds (after marketplace fee + royalty);
+        // the buyer's leg records the gross all-in cost basis.
         const salePrice = salePrices.get(`${txHash.toLowerCase()}:${tokenId}`) ?? null;
 
         if (from && from !== ZERO_ADDRESS) {
@@ -630,7 +631,7 @@ export class HolderHistoryService {
             direction: 'out',
             balanceAfter: summary.currentBalance,
             counterpartyAddress: to || null,
-            priceNative: salePrice,
+            priceNative: salePrice ? salePrice.sellerNet : null,
           });
         }
 
@@ -660,7 +661,7 @@ export class HolderHistoryService {
             direction: 'in',
             balanceAfter: summary.currentBalance,
             counterpartyAddress: from || null,
-            priceNative: salePrice,
+            priceNative: salePrice ? salePrice.gross : null,
           });
         }
       }
@@ -1600,8 +1601,8 @@ export class HolderHistoryService {
     network: string,
     apiKey: string,
     fromBlock: number,
-  ): Promise<Map<string, number>> {
-    const prices = new Map<string, number>();
+  ): Promise<Map<string, { gross: number; sellerNet: number }>> {
+    const prices = new Map<string, { gross: number; sellerNet: number }>();
     let pageKey: string | undefined;
     let page = 0;
     try {
@@ -1629,7 +1630,7 @@ export class HolderHistoryService {
           const tokenId = sale.tokenId != null ? String(sale.tokenId) : null;
           const txHash = typeof sale.transactionHash === 'string' ? sale.transactionHash.toLowerCase() : null;
           if (!tokenId || !txHash) continue;
-          const price = evmSalePriceToNative(sale);
+          const price = evmSalePrice(sale);
           if (price === null) continue;
           prices.set(`${txHash}:${tokenId}`, price);
         }
@@ -1677,18 +1678,27 @@ export class HolderHistoryService {
       const from = r.direction === 'in' ? counter : r.address;
       const to = r.direction === 'in' ? r.address : counter;
       const key = `${r.transactionHash}:${r.tokenId}:${from}:${to}`;
+      // The 'in' row carries the buyer's cost basis; the 'out' row carries the
+      // seller's net proceeds. These can differ (EVM deducts marketplace fees
+      // from the seller's leg), so keep them on separate fields.
       const existing = movements.get(key);
       if (!existing) {
         movements.set(key, {
           tokenId: r.tokenId,
           from,
           to,
-          priceNative: r.priceNative ?? null,
+          buyerCostNative: r.direction === 'in' ? r.priceNative ?? null : null,
+          sellerProceedsNative: r.direction === 'out' ? r.priceNative ?? null : null,
           timestamp: r.blockTimestamp,
           blockNumber: r.blockNumber,
         });
-      } else if (existing.priceNative == null && r.priceNative != null) {
-        existing.priceNative = r.priceNative;
+      } else {
+        if (r.direction === 'in' && existing.buyerCostNative == null && r.priceNative != null) {
+          existing.buyerCostNative = r.priceNative;
+        }
+        if (r.direction === 'out' && existing.sellerProceedsNative == null && r.priceNative != null) {
+          existing.sellerProceedsNative = r.priceNative;
+        }
       }
     }
 
@@ -1705,7 +1715,8 @@ export class HolderHistoryService {
         tokenId: m.tokenId,
         from: m.from,
         to: m.to,
-        priceNative: m.priceNative,
+        buyerCostNative: m.buyerCostNative,
+        sellerProceedsNative: m.sellerProceedsNative,
         timestamp: m.timestamp,
       });
     }
@@ -1798,27 +1809,30 @@ function normalizeCounterparty(addr: string | null): string {
 }
 
 /**
- * Gross native sale price for an Alchemy getNFTSales record: what the buyer paid
- * = seller proceeds + protocol fee + royalty fee, normalized from base units.
+ * Native prices for an Alchemy getNFTSales record:
+ *  - `gross`: what the buyer paid all-in = seller proceeds + protocol fee +
+ *    royalty fee. This is the buyer's cost basis.
+ *  - `sellerNet`: what the seller actually received (sellerFee only), i.e. gross
+ *    minus the marketplace fee and royalty. This is the seller's proceeds.
  * Returns null when the record carries no fee amounts.
  */
-function evmSalePriceToNative(sale: any): number | null {
-  const fees = [sale?.sellerFee, sale?.protocolFee, sale?.royaltyFee];
-  let totalBaseUnits = 0n;
-  let decimals = 18;
-  let sawAmount = false;
-  for (const fee of fees) {
-    if (!fee || fee.amount == null) continue;
+function evmSalePrice(sale: any): { gross: number; sellerNet: number } | null {
+  const normalize = (fee: any): number => {
+    if (!fee || fee.amount == null) return 0;
     try {
-      totalBaseUnits += BigInt(fee.amount);
-      sawAmount = true;
-      if (typeof fee.decimals === 'number') decimals = fee.decimals;
+      const decimals = typeof fee.decimals === 'number' ? fee.decimals : 18;
+      return Number(BigInt(fee.amount)) / 10 ** decimals;
     } catch {
-      // non-integer amount — skip this fee component
+      return 0;
     }
+  };
+  const hasAmount = (fee: any) => fee && fee.amount != null;
+  if (!hasAmount(sale?.sellerFee) && !hasAmount(sale?.protocolFee) && !hasAmount(sale?.royaltyFee)) {
+    return null;
   }
-  if (!sawAmount) return null;
-  return Number(totalBaseUnits) / 10 ** decimals;
+  const sellerNet = normalize(sale?.sellerFee);
+  const gross = sellerNet + normalize(sale?.protocolFee) + normalize(sale?.royaltyFee);
+  return { gross, sellerNet };
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {

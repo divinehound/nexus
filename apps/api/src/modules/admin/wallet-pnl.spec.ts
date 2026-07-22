@@ -2,6 +2,22 @@ import { PnlAccumulator, type PnlTransfer } from './wallet-pnl';
 
 const d = (iso: string) => new Date(iso);
 
+// Helper for the common no-fee case where buyer cost == seller proceeds.
+const move = (
+  tokenId: string,
+  from: string,
+  to: string,
+  price: number | null,
+  iso: string,
+): PnlTransfer => ({
+  tokenId,
+  from,
+  to,
+  buyerCostNative: price,
+  sellerProceedsNative: price,
+  timestamp: d(iso),
+});
+
 describe('PnlAccumulator', () => {
   it('books realized profit on a buy then sell of the same token', () => {
     // ETH-style rates: 2000 USD on buy day, 2500 USD on sell day.
@@ -11,8 +27,8 @@ describe('PnlAccumulator', () => {
     ]);
     const acc = new PnlAccumulator(rates);
     const transfers: PnlTransfer[] = [
-      { tokenId: 'T1', from: '', to: 'ALICE', priceNative: 1, timestamp: d('2024-01-01T00:00:00Z') },
-      { tokenId: 'T1', from: 'ALICE', to: 'BOB', priceNative: 3, timestamp: d('2024-02-01T00:00:00Z') },
+      move('T1', '', 'ALICE', 1, '2024-01-01T00:00:00Z'),
+      move('T1', 'ALICE', 'BOB', 3, '2024-02-01T00:00:00Z'),
     ];
     transfers.forEach((t) => acc.recordTransfer(t));
     const rows = acc.finalize({ floorPriceNative: 4, spotUsdRate: 3000 });
@@ -39,8 +55,8 @@ describe('PnlAccumulator', () => {
 
   it('treats an unpriced mint as zero cost basis', () => {
     const acc = new PnlAccumulator(new Map([['2024-01-01', 100]]));
-    acc.recordTransfer({ tokenId: 'M1', from: '', to: 'ALICE', priceNative: null, timestamp: d('2024-01-01T00:00:00Z') });
-    acc.recordTransfer({ tokenId: 'M1', from: 'ALICE', to: 'BOB', priceNative: 5, timestamp: d('2024-01-01T00:00:00Z') });
+    acc.recordTransfer(move('M1', '', 'ALICE', null, '2024-01-01T00:00:00Z'));
+    acc.recordTransfer(move('M1', 'ALICE', 'BOB', 5, '2024-01-01T00:00:00Z'));
     const rows = acc.finalize({ floorPriceNative: 5, spotUsdRate: 100 });
 
     const alice = rows.find((r) => r.address === 'ALICE')!;
@@ -52,10 +68,10 @@ describe('PnlAccumulator', () => {
   it('averages hold time across multiple realized tokens', () => {
     const acc = new PnlAccumulator(new Map());
     // Two tokens acquired same day, sold 2 and 4 days later respectively.
-    acc.recordTransfer({ tokenId: 'A', from: '', to: 'W', priceNative: 1, timestamp: d('2024-01-01T00:00:00Z') });
-    acc.recordTransfer({ tokenId: 'B', from: '', to: 'W', priceNative: 1, timestamp: d('2024-01-01T00:00:00Z') });
-    acc.recordTransfer({ tokenId: 'A', from: 'W', to: 'X', priceNative: 2, timestamp: d('2024-01-03T00:00:00Z') });
-    acc.recordTransfer({ tokenId: 'B', from: 'W', to: 'Y', priceNative: 2, timestamp: d('2024-01-05T00:00:00Z') });
+    acc.recordTransfer(move('A', '', 'W', 1, '2024-01-01T00:00:00Z'));
+    acc.recordTransfer(move('B', '', 'W', 1, '2024-01-01T00:00:00Z'));
+    acc.recordTransfer(move('A', 'W', 'X', 2, '2024-01-03T00:00:00Z'));
+    acc.recordTransfer(move('B', 'W', 'Y', 2, '2024-01-05T00:00:00Z'));
     const rows = acc.finalize({ floorPriceNative: null, spotUsdRate: null });
 
     const w = rows.find((r) => r.address === 'W')!;
@@ -66,8 +82,8 @@ describe('PnlAccumulator', () => {
 
   it('leaves USD at zero when no rate is available for a date', () => {
     const acc = new PnlAccumulator(new Map()); // empty rate map
-    acc.recordTransfer({ tokenId: 'T', from: '', to: 'A', priceNative: 1, timestamp: d('2024-06-01T00:00:00Z') });
-    acc.recordTransfer({ tokenId: 'T', from: 'A', to: 'B', priceNative: 3, timestamp: d('2024-06-02T00:00:00Z') });
+    acc.recordTransfer(move('T', '', 'A', 1, '2024-06-01T00:00:00Z'));
+    acc.recordTransfer(move('T', 'A', 'B', 3, '2024-06-02T00:00:00Z'));
     const rows = acc.finalize({ floorPriceNative: 4, spotUsdRate: null });
     const a = rows.find((r) => r.address === 'A')!;
     expect(a.realizedPnlNative).toBe(2);
@@ -79,10 +95,37 @@ describe('PnlAccumulator', () => {
 
   it('skips unrealized PnL when no floor price is provided', () => {
     const acc = new PnlAccumulator(new Map());
-    acc.recordTransfer({ tokenId: 'T', from: '', to: 'A', priceNative: 2, timestamp: d('2024-01-01T00:00:00Z') });
+    acc.recordTransfer(move('T', '', 'A', 2, '2024-01-01T00:00:00Z'));
     const rows = acc.finalize({ floorPriceNative: null, spotUsdRate: 100 });
     const a = rows.find((r) => r.address === 'A')!;
     expect(a.costBasisRemainingNative).toBe(2);
     expect(a.unrealizedPnlNative).toBe(0);
+  });
+
+  it('deducts marketplace fees from seller proceeds while keeping buyer cost gross', () => {
+    // Buyer pays 10 gross; seller nets 9 after a 1.0 marketplace fee + royalty.
+    const acc = new PnlAccumulator(new Map());
+    acc.recordTransfer(move('T', '', 'ALICE', 4, '2024-01-01T00:00:00Z')); // Alice mints at cost 4
+    acc.recordTransfer({
+      tokenId: 'T',
+      from: 'ALICE',
+      to: 'BOB',
+      buyerCostNative: 10, // Bob's all-in cost basis
+      sellerProceedsNative: 9, // Alice's net after fees
+      timestamp: d('2024-01-02T00:00:00Z'),
+    });
+    const rows = acc.finalize({ floorPriceNative: 10, spotUsdRate: null });
+
+    const alice = rows.find((r) => r.address === 'ALICE')!;
+    // Realized on net proceeds (9), not gross (10): 9 - 4 = 5.
+    expect(alice.realizedPnlNative).toBe(5);
+    expect(alice.totalSoldNative).toBe(9);
+    expect(alice.sellCount).toBe(1);
+
+    const bob = rows.find((r) => r.address === 'BOB')!;
+    // Bob's cost basis is the gross 10; floor 10 => 0 unrealized.
+    expect(bob.costBasisRemainingNative).toBe(10);
+    expect(bob.totalBoughtNative).toBe(10);
+    expect(bob.unrealizedPnlNative).toBe(0);
   });
 });
