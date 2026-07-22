@@ -244,6 +244,10 @@ export class HolderHistoryService {
         pnl: {
           nativeSymbol,
           walletsWithPnl: pnlRows.length,
+          // Durable coverage signal read straight off the ledger: how many
+          // transfers carry a captured sale price (each priced sale has one
+          // 'in' leg). 0 here means no prices are landing → PnL will be flat.
+          pricedTransfers: history.filter((h) => h.priceNative != null && h.direction === 'in').length,
           ...pnlTotals,
         },
       },
@@ -1581,7 +1585,9 @@ export class HolderHistoryService {
     try {
       await this.recomputeAndPersistWalletPnl(collection);
     } catch (err) {
-      this.logger.error(`[PnL] Failed to compute wallet PnL for ${collection.id}: ${(err as Error).message}`);
+      this.logger.error(
+        `[PnL] Failed to compute wallet PnL for ${collection.id}: ${(err as Error).stack || (err as Error).message}`,
+      );
     }
 
     job.status = 'completed';
@@ -1605,16 +1611,22 @@ export class HolderHistoryService {
     const prices = new Map<string, { gross: number; sellerNet: number }>();
     let pageKey: string | undefined;
     let page = 0;
+    let salesSeen = 0;
+    let salesPriced = 0;
+    let hadError = false;
     try {
       while (true) {
         page += 1;
         const url = new URL(`https://${network}.g.alchemy.com/nft/v3/${apiKey}/getNFTSales`);
+        // getNFTSales caps limit at 1000; keep both bounds numeric-or-latest.
         url.searchParams.set('fromBlock', String(fromBlock));
         url.searchParams.set('toBlock', 'latest');
         url.searchParams.set('order', 'asc');
         url.searchParams.set('contractAddress', collection.contractAddress);
         url.searchParams.set('limit', '1000');
         if (pageKey) url.searchParams.set('pageKey', pageKey);
+        // Never log the API key (it sits in the URL path).
+        const safeUrl = url.toString().replace(apiKey, '***');
 
         const res = await this.withTimeout(
           fetch(url.toString(), { headers: { accept: 'application/json' } }),
@@ -1622,27 +1634,49 @@ export class HolderHistoryService {
           `getNFTSales page ${page}`,
         );
         if (!res.ok) {
-          this.logger.warn(`[EVM] getNFTSales failed (${res.status}) for ${collection.id}; continuing without EVM sale prices`);
+          const body = await res.text().catch(() => '<unreadable body>');
+          // Retry transient failures (rate limit / upstream) with backoff.
+          if ((res.status === 429 || res.status >= 500) && page <= 5) {
+            const waitMs = 2 ** page * 500;
+            this.logger.warn(
+              `[EVM] getNFTSales ${res.status} for ${collection.id} (${safeUrl}); retrying in ${waitMs}ms. Body: ${body.slice(0, 500)}`,
+            );
+            await sleep(waitMs);
+            page -= 1; // don't consume a page number on retry
+            continue;
+          }
+          hadError = true;
+          this.logger.error(
+            `[EVM] getNFTSales failed (${res.status}) for ${collection.id} at ${safeUrl}. Body: ${body.slice(0, 1000)}`,
+          );
           break;
         }
         const data = (await res.json()) as { nftSales?: any[]; pageKey?: string };
-        for (const sale of data.nftSales ?? []) {
+        const batch = data.nftSales ?? [];
+        salesSeen += batch.length;
+        for (const sale of batch) {
           const tokenId = sale.tokenId != null ? String(sale.tokenId) : null;
           const txHash = typeof sale.transactionHash === 'string' ? sale.transactionHash.toLowerCase() : null;
           if (!tokenId || !txHash) continue;
           const price = evmSalePrice(sale);
           if (price === null) continue;
           prices.set(`${txHash}:${tokenId}`, price);
+          salesPriced += 1;
         }
+        this.logger.log(
+          `[EVM] getNFTSales page ${page} for ${collection.id}: ${batch.length} sales (running: ${salesSeen} seen, ${prices.size} priced keys)`,
+        );
         pageKey = data.pageKey;
         if (!pageKey) break;
       }
     } catch (err) {
-      this.logger.warn(`[EVM] getNFTSales error for ${collection.id}: ${(err as Error).message}; continuing without EVM sale prices`);
+      hadError = true;
+      this.logger.error(`[EVM] getNFTSales error for ${collection.id}: ${(err as Error).stack || (err as Error).message}`);
     }
-    if (prices.size > 0) {
-      this.logger.log(`[EVM] Loaded ${prices.size} sale prices for ${collection.id}`);
-    }
+    // Always log the outcome — a silent empty map was the previous failure mode.
+    this.logger.log(
+      `[EVM] getNFTSales complete for ${collection.id}: ${salesSeen} sales seen, ${salesPriced} with a usable price, ${prices.size} unique (tx,token) keys${hadError ? ' (ended on error — see above)' : ''}`,
+    );
     return prices;
   }
 
@@ -1749,7 +1783,17 @@ export class HolderHistoryService {
         await this.db.insert(collectionHolderPnl).values(batch).onConflictDoNothing();
       }
     }
-    this.logger.log(`[PnL] Computed wallet PnL for ${pnlRows.length} wallets in ${collection.id} (${token.symbol})`);
+    // Coverage diagnostics: if these are all zero, prices never reached the ledger.
+    const pricedLedgerRows = rows.filter((r) => r.priceNative != null).length;
+    const pricedMovements = ordered.filter(
+      (m) => m.buyerCostNative != null || m.sellerProceedsNative != null,
+    ).length;
+    const walletsWithTrades = pnlRows.filter((r) => (r.buyCount ?? 0) > 0 || (r.sellCount ?? 0) > 0).length;
+    this.logger.log(
+      `[PnL] ${collection.id} (${token.symbol}): ${pnlRows.length} wallets, ` +
+        `${pricedLedgerRows}/${rows.length} priced ledger rows, ${pricedMovements}/${ordered.length} priced movements, ` +
+        `${walletsWithTrades} wallets with buys/sells`,
+    );
   }
 
   private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -1816,7 +1860,7 @@ function normalizeCounterparty(addr: string | null): string {
  *    minus the marketplace fee and royalty. This is the seller's proceeds.
  * Returns null when the record carries no fee amounts.
  */
-function evmSalePrice(sale: any): { gross: number; sellerNet: number } | null {
+export function evmSalePrice(sale: any): { gross: number; sellerNet: number } | null {
   const normalize = (fee: any): number => {
     if (!fee || fee.amount == null) return 0;
     try {
