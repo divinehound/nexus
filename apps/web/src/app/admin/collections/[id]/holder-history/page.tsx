@@ -221,22 +221,42 @@ export default function AdminCollectionHolderHistoryPage({ params }: { params: P
       </div>
 
       {data?.summary?.pnl?.walletsWithPnl > 0 && (
-        <div className="grid gap-4 md:grid-cols-4">
-          <PnlStat
-            label="Realized PnL"
-            native={data.summary.pnl.realizedPnlNative}
-            usd={data.summary.pnl.realizedPnlUsd}
-            symbol={data.summary.pnl.nativeSymbol}
-          />
-          <PnlStat
-            label="Unrealized PnL"
-            native={data.summary.pnl.unrealizedPnlNative}
-            usd={data.summary.pnl.unrealizedPnlUsd}
-            symbol={data.summary.pnl.nativeSymbol}
-          />
-          <Stat label="Total buys" value={String(data.summary.pnl.totalBuys ?? 0)} />
-          <Stat label="Total sells" value={String(data.summary.pnl.totalSells ?? 0)} />
-        </div>
+        <>
+          <div className="grid gap-4 md:grid-cols-4">
+            <PnlStat
+              label="Realized PnL"
+              native={data.summary.pnl.realizedPnlNative}
+              usd={data.summary.pnl.realizedPnlUsd}
+              symbol={data.summary.pnl.nativeSymbol}
+            />
+            <PnlStat
+              label="Unrealized PnL"
+              native={data.summary.pnl.unrealizedPnlNative}
+              usd={data.summary.pnl.unrealizedPnlUsd}
+              symbol={data.summary.pnl.nativeSymbol}
+            />
+            <Stat label="Total buys" value={String(data.summary.pnl.totalBuys ?? 0)} />
+            <Stat label="Total sells" value={String(data.summary.pnl.totalSells ?? 0)} />
+          </div>
+          <div
+            className={`rounded-lg border px-4 py-2 text-xs ${
+              (data.summary.pnl.pricedTransfers ?? 0) > 0
+                ? 'border-gray-800 bg-gray-950/50 text-gray-400'
+                : 'border-amber-900/50 bg-amber-950/30 text-amber-200'
+            }`}
+          >
+            Sale prices captured:{' '}
+            <strong className="font-semibold">{data.summary.pnl.pricedTransfers ?? 0}</strong> priced transfers.
+            {(data.summary.pnl.pricedTransfers ?? 0) === 0 && (
+              <span>
+                {' '}
+                No sale prices were found for this collection, so realized/unrealized PnL and buy/sell counts stay at
+                zero. Re-run a scan from block 0; if it stays zero, the sale-price source returned nothing (check API
+                logs).
+              </span>
+            )}
+          </div>
+        </>
       )}
 
       {jobStatus && jobStatus.status !== 'idle' && (
