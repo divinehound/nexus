@@ -23,13 +23,7 @@
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import {
-  createPublicClient,
-  http,
-  getAbiItem,
-  decodeEventLog,
-  encodeEventTopics,
-} from 'viem';
+import { createPublicClient, http, getAbiItem, encodeEventTopics } from 'viem';
 import { mainnet } from 'viem/chains';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -164,8 +158,7 @@ async function main() {
   const params = eventAbi.inputs.map((p, i) => p.name || `arg${i}`);
   const sig = `${EVENT_NAME}(${eventAbi.inputs.map((p) => `${p.type}${p.indexed ? ' indexed' : ''} ${p.name || ''}`.trim()).join(', ')})`;
   console.error(`Signature: ${sig}`);
-
-  const topic0 = encodeEventTopics({ abi: [eventAbi] })[0];
+  console.error(`topic0   : ${encodeEventTopics({ abi: [eventAbi] })[0]}`);
 
   const startBlock = await getDeploymentBlock();
   const endBlock = process.env.END_BLOCK
@@ -175,31 +168,36 @@ async function main() {
 
   const rows = [];
   let from = startBlock;
-  let chunk = BigInt(CHUNK_SIZE_START);
+  const maxChunk = BigInt(CHUNK_SIZE_START);
+  let chunk = maxChunk;
 
   while (from <= endBlock) {
     const to = from + chunk - 1n > endBlock ? endBlock : from + chunk - 1n;
     try {
+      // Passing `event` makes viem build the topic0 filter AND decode the logs,
+      // so only PrizeClaimed logs come back and `log.args` is already decoded.
       const logs = await client.getLogs({
         address: ADDRESS,
-        topics: [topic0],
+        event: eventAbi,
         fromBlock: from,
         toBlock: to,
       });
       for (const log of logs) {
-        const decoded = decodeEventLog({ abi: [eventAbi], data: log.data, topics: log.topics });
         rows.push({
           blockNumber: log.blockNumber,
           logIndex: log.logIndex,
           transactionHash: log.transactionHash,
           transactionIndex: log.transactionIndex,
-          args: decoded.args,
+          args: log.args,
         });
       }
       if (logs.length) console.error(`  blocks ${from}-${to}: ${logs.length} event(s), total ${rows.length}`);
       from = to + 1n;
+      // Recover the chunk size after a successful request so one dense range
+      // doesn't force tiny queries across the whole remaining span.
+      if (chunk < maxChunk) chunk = chunk * 2n > maxChunk ? maxChunk : chunk * 2n;
     } catch (e) {
-      // Shrink the range on "too many results" / "range too large" style errors.
+      // Providers cap eth_getLogs by block range or result size; shrink and retry.
       if (chunk > 1n) {
         chunk = chunk / 2n > 0n ? chunk / 2n : 1n;
         console.error(`  blocks ${from}-${to} failed (${e.shortMessage || e.message}); retrying with chunk=${chunk}`);
