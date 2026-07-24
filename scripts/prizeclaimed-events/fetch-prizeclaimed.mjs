@@ -66,8 +66,18 @@ if (!RPC_URL) {
 const client = createPublicClient({ chain: mainnet, transport: http(RPC_URL) });
 
 // ---- helpers ----------------------------------------------------------------
-const ETHERSCAN = 'https://api.etherscan.io/api';
+// Etherscan API V2 (the V1 endpoint was deprecated). V2 is a single multichain
+// endpoint that requires a `chainid` param and an API key.
+const ETHERSCAN = 'https://api.etherscan.io/v2/api';
+const CHAIN_ID = process.env.CHAIN_ID || '1';
 const esKey = process.env.ETHERSCAN_API_KEY || '';
+
+// Build an Etherscan V2 URL from a params object (chainid + apikey are added).
+function esUrl(params) {
+  const q = new URLSearchParams({ chainid: CHAIN_ID, ...params });
+  if (esKey) q.set('apikey', esKey);
+  return `${ETHERSCAN}?${q.toString()}`;
+}
 
 async function fetchJson(url) {
   const res = await fetch(url);
@@ -86,8 +96,14 @@ async function loadAbi() {
       return abi;
     }
   }
-  // 2) fetch verified ABI from Etherscan
-  const url = `${ETHERSCAN}?module=contract&action=getabi&address=${ADDRESS}${esKey ? `&apikey=${esKey}` : ''}`;
+  // 2) fetch verified ABI from Etherscan (V2)
+  if (!esKey) {
+    console.error(
+      'WARNING: ETHERSCAN_API_KEY is not set. Etherscan API V2 requires a key for most requests; ' +
+        'the ABI fetch will likely fail. Get a free key at https://etherscan.io/apis or supply a local abi.json.',
+    );
+  }
+  const url = esUrl({ module: 'contract', action: 'getabi', address: ADDRESS });
   const data = await fetchJson(url);
   if (data.status !== '1') {
     throw new Error(
@@ -103,7 +119,7 @@ async function loadAbi() {
 async function getDeploymentBlock() {
   if (process.env.START_BLOCK) return BigInt(process.env.START_BLOCK);
   try {
-    const url = `${ETHERSCAN}?module=contract&action=getcontractcreation&contractaddresses=${ADDRESS}${esKey ? `&apikey=${esKey}` : ''}`;
+    const url = esUrl({ module: 'contract', action: 'getcontractcreation', contractaddresses: ADDRESS });
     const data = await fetchJson(url);
     if (data.status === '1' && data.result?.[0]?.blockNumber) {
       return BigInt(data.result[0].blockNumber);

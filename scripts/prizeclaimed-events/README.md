@@ -55,7 +55,8 @@ block_number,transaction_hash,log_index,transaction_index,winner,prizeId,amount
 | --- | --- |
 | `ETH_RPC_URL` | Full mainnet JSON-RPC URL (takes priority). |
 | `ALCHEMY_API_KEY` | Used to build an Alchemy mainnet URL if `ETH_RPC_URL` is unset. |
-| `ETHERSCAN_API_KEY` | Optional. Fetches the ABI and deployment block. |
+| `ETHERSCAN_API_KEY` | Fetches the ABI and deployment block via **Etherscan API V2**, which requires a key. Get a free one at https://etherscan.io/apis. Skip it by supplying a local `abi.json`. |
+| `CHAIN_ID` | Etherscan V2 chain id (default `1` = mainnet). |
 | `START_BLOCK` / `END_BLOCK` | Override the scan range. |
 | `CHUNK_SIZE` | Blocks per `getLogs` request (default 5000, auto-shrinks). |
 | `ABI_PATH` | Path to a local ABI json (skips the Etherscan ABI fetch). |
