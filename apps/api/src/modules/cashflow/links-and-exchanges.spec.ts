@@ -65,3 +65,72 @@ describe('request validation', () => {
     expect(errors(AddressTagDto, { chain: 'base', address: '0x123', exchange: '' })).toEqual(['address', 'exchange']);
   });
 });
+
+describe('link delete conditions stay scoped to the user', () => {
+  // Imported lazily so the pure tests above don't need the DB schema.
+  const { PgDialect } = jest.requireActual('drizzle-orm/pg-core');
+  const { samePairCondition, sharesTxLinkCondition, normalizePair } = jest.requireActual('./cashflow.service');
+  const dialect = new PgDialect();
+  const pair = { fromChain: 'ethereum', fromTxHash: '0xabc', toChain: 'solana', toTxHash: 'SoLsig' };
+
+  /** The user filter must AND with one parenthesised group holding every OR. */
+  const assertScoped = (sqlText: string) => {
+    expect(sqlText.startsWith('("cashflow_tx_links"."user_id" = $1 and ')).toBe(true);
+    // Every " or " must sit inside a bracket opened after the user filter.
+    const afterUser = sqlText.slice('("cashflow_tx_links"."user_id" = $1 and '.length).toLowerCase();
+    let depth = 0;
+    for (let i = 0; i < afterUser.length; i++) {
+      if (afterUser[i] === '(') depth++;
+      if (afterUser[i] === ')') depth--;
+      if (afterUser.startsWith(' or ', i)) expect(depth).toBeGreaterThan(0);
+    }
+  };
+
+  it('would catch an unparenthesised raw OR (the original bug)', () => {
+    const { and, eq, sql } = jest.requireActual('drizzle-orm');
+    const { cashflowTxLinks: t } = jest.requireActual('@nexus/database');
+    const buggy = and(eq(t.userId, 'u'), sql`(${t.fromChain} = ${'a'}) OR (${t.toChain} = ${'b'})`);
+    expect(() => assertScoped(dialect.sqlToQuery(buggy).sql)).toThrow();
+  });
+
+  it('same-pair delete (both directions)', () => {
+    const q = dialect.sqlToQuery(samePairCondition('user-1', pair));
+    assertScoped(q.sql);
+    expect(q.params[0]).toBe('user-1');
+  });
+
+  it('shares-a-tx delete', () => {
+    const q = dialect.sqlToQuery(sharesTxLinkCondition('user-1', pair));
+    assertScoped(q.sql);
+    expect(q.sql).toContain('"kind" = $2');
+  });
+
+  it('lowercases EVM hashes but not Solana signatures', () => {
+    expect(normalizePair({ fromChain: 'base', fromTxHash: '0xABC', toChain: 'solana', toTxHash: 'SoLSig' })).toEqual({
+      fromChain: 'base',
+      fromTxHash: '0xabc',
+      toChain: 'solana',
+      toTxHash: 'SoLSig',
+    });
+  });
+});
+
+describe('EVM history paging', () => {
+  const { EvmActivityFetcher } = jest.requireActual('./evm-activity.fetcher');
+  afterEach(() => jest.restoreAllMocks());
+
+  it('pages newest-first so a capped wallet keeps its recent history', async () => {
+    const bodies: Array<{ method: string; params: Array<Record<string, unknown>> }> = [];
+    jest.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body));
+      bodies.push(body);
+      // Every page says there's more → the fetcher must stop at its cap and report truncation.
+      return new Response(JSON.stringify({ result: { transfers: [], pageKey: 'next' } }), { status: 200 });
+    });
+    const r = await new EvmActivityFetcher('key').fetch('base', '0x1111111111111111111111111111111111111111', new Map());
+    const transferCalls = bodies.filter((b) => b.method === 'alchemy_getAssetTransfers');
+    expect(transferCalls.length).toBeGreaterThan(2);
+    expect(transferCalls.every((b) => b.params[0].order === 'desc')).toBe(true);
+    expect(r.truncated).toBe(true);
+  });
+});

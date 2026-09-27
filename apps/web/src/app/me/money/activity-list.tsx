@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import type { CashflowActivity, CashflowReport, CashflowTxType } from '@nexus/types';
-import { addCashflowLink, removeCashflowLink } from '@/lib/api';
+import { addCashflowLink } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { useCashflowActions } from './actions';
 import { CHAIN_LABELS, TX_TYPE_LABELS, pnlClass, txExplorerUrl, usd, usdSigned } from './format';
@@ -82,7 +82,6 @@ export function ActivityList({ report }: { report: CashflowReport }) {
             <li key={key} className="py-3">
               <ActivityRow
                 a={a}
-                report={report}
                 onLink={() => setLinking(linking === key ? null : key)}
                 linkOpen={linking === key}
               />
@@ -109,12 +108,10 @@ export function ActivityList({ report }: { report: CashflowReport }) {
 
 function ActivityRow({
   a,
-  report,
   onLink,
   linkOpen,
 }: {
   a: CashflowActivity;
-  report: CashflowReport;
   onLink: () => void;
   linkOpen: boolean;
 }) {
@@ -139,18 +136,11 @@ function ActivityRow({
             toChain: a.chain,
             toTxHash: a.txHash,
           };
-    const manual = report.links.find(
-      (l) =>
-        l.kind === 'link' &&
-        ((sameTx(l.fromChain, l.fromTxHash, pair.fromChain, pair.fromTxHash) &&
-          sameTx(l.toChain, l.toTxHash, pair.toChain, pair.toTxHash)) ||
-          (sameTx(l.fromChain, l.fromTxHash, pair.toChain, pair.toTxHash) &&
-            sameTx(l.toChain, l.toTxHash, pair.fromChain, pair.fromTxHash))),
-    );
+    // Always record a rejection (the API drops any manual link for the pair
+    // first). Just deleting a manual link would let the automatic matcher
+    // pair the same two transactions straight back up.
     void run('Unlinked — counted as separate transfers again', (token) =>
-      manual
-        ? removeCashflowLink(token, manual.id)
-        : addCashflowLink(token, { kind: 'unlink', ...pair }),
+      addCashflowLink(token, { kind: 'unlink', ...pair }),
     );
   };
 
@@ -218,11 +208,6 @@ function ActivityRow({
       </div>
     </div>
   );
-}
-
-function sameTx(chainA: string, hashA: string, chainB: string, hashB: string) {
-  if (chainA !== chainB) return false;
-  return chainA === 'solana' ? hashA === hashB : hashA.toLowerCase() === hashB.toLowerCase();
 }
 
 /** Money value of a transfer row, without the gas. */

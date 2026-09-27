@@ -1,7 +1,14 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { and, eq, inArray, sql } from 'drizzle-orm';
-import { cashflowAddressTags, cashflowTxLinks, collections, wallets, type Database } from '@nexus/database';
+import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
+import {
+  cashflowAddressTags,
+  cashflowTxLinks,
+  collections,
+  wallets,
+  type Database,
+} from '@nexus/database';
 import type {
   CashflowAddressTag,
   CashflowExchangeSource,
@@ -22,14 +29,24 @@ import {
   type LedgerMovement,
   type UsdPricer,
 } from './cashflow-ledger';
-import { EVM_CHAINS, EvmActivityFetcher, shortAddress, type ChainFetchResult } from './evm-activity.fetcher';
+import {
+  EVM_CHAINS,
+  EvmActivityFetcher,
+  shortAddress,
+  type ChainFetchResult,
+} from './evm-activity.fetcher';
 import { EVM_EXCHANGE_WALLETS, EXCHANGE_NAMES } from './exchange-wallets';
 import { RelayLinksFetcher } from './relay-links.fetcher';
 import { SolanaActivityFetcher } from './solana-activity.fetcher';
 import type { PriceRef } from './base-assets';
 
 /** Chain whose native coin (per PriceOracleService) prices each money symbol. */
-const PRICED_SYMBOLS: Record<string, string> = { ETH: 'ethereum', POL: 'polygon', APE: 'apechain', SOL: 'solana' };
+const PRICED_SYMBOLS: Record<string, string> = {
+  ETH: 'ethereum',
+  POL: 'polygon',
+  APE: 'apechain',
+  SOL: 'solana',
+};
 
 /** A daily rate this many days away is still a reasonable stand-in for a missing day. */
 const MAX_PRICE_GAP_DAYS = 7;
@@ -94,7 +111,10 @@ export class CashflowService {
   async getReport(userId: string, refresh: boolean): Promise<CashflowResponse> {
     const linked = await this.db.query.wallets.findMany({ where: eq(wallets.userId, userId) });
     if (linked.length === 0) return { status: 'no_wallets' };
-    const signature = linked.map((w) => `${w.chain}:${w.address}`).sort().join('|');
+    const signature = linked
+      .map((w) => `${w.chain}:${w.address}`)
+      .sort()
+      .join('|');
 
     const entry = this.entries.get(userId);
     if (entry?.status === 'computing') return this.toResponse(entry);
@@ -142,30 +162,12 @@ export class CashflowService {
   // ── User overrides ──
 
   async addLink(userId: string, input: TxLinkInput): Promise<CashflowResponse> {
-    const pair = { fromChain: input.fromChain, fromTxHash: input.fromTxHash, toChain: input.toChain, toTxHash: input.toTxHash };
+    const pair = normalizePair(input);
     // Linking and rejecting the same pair are mutually exclusive; the latest word wins.
-    await this.db
-      .delete(cashflowTxLinks)
-      .where(
-        and(
-          eq(cashflowTxLinks.userId, userId),
-          sql`(${cashflowTxLinks.fromChain} = ${pair.fromChain} AND ${cashflowTxLinks.fromTxHash} = ${pair.fromTxHash} AND ${cashflowTxLinks.toChain} = ${pair.toChain} AND ${cashflowTxLinks.toTxHash} = ${pair.toTxHash})
-            OR (${cashflowTxLinks.fromChain} = ${pair.toChain} AND ${cashflowTxLinks.fromTxHash} = ${pair.toTxHash} AND ${cashflowTxLinks.toChain} = ${pair.fromChain} AND ${cashflowTxLinks.toTxHash} = ${pair.fromTxHash})`,
-        ),
-      );
+    await this.db.delete(cashflowTxLinks).where(samePairCondition(userId, pair));
     // A tx can only be half of one manual link.
-    if (input.kind === 'link') {
-      await this.db
-        .delete(cashflowTxLinks)
-        .where(
-          and(
-            eq(cashflowTxLinks.userId, userId),
-            eq(cashflowTxLinks.kind, 'link'),
-            sql`(${cashflowTxLinks.fromChain} = ${pair.fromChain} AND ${cashflowTxLinks.fromTxHash} = ${pair.fromTxHash})
-              OR (${cashflowTxLinks.toChain} = ${pair.toChain} AND ${cashflowTxLinks.toTxHash} = ${pair.toTxHash})`,
-          ),
-        );
-    }
+    if (input.kind === 'link')
+      await this.db.delete(cashflowTxLinks).where(sharesTxLinkCondition(userId, pair));
     await this.db
       .insert(cashflowTxLinks)
       .values({ userId, kind: input.kind, ...pair })
@@ -174,7 +176,9 @@ export class CashflowService {
   }
 
   async removeLink(userId: string, id: string): Promise<CashflowResponse> {
-    await this.db.delete(cashflowTxLinks).where(and(eq(cashflowTxLinks.userId, userId), eq(cashflowTxLinks.id, id)));
+    await this.db
+      .delete(cashflowTxLinks)
+      .where(and(eq(cashflowTxLinks.userId, userId), eq(cashflowTxLinks.id, id)));
     return this.rebuild(userId);
   }
 
@@ -185,14 +189,20 @@ export class CashflowService {
       .insert(cashflowAddressTags)
       .values({ userId, chainFamily, address, exchange: input.exchange })
       .onConflictDoUpdate({
-        target: [cashflowAddressTags.userId, cashflowAddressTags.chainFamily, cashflowAddressTags.address],
+        target: [
+          cashflowAddressTags.userId,
+          cashflowAddressTags.chainFamily,
+          cashflowAddressTags.address,
+        ],
         set: { exchange: input.exchange },
       });
     return this.rebuild(userId);
   }
 
   async removeAddressTag(userId: string, id: string): Promise<CashflowResponse> {
-    await this.db.delete(cashflowAddressTags).where(and(eq(cashflowAddressTags.userId, userId), eq(cashflowAddressTags.id, id)));
+    await this.db
+      .delete(cashflowAddressTags)
+      .where(and(eq(cashflowAddressTags.userId, userId), eq(cashflowAddressTags.id, id)));
     return this.rebuild(userId);
   }
 
@@ -227,15 +237,26 @@ export class CashflowService {
     const explicitLinks: ExplicitLink[] = [
       // Manual links first: the user's word beats Relay's record for the same tx.
       ...links.filter((l) => l.kind === 'link').map((l) => ({ ...l, source: 'manual' as const })),
-      ...scan.relayLinks.filter((l) => !rejectedKeys.has(`${txKey(l.fromChain, l.fromTxHash)}>${txKey(l.toChain, l.toTxHash)}`)),
+      ...scan.relayLinks.filter(
+        (l) =>
+          !rejectedKeys.has(`${txKey(l.fromChain, l.fromTxHash)}>${txKey(l.toChain, l.toTxHash)}`),
+      ),
     ];
 
     // Tagged beats detected beats the public list.
-    const exchangeAddresses = new Map<string, { exchange: string; source: CashflowExchangeSource }>();
-    for (const [address, exchange] of EVM_EXCHANGE_WALLETS) exchangeAddresses.set(`evm:${address}`, { exchange, source: 'known' });
-    for (const [identity, exchange] of scan.detectedExchanges) exchangeAddresses.set(identity, { exchange, source: 'detected' });
+    const exchangeAddresses = new Map<
+      string,
+      { exchange: string; source: CashflowExchangeSource }
+    >();
+    for (const [address, exchange] of EVM_EXCHANGE_WALLETS)
+      exchangeAddresses.set(`evm:${address}`, { exchange, source: 'known' });
+    for (const [identity, exchange] of scan.detectedExchanges)
+      exchangeAddresses.set(identity, { exchange, source: 'detected' });
     for (const t of addressTags) {
-      exchangeAddresses.set(addressIdentity(t.chainFamily === 'solana' ? 'solana' : 'ethereum', t.address), { exchange: t.exchange, source: 'tagged' });
+      exchangeAddresses.set(
+        addressIdentity(t.chainFamily === 'solana' ? 'solana' : 'ethereum', t.address),
+        { exchange: t.exchange, source: 'tagged' },
+      );
     }
 
     const report = buildCashflowReport({
@@ -263,8 +284,14 @@ export class CashflowService {
 
   private toResponse(entry: Entry): CashflowResponse {
     if (entry.status === 'ready' && entry.report) return { status: 'ready', report: entry.report };
-    if (entry.status === 'failed') return { status: 'failed', error: entry.error ?? 'Unknown error', previous: entry.report };
-    return { status: 'computing', startedAt: entry.startedAt.toISOString(), progress: entry.progress, previous: entry.report };
+    if (entry.status === 'failed')
+      return { status: 'failed', error: entry.error ?? 'Unknown error', previous: entry.report };
+    return {
+      status: 'computing',
+      startedAt: entry.startedAt.toISOString(),
+      progress: entry.progress,
+      previous: entry.report,
+    };
   }
 
   private remember(userId: string, entry: Entry) {
@@ -277,24 +304,41 @@ export class CashflowService {
     }
   }
 
-  private async scan(linked: Array<{ chain: string; address: string }>, entry: Entry): Promise<ScanData> {
+  private async scan(
+    linked: Array<{ chain: string; address: string }>,
+    entry: Entry,
+  ): Promise<ScanData> {
     const alchemyKey = this.config.get<string>('alchemy.apiKey');
-    const heliusKey = this.config.get<string>('helius.apiKey') || this.config.get<string>('HELIUS_API_KEY');
+    const heliusKey =
+      this.config.get<string>('helius.apiKey') || this.config.get<string>('HELIUS_API_KEY');
     const notes: string[] = [];
 
     // An EVM address is the same wallet on every EVM chain — scan them all.
-    const evmAddresses = [...new Set(linked.filter((w) => w.chain !== 'solana').map((w) => w.address.toLowerCase()))];
-    const solAddresses = [...new Set(linked.filter((w) => w.chain === 'solana').map((w) => w.address))];
-    const jobs: Array<{ chain: string; address: string; run: (assets: Map<string, LedgerAsset>) => Promise<ChainFetchResult> }> = [];
-    if (evmAddresses.length > 0 && !alchemyKey) notes.push('EVM wallets were skipped: ALCHEMY_API_KEY is not configured.');
-    if (solAddresses.length > 0 && !heliusKey) notes.push('Solana wallets were skipped: HELIUS_API_KEY is not configured.');
+    const evmAddresses = [
+      ...new Set(linked.filter((w) => w.chain !== 'solana').map((w) => w.address.toLowerCase())),
+    ];
+    const solAddresses = [
+      ...new Set(linked.filter((w) => w.chain === 'solana').map((w) => w.address)),
+    ];
+    const jobs: Array<{
+      chain: string;
+      address: string;
+      run: (assets: Map<string, LedgerAsset>) => Promise<ChainFetchResult>;
+    }> = [];
+    if (evmAddresses.length > 0 && !alchemyKey)
+      notes.push('EVM wallets were skipped: ALCHEMY_API_KEY is not configured.');
+    if (solAddresses.length > 0 && !heliusKey)
+      notes.push('Solana wallets were skipped: HELIUS_API_KEY is not configured.');
     if (alchemyKey) {
       const evm = new EvmActivityFetcher(alchemyKey);
-      for (const address of evmAddresses) for (const chain of EVM_CHAINS) jobs.push({ chain, address, run: (a) => evm.fetch(chain, address, a) });
+      for (const address of evmAddresses)
+        for (const chain of EVM_CHAINS)
+          jobs.push({ chain, address, run: (a) => evm.fetch(chain, address, a) });
     }
     if (heliusKey) {
       const sol = new SolanaActivityFetcher(heliusKey);
-      for (const address of solAddresses) jobs.push({ chain: 'solana', address, run: (a) => sol.fetch(address, a) });
+      for (const address of solAddresses)
+        jobs.push({ chain: 'solana', address, run: (a) => sol.fetch(address, a) });
     }
 
     const assets = new Map<string, LedgerAsset>();
@@ -309,7 +353,13 @@ export class CashflowService {
         movements.push(...r.movements);
         fees.push(...r.fees);
         notes.push(...r.notes);
-        coverage.push({ chain: job.chain, address: job.address, transfers: r.transfers, truncated: r.truncated, error: null });
+        coverage.push({
+          chain: job.chain,
+          address: job.address,
+          transfers: r.transfers,
+          truncated: r.truncated,
+          error: null,
+        });
       } catch (err) {
         const message = (err as Error).message;
         if (job.chain !== 'solana' && /HTTP 403|not enabled|unsupported network/i.test(message)) {
@@ -318,7 +368,13 @@ export class CashflowService {
           continue;
         }
         this.logger.warn(`Cash-flow scan failed for ${job.chain} ${job.address}: ${message}`);
-        coverage.push({ chain: job.chain, address: job.address, transfers: 0, truncated: false, error: message });
+        coverage.push({
+          chain: job.chain,
+          address: job.address,
+          transfers: 0,
+          truncated: false,
+          error: message,
+        });
       }
     }
 
@@ -335,13 +391,17 @@ export class CashflowService {
     const pricer = await this.buildPricer(movements, fees);
 
     if (coverage.some((c) => c.truncated)) {
-      notes.push('Some very active wallets hit the scan limit; the oldest history beyond it is not included.');
+      notes.push(
+        'Some very active wallets hit the scan limit; the oldest history beyond it is not included.',
+      );
     }
     notes.push(
       'NFT and token values come from what you paid or received in ETH/SOL/POL/APE, their wrapped versions, or stablecoins in the same transaction.',
     );
     if (evmAddresses.length > 0 && alchemyKey) {
-      notes.push('Outside Ethereum and Polygon, NFT sale proceeds paid out by a contract in native ETH/APE cannot be traced yet; WETH/stablecoin proceeds are.');
+      notes.push(
+        'Outside Ethereum and Polygon, NFT sale proceeds paid out by a contract in native ETH/APE cannot be traced yet; WETH/stablecoin proceeds are.',
+      );
     }
 
     entry.progress = 'Checking bridge records…';
@@ -350,7 +410,12 @@ export class CashflowService {
     entry.progress = 'Checking which transfers went to exchanges…';
     const own = new Set(linked.map((w) => addressIdentity(w.chain, w.address)));
     const detectedExchanges = alchemyKey
-      ? await this.detectExchangeDepositAddresses(new EvmActivityFetcher(alchemyKey), movements, pricer, own)
+      ? await this.detectExchangeDepositAddresses(
+          new EvmActivityFetcher(alchemyKey),
+          movements,
+          pricer,
+          own,
+        )
       : new Map<string, string>();
 
     return {
@@ -368,7 +433,9 @@ export class CashflowService {
   private async fetchRelayLinks(addresses: string[], notes: string[]): Promise<ExplicitLink[]> {
     const apiKey = this.config.get<string>('relay.apiKey');
     if (!apiKey) {
-      notes.push('Relay bridges are paired by amount and timing; set RELAY_API_KEY to pair them exactly from Relay\'s records.');
+      notes.push(
+        "Relay bridges are paired by amount and timing; set RELAY_API_KEY to pair them exactly from Relay's records.",
+      );
       return [];
     }
     const relay = new RelayLinksFetcher(apiKey);
@@ -378,7 +445,9 @@ export class CashflowService {
         links.push(...(await relay.fetchLinks(address)));
       } catch (err) {
         this.logger.warn(`Relay history lookup failed for ${address}: ${(err as Error).message}`);
-        notes.push(`Couldn't load Relay history for ${shortAddress(address)}; its bridges fall back to amount/timing matching.`);
+        notes.push(
+          `Couldn't load Relay history for ${shortAddress(address)}; its bridges fall back to amount/timing matching.`,
+        );
       }
     }
     return links;
@@ -397,10 +466,13 @@ export class CashflowService {
     own: Set<string>,
   ): Promise<Map<string, string>> {
     // Plain money sends only (no NFT/token legs in the same tx).
-    const txHasAsset = new Set(movements.filter((m) => !m.asset.price).map((m) => `${m.chain}:${m.txHash}`));
+    const txHasAsset = new Set(
+      movements.filter((m) => !m.asset.price).map((m) => `${m.chain}:${m.txHash}`),
+    );
     const sentTo = new Map<string, { chain: string; address: string; usd: number }>();
     for (const m of movements) {
-      if (m.chain === 'solana' || m.direction !== 'out' || !m.asset.price || !m.counterparty) continue;
+      if (m.chain === 'solana' || m.direction !== 'out' || !m.asset.price || !m.counterparty)
+        continue;
       if (txHasAsset.has(`${m.chain}:${m.txHash}`)) continue;
       const identity = addressIdentity(m.chain, m.counterparty);
       if (own.has(identity) || EVM_EXCHANGE_WALLETS.has(m.counterparty.toLowerCase())) continue;
@@ -410,7 +482,9 @@ export class CashflowService {
       e.usd += usd;
       sentTo.set(key, e);
     }
-    const candidates = [...sentTo.values()].sort((a, b) => b.usd - a.usd).slice(0, MAX_DEPOSIT_ADDRESS_CHECKS);
+    const candidates = [...sentTo.values()]
+      .sort((a, b) => b.usd - a.usd)
+      .slice(0, MAX_DEPOSIT_ADDRESS_CHECKS);
 
     const detected = new Map<string, string>();
     for (const c of candidates) {
@@ -420,7 +494,9 @@ export class CashflowService {
         const exchange = sweepTarget(await evm.fetchRecentRecipients(c.chain, c.address));
         if (exchange) detected.set(identity, exchange);
       } catch (err) {
-        this.logger.debug(`Deposit-address check failed for ${c.address} on ${c.chain}: ${(err as Error).message}`);
+        this.logger.debug(
+          `Deposit-address check failed for ${c.address} on ${c.chain}: ${(err as Error).message}`,
+        );
       }
     }
     return detected;
@@ -448,7 +524,12 @@ export class CashflowService {
                 : inArray(sql`lower(${collections.contractAddress})`, lower),
             ),
           );
-        const names = new Map(rows.map((r) => [chain === 'solana' ? r.contractAddress : r.contractAddress.toLowerCase(), r.name]));
+        const names = new Map(
+          rows.map((r) => [
+            chain === 'solana' ? r.contractAddress : r.contractAddress.toLowerCase(),
+            r.name,
+          ]),
+        );
         for (const a of list) {
           const name = names.get(chain === 'solana' ? a.contract : a.contract.toLowerCase());
           if (name) {
@@ -463,7 +544,10 @@ export class CashflowService {
       if (chain !== 'solana' && alchemyKey) {
         const unnamed = list.filter((a) => !named.has(a));
         if (unnamed.length === 0) continue;
-        const names = await new EvmActivityFetcher(alchemyKey).fetchContractNames(chain, unnamed.map((a) => a.contract));
+        const names = await new EvmActivityFetcher(alchemyKey).fetchContractNames(
+          chain,
+          unnamed.map((a) => a.contract),
+        );
         for (const a of unnamed) {
           const name = names.get(a.contract.toLowerCase());
           if (name) a.name = name;
@@ -516,6 +600,56 @@ export class CashflowService {
   }
 }
 
+type TxPairFields = Pick<TxLinkInput, 'fromChain' | 'fromTxHash' | 'toChain' | 'toTxHash'>;
+
+/** EVM tx hashes are case-insensitive hex; store them lowercased so pairs match however they were pasted. */
+export function normalizePair(p: TxPairFields): TxPairFields {
+  const norm = (chain: string, hash: string) => (chain === 'solana' ? hash : hash.toLowerCase());
+  return {
+    fromChain: p.fromChain,
+    fromTxHash: norm(p.fromChain, p.fromTxHash),
+    toChain: p.toChain,
+    toTxHash: norm(p.toChain, p.toTxHash),
+  };
+}
+
+const t = cashflowTxLinks;
+const txIs = (chainCol: AnyPgColumn, hashCol: AnyPgColumn, chain: string, hash: string) =>
+  and(eq(chainCol, chain), eq(hashCol, hash));
+
+/**
+ * This user's rows for the pair in either direction. Built with and()/or() —
+ * never a raw "A OR B" fragment, which and() would not parenthesise and would
+ * let the OR branch escape the user filter.
+ */
+export function samePairCondition(userId: string, p: TxPairFields): SQL {
+  return and(
+    eq(t.userId, userId),
+    or(
+      and(
+        txIs(t.fromChain, t.fromTxHash, p.fromChain, p.fromTxHash),
+        txIs(t.toChain, t.toTxHash, p.toChain, p.toTxHash),
+      ),
+      and(
+        txIs(t.fromChain, t.fromTxHash, p.toChain, p.toTxHash),
+        txIs(t.toChain, t.toTxHash, p.fromChain, p.fromTxHash),
+      ),
+    ),
+  )!;
+}
+
+/** This user's manual links that already use either side of the pair. */
+export function sharesTxLinkCondition(userId: string, p: TxPairFields): SQL {
+  return and(
+    eq(t.userId, userId),
+    eq(t.kind, 'link'),
+    or(
+      txIs(t.fromChain, t.fromTxHash, p.fromChain, p.fromTxHash),
+      txIs(t.toChain, t.toTxHash, p.toChain, p.toTxHash),
+    ),
+  )!;
+}
+
 /**
  * The exchange an address sweeps into, if at least half of its recent sends go
  * to that exchange's wallets. Deposit addresses forward nearly everything; a
@@ -543,7 +677,9 @@ export function nearestDay(days: string[], day: string): string | null {
     else hi = mid;
   }
   const candidates = [days[lo], days[lo - 1]].filter((d): d is string => d !== undefined);
-  return candidates.sort((a, b) => Math.abs(daysBetween(a, day)) - Math.abs(daysBetween(b, day)))[0];
+  return candidates.sort(
+    (a, b) => Math.abs(daysBetween(a, day)) - Math.abs(daysBetween(b, day)),
+  )[0];
 }
 
 function daysBetween(a: string, b: string): number {

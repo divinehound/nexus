@@ -228,7 +228,9 @@ export class EvmActivityFetcher {
         withMetadata: true,
         excludeZeroValue: false,
         maxCount: '0x3e8',
-        order: 'asc',
+        // Newest first: if a very active wallet hits the page cap, it's the
+        // oldest history that gets cut, not the recent buys, sales and gas.
+        order: 'desc',
       };
       if (pageKey) params.pageKey = pageKey;
 
