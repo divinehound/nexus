@@ -39,6 +39,8 @@ export interface CashflowTotals {
   netUsd: number;
   feesUsd: number;
   realizedPnlUsd: number;
+  /** Realized P/L minus the gas paid to buy/mint and to sell what was sold. */
+  realizedPnlAfterGasUsd: number;
   /** Cost basis of NFTs/tokens still held (bought within the scanned history). */
   openCostBasisUsd: number;
   txCount: number;
@@ -53,6 +55,7 @@ export interface CashflowMonth {
   outUsd: number;
   feesUsd: number;
   realizedPnlUsd: number;
+  realizedPnlAfterGasUsd: number;
   byCategory: Partial<Record<CashflowCategory, number>>;
 }
 
@@ -72,8 +75,12 @@ export interface CashflowPosition {
   qtyHeld: number;
   spentUsd: number;
   proceedsUsd: number;
-  /** Proceeds minus the cost basis of what was sold. */
+  /** Proceeds (after marketplace fees and royalties) minus the cost basis of what was sold. Excludes gas. */
   realizedPnlUsd: number;
+  /** realizedPnlUsd minus gas paid to acquire the sold units and gas paid on the sales. */
+  realizedPnlAfterGasUsd: number;
+  /** All gas paid on transactions involving this asset (buys, mints, sales, swaps, sends). */
+  gasUsd: number;
   /** Cost basis of units still held. */
   openCostBasisUsd: number;
   /** Units sold whose purchase was not seen (airdrop, gift, pre-history) — basis taken as $0. */

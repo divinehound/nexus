@@ -96,6 +96,8 @@ const monthKey = (d: Date) => d.toISOString().slice(0, 7);
 interface Lot {
   qty: number;
   cost: number;
+  /** Gas paid to acquire these units — kept apart from cost so P/L can be shown before and after gas. */
+  gas: number;
 }
 
 class Position {
@@ -107,6 +109,9 @@ class Position {
   spentUsd = 0;
   proceedsUsd = 0;
   realizedPnlUsd = 0;
+  realizedPnlAfterGasUsd = 0;
+  /** All gas paid on txs that bought, minted, sold, swapped or sent this asset. */
+  gasUsd = 0;
   qtySoldWithoutBasis = 0;
   firstAt: Date;
   lastAt: Date;
@@ -125,26 +130,30 @@ class Position {
     return this.asset.kind === 'nft' && tokenId !== null ? tokenId : '*';
   }
 
-  acquire(qty: number, costUsd: number, tokenId: string | null) {
+  acquire(qty: number, costUsd: number, tokenId: string | null, gasUsd = 0) {
     const key = this.lotKey(tokenId);
-    const lot = this.lots.get(key) ?? { qty: 0, cost: 0 };
+    const lot = this.lots.get(key) ?? { qty: 0, cost: 0, gas: 0 };
     lot.qty += qty;
     lot.cost += costUsd;
+    lot.gas += gasUsd;
     this.lots.set(key, lot);
   }
 
-  /** Remove `qty` units; returns the cost basis removed and how many units had no known basis. */
-  dispose(qty: number, tokenId: string | null): { basis: number; missing: number } {
+  /** Remove `qty` units; returns the cost basis and acquisition gas removed, and how many units had no known basis. */
+  dispose(qty: number, tokenId: string | null): { basis: number; gas: number; missing: number } {
     const key = this.lotKey(tokenId);
     const lot = this.lots.get(key);
-    if (!lot || lot.qty <= EPSILON) return { basis: 0, missing: qty };
+    if (!lot || lot.qty <= EPSILON) return { basis: 0, gas: 0, missing: qty };
     const take = Math.min(qty, lot.qty);
-    const basis = lot.qty > 0 ? (lot.cost * take) / lot.qty : 0;
+    const fraction = lot.qty > 0 ? take / lot.qty : 0;
+    const basis = lot.cost * fraction;
+    const gas = lot.gas * fraction;
     lot.qty -= take;
     lot.cost -= basis;
+    lot.gas -= gas;
     if (lot.qty <= EPSILON) this.lots.delete(key);
     const missing = qty - take;
-    return { basis, missing: missing > EPSILON ? missing : 0 };
+    return { basis, gas, missing: missing > EPSILON ? missing : 0 };
   }
 
   get qtyHeld(): number {
@@ -216,7 +225,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     const key = monthKey(d);
     let m = months.get(key);
     if (!m) {
-      m = { month: key, inUsd: 0, outUsd: 0, feesUsd: 0, realizedPnlUsd: 0, byCategory: {} };
+      m = { month: key, inUsd: 0, outUsd: 0, feesUsd: 0, realizedPnlUsd: 0, realizedPnlAfterGasUsd: 0, byCategory: {} };
       months.set(key, m);
     }
     return m;
@@ -227,6 +236,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
   let totalOut = 0;
   let totalFees = 0;
   let totalRealized = 0;
+  let totalRealizedAfterGas = 0;
 
   const book = (d: Date, dir: 'in' | 'out', category: CashflowCategory, usd: number) => {
     if (!(usd > 0)) return;
@@ -242,9 +252,12 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       totalOut += usd;
     }
   };
-  const bookRealized = (d: Date, usd: number) => {
-    monthFor(d).realizedPnlUsd += usd;
+  const bookRealized = (d: Date, usd: number, afterGasUsd: number) => {
+    const m = monthFor(d);
+    m.realizedPnlUsd += usd;
+    m.realizedPnlAfterGasUsd += afterGasUsd;
     totalRealized += usd;
+    totalRealizedAfterGas += afterGasUsd;
   };
 
   const positions = new Map<string, Position>();
@@ -381,10 +394,12 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       // ── Acquisition: purchase, mint, or free receive ──
       const cost = Math.max(0, moneyOut - moneyIn);
       const share = cost / unIn.length;
+      const gasShare = feeUsd / unIn.length;
       const allMint = unIn.every((m) => m.counterparty === '');
       for (const m of unIn) {
         const p = positionFor(m.asset, at);
-        p.acquire(m.amount, share, m.tokenId);
+        p.acquire(m.amount, share, m.tokenId, gasShare);
+        p.gasUsd += gasShare;
         if (cost > 0) {
           p.buyCount++;
           p.qtyBought += m.amount;
@@ -412,25 +427,35 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       if (proceeds > 0) {
         // ── Sale ──
         const share = proceeds / unOut.length;
+        const gasShare = feeUsd / unOut.length;
         realized = 0;
+        let realizedAfterGas = 0;
         for (const m of unOut) {
           const p = positionFor(m.asset, at);
-          const { basis, missing } = p.dispose(m.amount, m.tokenId);
+          const { basis, gas, missing } = p.dispose(m.amount, m.tokenId);
           p.sellCount++;
           p.qtySold += m.amount;
           p.qtySoldWithoutBasis += missing;
           p.proceedsUsd += share;
+          p.gasUsd += gasShare;
           p.realizedPnlUsd += share - basis;
+          // After gas: also subtract the gas paid to acquire these units and this sale's gas.
+          p.realizedPnlAfterGasUsd += share - basis - gas - gasShare;
           realized += share - basis;
+          realizedAfterGas += share - basis - gas - gasShare;
           legUsd.set(m, share);
           book(at, 'in', m.asset.kind === 'nft' ? 'nft_sale' : 'token_sale', share);
         }
-        bookRealized(at, realized);
+        bookRealized(at, realized, realizedAfterGas);
         txIn += proceeds;
         type = unOut.some((m) => m.asset.kind === 'nft') ? 'nft_sale' : 'token_sale';
       } else {
         // ── Gave an asset away (gift, move to an unlinked wallet, burn) ──
-        for (const m of unOut) positionFor(m.asset, at).dispose(m.amount, m.tokenId);
+        for (const m of unOut) {
+          const p = positionFor(m.asset, at);
+          p.dispose(m.amount, m.tokenId);
+          p.gasUsd += feeUsd / unOut.length;
+        }
         type = 'sent_asset';
         counterparty = unOut[0].counterparty || null;
         if (moneyOut > moneyIn) {
@@ -441,12 +466,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     } else if (unIn.length > 0 && unOut.length > 0) {
       // ── Asset-for-asset swap: basis carries over, plus/minus any money leg ──
       let carried = 0;
-      for (const m of unOut) carried += positionFor(m.asset, at).dispose(m.amount, m.tokenId).basis;
+      // Acquisition gas of what's given up, plus this swap's gas, rides along into what's received.
+      let carriedGas = feeUsd;
+      for (const m of unOut) {
+        const d = positionFor(m.asset, at).dispose(m.amount, m.tokenId);
+        carried += d.basis;
+        carriedGas += d.gas;
+      }
       const netMoney = moneyOut - moneyIn;
       if (netMoney < 0) {
         // Received money on top: realize it as a zero-basis sale.
         realized = -netMoney;
-        bookRealized(at, realized);
+        bookRealized(at, realized, realized);
         book(at, 'in', 'token_sale', -netMoney);
         txIn += -netMoney;
       } else if (netMoney > 0) {
@@ -456,9 +487,10 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       const basis = carried + Math.max(0, netMoney);
       const share = basis / unIn.length;
       for (const m of unIn) {
-        positionFor(m.asset, at).acquire(m.amount, share, m.tokenId);
+        positionFor(m.asset, at).acquire(m.amount, share, m.tokenId, carriedGas / unIn.length);
         legUsd.set(m, share);
       }
+      for (const m of [...unIn, ...unOut]) positionFor(m.asset, at).gasUsd += feeUsd / (unIn.length + unOut.length);
       type = 'swap';
     } else if (pricedIn.length > 0 && pricedOut.length > 0) {
       // Money-for-money (ETH→USDC, wrapping): a conversion, not spending.
@@ -523,6 +555,8 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       spentUsd: p.spentUsd,
       proceedsUsd: p.proceedsUsd,
       realizedPnlUsd: p.realizedPnlUsd,
+      realizedPnlAfterGasUsd: p.realizedPnlAfterGasUsd,
+      gasUsd: p.gasUsd,
       openCostBasisUsd: p.openCost,
       qtySoldWithoutBasis: p.qtySoldWithoutBasis,
       firstAt: p.firstAt.toISOString(),
@@ -544,7 +578,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     const end = new Date(Date.UTC(lastAt.getUTCFullYear(), lastAt.getUTCMonth(), 1));
     while (cursor <= end) {
       const key = monthKey(cursor);
-      monthRows.push(months.get(key) ?? { month: key, inUsd: 0, outUsd: 0, feesUsd: 0, realizedPnlUsd: 0, byCategory: {} });
+      monthRows.push(months.get(key) ?? { month: key, inUsd: 0, outUsd: 0, feesUsd: 0, realizedPnlUsd: 0, realizedPnlAfterGasUsd: 0, byCategory: {} });
       cursor.setUTCMonth(cursor.getUTCMonth() + 1);
     }
   }
@@ -563,6 +597,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       netUsd: totalIn - totalOut,
       feesUsd: totalFees,
       realizedPnlUsd: totalRealized,
+      realizedPnlAfterGasUsd: totalRealizedAfterGas,
       openCostBasisUsd,
       txCount,
       unpricedMovements,

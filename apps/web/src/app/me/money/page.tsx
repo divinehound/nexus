@@ -154,14 +154,16 @@ function Dashboard({ report }: { report: CashflowReport }) {
     let outUsd = 0;
     let feesUsd = 0;
     let realized = 0;
+    let realizedAfterGas = 0;
     for (const m of months) {
       inUsd += m.inUsd;
       outUsd += m.outUsd;
       feesUsd += m.feesUsd;
       realized += m.realizedPnlUsd;
+      realizedAfterGas += m.realizedPnlAfterGasUsd;
       for (const [k, v] of Object.entries(m.byCategory) as Array<[CashflowCategory, number]>) byCategory[k] = (byCategory[k] ?? 0) + v;
     }
-    return { inUsd, outUsd, feesUsd, realized, net: inUsd - outUsd, byCategory };
+    return { inUsd, outUsd, feesUsd, realized, realizedAfterGas, net: inUsd - outUsd, byCategory };
   }, [months]);
 
   if (report.totals.txCount === 0) {
@@ -199,7 +201,12 @@ function Dashboard({ report }: { report: CashflowReport }) {
         <Stat label="Money in" value={usd(totals.inUsd)} swatch={IN_COLOR} />
         <Stat label="Money out" value={usd(totals.outUsd)} swatch={OUT_COLOR} />
         <Stat label="Net cash flow" value={usdSigned(totals.net)} valueClass={pnlClass(totals.net)} />
-        <Stat label="Realized profit / loss" value={usdSigned(totals.realized)} valueClass={pnlClass(totals.realized)} />
+        <Stat
+          label="Realized profit / loss"
+          value={usdSigned(totals.realized)}
+          valueClass={pnlClass(totals.realized)}
+          sub={<AfterGas value={totals.realizedAfterGas} />}
+        />
         <Stat label="Gas & fees" value={usd(totals.feesUsd)} />
       </div>
 
@@ -221,7 +228,19 @@ function Dashboard({ report }: { report: CashflowReport }) {
   );
 }
 
-function Stat({ label, value, valueClass, swatch }: { label: string; value: string; valueClass?: string; swatch?: string }) {
+function Stat({
+  label,
+  value,
+  valueClass,
+  swatch,
+  sub,
+}: {
+  label: string;
+  value: string;
+  valueClass?: string;
+  swatch?: string;
+  sub?: React.ReactNode;
+}) {
   return (
     <div className="rounded-lg border border-gray-800 p-3">
       <div className="flex items-center gap-1.5 text-xs text-gray-500">
@@ -229,6 +248,7 @@ function Stat({ label, value, valueClass, swatch }: { label: string; value: stri
         {label}
       </div>
       <div className={cn('mt-1 text-xl font-semibold tabular-nums', valueClass)}>{value}</div>
+      {sub && <div className="mt-0.5 text-xs text-gray-500">{sub}</div>}
     </div>
   );
 }
@@ -250,7 +270,8 @@ function MonthTable({ months }: { months: CashflowMonth[] }) {
                 <th className="py-2 pr-4 text-right font-medium">Out</th>
                 <th className="py-2 pr-4 text-right font-medium">of which gas</th>
                 <th className="py-2 pr-4 text-right font-medium">Net</th>
-                <th className="py-2 text-right font-medium">Realized PnL</th>
+                <th className="py-2 pr-4 text-right font-medium">Realized P/L</th>
+                <th className="py-2 text-right font-medium">P/L after gas</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800/70">
@@ -261,7 +282,10 @@ function MonthTable({ months }: { months: CashflowMonth[] }) {
                   <td className="py-2 pr-4 text-right tabular-nums">{usd(m.outUsd)}</td>
                   <td className="py-2 pr-4 text-right tabular-nums text-gray-400">{usd(m.feesUsd)}</td>
                   <td className={cn('py-2 pr-4 text-right tabular-nums', pnlClass(m.inUsd - m.outUsd))}>{usdSigned(m.inUsd - m.outUsd)}</td>
-                  <td className={cn('py-2 text-right tabular-nums', pnlClass(m.realizedPnlUsd))}>{usdSigned(m.realizedPnlUsd)}</td>
+                  <td className={cn('py-2 pr-4 text-right tabular-nums', pnlClass(m.realizedPnlUsd))}>{usdSigned(m.realizedPnlUsd)}</td>
+                  <td className={cn('py-2 text-right tabular-nums', pnlClass(m.realizedPnlAfterGasUsd))}>
+                    {usdSigned(m.realizedPnlAfterGasUsd)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -360,8 +384,15 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
   const traded = rows.filter((r) => r.spentUsd > 0 || r.proceedsUsd > 0);
   const visible = showAll ? rows : traded;
   const totals = traded.reduce(
-    (acc, r) => ({ spent: acc.spent + r.spentUsd, proceeds: acc.proceeds + r.proceedsUsd, pnl: acc.pnl + r.realizedPnlUsd, open: acc.open + r.openCostBasisUsd }),
-    { spent: 0, proceeds: 0, pnl: 0, open: 0 },
+    (acc, r) => ({
+      spent: acc.spent + r.spentUsd,
+      proceeds: acc.proceeds + r.proceedsUsd,
+      pnl: acc.pnl + r.realizedPnlUsd,
+      pnlAfterGas: acc.pnlAfterGas + r.realizedPnlAfterGasUsd,
+      gas: acc.gas + r.gasUsd,
+      open: acc.open + r.openCostBasisUsd,
+    }),
+    { spent: 0, proceeds: 0, pnl: 0, pnlAfterGas: 0, gas: 0, open: 0 },
   );
   const unit = kind === 'nft' ? 'items' : 'amount';
 
@@ -370,8 +401,13 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Total spent" value={usd(totals.spent)} />
         <Stat label="Total sold for" value={usd(totals.proceeds)} />
-        <Stat label="Realized profit / loss" value={usdSigned(totals.pnl)} valueClass={pnlClass(totals.pnl)} />
-        <Stat label="Cost of what you still hold" value={usd(totals.open)} />
+        <Stat
+          label="Realized profit / loss"
+          value={usdSigned(totals.pnl)}
+          valueClass={pnlClass(totals.pnl)}
+          sub={<AfterGas value={totals.pnlAfterGas} />}
+        />
+        <Stat label="Cost of what you still hold" value={usd(totals.open)} sub={`${usd(totals.gas)} gas spent in total`} />
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -382,7 +418,12 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
               <th className="py-2 pr-4 text-right font-medium">Spent</th>
               <th className="py-2 pr-4 text-right font-medium">Sold ({unit})</th>
               <th className="py-2 pr-4 text-right font-medium">Sold for</th>
-              <th className="py-2 pr-4 text-right font-medium">Realized P/L</th>
+              <th className="py-2 pr-4 text-right font-medium" title="Sale proceeds (after marketplace fees and royalties) minus what you paid">
+                Realized P/L
+              </th>
+              <th className="py-2 pr-4 text-right font-medium" title="Also subtracts gas paid to buy or mint what you sold, and gas paid to sell it">
+                P/L after gas
+              </th>
               <th className="py-2 text-right font-medium">Still held</th>
             </tr>
           </thead>
@@ -411,6 +452,10 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
                     </span>
                   )}
                 </td>
+                <td className={cn('py-2 pr-4 text-right tabular-nums', pnlClass(r.realizedPnlAfterGasUsd))}>
+                  {r.sellCount > 0 ? usdSigned(r.realizedPnlAfterGasUsd) : '—'}
+                  {r.gasUsd > 0 && <div className="text-xs text-gray-500">{usd(r.gasUsd)} total gas</div>}
+                </td>
                 <td className="py-2 text-right tabular-nums text-gray-300">
                   {r.qtyHeld > 0 ? qty(r.qtyHeld) : '—'}
                   {r.openCostBasisUsd > 0 && <div className="text-xs text-gray-500">cost {usd(r.openCostBasisUsd)}</div>}
@@ -419,7 +464,7 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
             ))}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={7} className="py-6 text-center text-gray-500">
+                <td colSpan={8} className="py-6 text-center text-gray-500">
                   No {kind === 'nft' ? 'NFT' : 'token'} buys or sales found.
                 </td>
               </tr>
@@ -638,7 +683,11 @@ function Coverage({ report }: { report: CashflowReport }) {
       <summary className="cursor-pointer text-gray-300">How these numbers are calculated</summary>
       <ul className="mt-3 list-disc space-y-1 pl-5">
         <li>Money in/out counts native coins (ETH, SOL, POL, APE), their wrapped versions, and USD stablecoins, valued at that day&apos;s price.</li>
-        <li>Profit/loss per NFT is sale price minus what you paid for that exact token; tokens use average cost. Gas is tracked separately, not added to cost.</li>
+        <li>
+          Profit/loss per NFT is what you actually received for it — after marketplace fees and royalties — minus what you paid
+          for that exact token; tokens use average cost. &ldquo;P/L after gas&rdquo; also subtracts the gas you paid to buy or mint
+          the items you sold and the gas on the sale; gas for items you still hold waits until you sell them.
+        </li>
         <li>Swaps between two coins count as conversions, not spending.</li>
         <li>
           Moves between your own linked wallets are never counted twice: same-chain transfers are dropped, and a bridge is
@@ -657,5 +706,13 @@ function Coverage({ report }: { report: CashflowReport }) {
         </div>
       )}
     </details>
+  );
+}
+
+function AfterGas({ value }: { value: number }) {
+  return (
+    <>
+      after gas <span className={cn('tabular-nums', pnlClass(value))}>{usdSigned(value)}</span>
+    </>
   );
 }

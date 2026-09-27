@@ -202,6 +202,65 @@ describe('buildCashflowReport', () => {
     expect(r.totals.outUsd).toBe(0);
   });
 
+  describe('P/L after gas', () => {
+    it('subtracts gas from the buy and the sale of what was sold', () => {
+      const r = build(
+        [
+          mv('0xa', '2024-01-10T00:00:00Z', 'out', ETH, 1, MARKET),
+          mv('0xa', '2024-01-10T00:00:00Z', 'in', PUNKS, 1, FRIEND, { tokenId: '7' }),
+          mv('0xb', '2024-02-10T00:00:00Z', 'out', PUNKS, 1, FRIEND, { tokenId: '7' }),
+          mv('0xb', '2024-02-10T00:00:00Z', 'in', ETH, 0.9, MARKET),
+        ],
+        // $20 gas to buy (Jan), $30 gas to sell (Feb).
+        [fee('0xa', '2024-01-10T00:00:00Z', 0.01), fee('0xb', '2024-02-10T00:00:00Z', 0.01)],
+      );
+      const punks = r.collections[0];
+      expect(punks.realizedPnlUsd).toBeCloseTo(700);
+      expect(punks.realizedPnlAfterGasUsd).toBeCloseTo(650);
+      expect(punks.gasUsd).toBeCloseTo(50);
+      expect(r.totals.realizedPnlAfterGasUsd).toBeCloseTo(650);
+      expect(r.months[1].realizedPnlAfterGasUsd).toBeCloseTo(650);
+      // Gas still counts once in money out — not double-counted by the P/L view.
+      expect(r.totals.feesUsd).toBeCloseTo(50);
+    });
+
+    it('only charges the mint gas share of the units sold; the rest stays with what you hold', () => {
+      const r = build(
+        [
+          mv('0xm', '2024-01-05T00:00:00Z', 'out', ETH, 0.2, MARKET),
+          mv('0xm', '2024-01-05T00:00:00Z', 'in', PUNKS, 1, '', { tokenId: '1' }),
+          mv('0xm', '2024-01-05T00:00:00Z', 'in', PUNKS, 1, '', { tokenId: '2' }),
+          mv('0xs', '2024-01-20T00:00:00Z', 'out', PUNKS, 1, FRIEND, { tokenId: '2' }),
+          mv('0xs', '2024-01-20T00:00:00Z', 'in', ETH, 0.15, MARKET),
+        ],
+        // $40 mint gas across 2 tokens; $10 sale gas.
+        [fee('0xm', '2024-01-05T00:00:00Z', 0.02), fee('0xs', '2024-01-20T00:00:00Z', 0.005)],
+      );
+      const punks = r.collections[0];
+      expect(punks.realizedPnlUsd).toBeCloseTo(100); // 300 − 200
+      expect(punks.realizedPnlAfterGasUsd).toBeCloseTo(70); // − 20 mint gas − 10 sale gas
+      expect(punks.gasUsd).toBeCloseTo(50);
+    });
+
+    it('carries gas through token swaps into the eventual sale', () => {
+      const r = build(
+        [
+          mv('0x1', '2024-01-01T00:00:00Z', 'out', ETH, 1, MARKET),
+          mv('0x1', '2024-01-01T00:00:00Z', 'in', PEPE, 100, MARKET),
+          mv('0x2', '2024-01-02T00:00:00Z', 'out', PEPE, 100, MARKET),
+          mv('0x2', '2024-01-02T00:00:00Z', 'in', DOGE, 50, MARKET),
+          mv('0x3', '2024-01-03T00:00:00Z', 'out', DOGE, 50, MARKET),
+          mv('0x3', '2024-01-03T00:00:00Z', 'in', ETH, 1.5, MARKET),
+        ],
+        [fee('0x1', '2024-01-01T00:00:00Z', 0.001), fee('0x2', '2024-01-02T00:00:00Z', 0.001), fee('0x3', '2024-01-03T00:00:00Z', 0.001)],
+      );
+      const doge = r.tokens.find((t) => t.key === DOGE.key)!;
+      expect(doge.realizedPnlUsd).toBeCloseTo(1000);
+      expect(doge.realizedPnlAfterGasUsd).toBeCloseTo(994); // $2 × 3 txs
+      expect(r.totals.realizedPnlAfterGasUsd).toBeCloseTo(994);
+    });
+  });
+
   describe('moves between your own wallets', () => {
     const BASE_ETH: LedgerAsset = { ...ETH, key: 'base:native', chain: 'base' };
     const SOL: LedgerAsset = { key: 'solana:native', chain: 'solana', kind: 'native', contract: '', name: 'Solana', symbol: 'SOL', price: { kind: 'native', symbol: 'SOL' } };

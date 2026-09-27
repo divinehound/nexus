@@ -178,8 +178,12 @@ function MonthTooltip({
         <span className="tabular-nums text-white">{usdSigned(net)}</span>
       </div>
       <div className="flex justify-between text-gray-300">
-        <span>Realized PnL</span>
+        <span>Realized P/L</span>
         <span className="tabular-nums text-white">{usdSigned(month.realizedPnlUsd)}</span>
+      </div>
+      <div className="flex justify-between text-gray-400">
+        <span>after gas</span>
+        <span className="tabular-nums text-gray-200">{usdSigned(month.realizedPnlAfterGasUsd)}</span>
       </div>
     </div>
   );
