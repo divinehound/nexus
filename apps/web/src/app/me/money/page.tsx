@@ -19,7 +19,7 @@ import { ActivityList } from './activity-list';
 import { CashflowChart, IN_COLOR, OUT_COLOR } from './cashflow-chart';
 import { CounterpartiesTable } from './counterparties';
 import { NftItemsTable } from './nft-items';
-import { AfterGas, Stat } from './ui';
+import { AfterGas, Dual, Stat } from './ui';
 import {
   CATEGORY_LABELS,
   CHAIN_LABELS,
@@ -417,7 +417,6 @@ type Tab = 'collections' | 'tokens' | 'counterparties' | 'fees' | 'activity';
 
 function DetailTabs({ report }: { report: CashflowReport }) {
   const [tab, setTab] = useState<Tab>('collections');
-  const [unit, setUnit] = useState<Unit>('usd');
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'collections', label: `NFT collections (${report.collections.length})` },
     { id: 'tokens', label: `Tokens (${report.tokens.length})` },
@@ -447,12 +446,8 @@ function DetailTabs({ report }: { report: CashflowReport }) {
         ))}
       </div>
       <div className="p-4 md:p-6">
-        {tab === 'collections' && (
-          <PositionsTable rows={report.collections} kind="nft" unit={unit} setUnit={setUnit} />
-        )}
-        {tab === 'tokens' && (
-          <PositionsTable rows={report.tokens} kind="fungible" unit={unit} setUnit={setUnit} />
-        )}
+        {tab === 'collections' && <PositionsTable rows={report.collections} kind="nft" />}
+        {tab === 'tokens' && <PositionsTable rows={report.tokens} kind="fungible" />}
         {tab === 'counterparties' && <CounterpartiesTable report={report} />}
         {tab === 'fees' && <FeesTable report={report} />}
         {tab === 'activity' && <ActivityList report={report} />}
@@ -460,8 +455,6 @@ function DetailTabs({ report }: { report: CashflowReport }) {
     </section>
   );
 }
-
-type Unit = 'usd' | 'native';
 
 /** Sum a native-coin field per symbol and format as "+0.4 ETH · −12 SOL". */
 function perSymbol(
@@ -474,51 +467,10 @@ function perSymbol(
   const parts = [...sums.entries()]
     .filter(([, v]) => Math.abs(v) > 1e-9)
     .map(([sym, v]) => nativeAmount(v, sym, signed));
-  return parts.length ? parts.join(' · ') : '—';
+  return parts.length ? parts.join(' · ') : '';
 }
 
-function UnitToggle({ unit, setUnit }: { unit: Unit; setUnit: (u: Unit) => void }) {
-  return (
-    <div
-      className="flex items-center gap-2 text-xs text-gray-400"
-      role="group"
-      aria-label="Show values in"
-    >
-      <span>Show values in</span>
-      {(
-        [
-          ['usd', 'USD'],
-          ['native', 'Coin (ETH, SOL…)'],
-        ] as const
-      ).map(([id, label]) => (
-        <button
-          key={id}
-          type="button"
-          aria-pressed={unit === id}
-          onClick={() => setUnit(id)}
-          className={cn(
-            'rounded-md px-2 py-1 transition-colors',
-            unit === id ? 'bg-purple-500/15 text-purple-300' : 'hover:bg-gray-800 hover:text-white',
-          )}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function PositionsTable({
-  rows,
-  kind,
-  unit,
-  setUnit,
-}: {
-  rows: CashflowPosition[];
-  kind: 'nft' | 'fungible';
-  unit: Unit;
-  setUnit: (u: Unit) => void;
-}) {
+function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' | 'fungible' }) {
   const [showAll, setShowAll] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (key: string) =>
@@ -545,36 +497,32 @@ function PositionsTable({
     { spent: 0, proceeds: 0, pnl: 0, pnlAfterGas: 0, tradeGain: 0, priceMove: 0, gas: 0, open: 0 },
   );
   const qtyUnit = kind === 'nft' ? 'items' : 'amount';
-  const native = unit === 'native';
+  const pnlNative = perSymbol(traded, (r) => r.realizedPnlNative, true);
 
   return (
     <div>
-      <div className="mb-3 flex justify-end">
-        <UnitToggle unit={unit} setUnit={setUnit} />
-      </div>
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
         <Stat
           label="Total spent"
-          value={native ? perSymbol(traded, (r) => r.spentNative, false) : usd(totals.spent)}
+          value={usd(totals.spent)}
+          sub={perSymbol(traded, (r) => r.spentNative, false)}
         />
         <Stat
           label="Total sold for"
-          value={native ? perSymbol(traded, (r) => r.proceedsNative, false) : usd(totals.proceeds)}
+          value={usd(totals.proceeds)}
+          sub={perSymbol(traded, (r) => r.proceedsNative, false)}
         />
-        {native ? (
-          <Stat
-            label="Realized profit / loss"
-            value={perSymbol(traded, (r) => r.realizedPnlNative, true)}
-            sub="in each chain's own coin"
-          />
-        ) : (
-          <Stat
-            label="Realized profit / loss"
-            value={usdSigned(totals.pnl)}
-            valueClass={pnlClass(totals.pnl)}
-            sub={<AfterGas value={totals.pnlAfterGas} />}
-          />
-        )}
+        <Stat
+          label="Realized profit / loss"
+          value={usdSigned(totals.pnl)}
+          valueClass={pnlClass(totals.pnl)}
+          sub={
+            <>
+              {pnlNative && <div className="text-gray-300">{pnlNative}</div>}
+              <AfterGas value={totals.pnlAfterGas} />
+            </>
+          }
+        />
         <Stat
           label="From trading vs. coin price"
           value={usdSigned(totals.tradeGain)}
@@ -595,9 +543,10 @@ function PositionsTable({
         />
       </div>
       <p className="mb-3 text-xs text-gray-500">
-        {native
-          ? 'Coin view: what you paid is converted to ETH/SOL/… at the buy-day price and what you received at the sale-day price, so a profit in ETH shows as a profit even if ETH fell.'
-          : '“From trading” is your profit in the coin itself, valued at the sale-day price; “coin price moved” is the rest — the coin getting cheaper or pricier while you held.'}
+        Each amount shows USD (at that day&apos;s price) and, underneath, the chain&apos;s own coin
+        — cost at the buy-day rate, proceeds at the sale-day rate. They can disagree: a trade that
+        made ETH still loses USD if ETH fell while you held. &ldquo;From trading&rdquo; is your coin
+        profit valued at the sale-day price; &ldquo;coin price moved&rdquo; is the rest.
       </p>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -614,21 +563,19 @@ function PositionsTable({
               >
                 Realized P/L
               </th>
-              {!native && (
-                <th
-                  className="py-2 pr-4 text-right font-medium"
-                  title="Also subtracts gas paid to buy or mint what you sold, and gas paid to sell it"
-                >
-                  P/L after gas
-                </th>
-              )}
+              <th
+                className="py-2 pr-4 text-right font-medium"
+                title="Also subtracts gas paid to buy or mint what you sold, and gas paid to sell it"
+              >
+                P/L after gas
+              </th>
               <th className="py-2 text-right font-medium">Still held</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/70">
             {visible.map((r) => (
               <Fragment key={r.key}>
-                <tr>
+                <tr className="align-top">
                   <td className="py-2 pr-4">
                     {kind === 'nft' && r.items.length > 0 ? (
                       <button
@@ -673,61 +620,61 @@ function PositionsTable({
                     {r.qtyBought ? qty(r.qtyBought) : '—'}
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums">
-                    {r.spentUsd
-                      ? native
-                        ? nativeAmount(r.spentNative, r.nativeSymbol, false)
-                        : usd(r.spentUsd)
-                      : '—'}
+                    {r.spentUsd ? (
+                      <Dual usd={r.spentUsd} native={r.spentNative} symbol={r.nativeSymbol} />
+                    ) : (
+                      '—'
+                    )}
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums text-gray-300">
                     {r.qtySold ? qty(r.qtySold) : '—'}
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums">
-                    {r.proceedsUsd
-                      ? native
-                        ? nativeAmount(r.proceedsNative, r.nativeSymbol, false)
-                        : usd(r.proceedsUsd)
-                      : '—'}
+                    {r.proceedsUsd ? (
+                      <Dual usd={r.proceedsUsd} native={r.proceedsNative} symbol={r.nativeSymbol} />
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 text-right tabular-nums">
+                    {r.sellCount > 0 ? (
+                      <>
+                        <Dual
+                          usd={r.realizedPnlUsd}
+                          native={r.realizedPnlNative}
+                          symbol={r.nativeSymbol}
+                          signed
+                        />
+                        {r.qtySoldWithoutBasis > 0 && (
+                          <span
+                            className="cursor-help text-xs text-yellow-500"
+                            title={`${qty(r.qtySoldWithoutBasis)} sold without a recorded purchase (airdrop, gift, or older than the scanned history) — counted at $0 cost.`}
+                          >
+                            * some at $0 cost
+                          </span>
+                        )}
+                        {Math.abs(r.priceMoveUsd) >= 1 && (
+                          <div className="text-xs text-gray-500">
+                            trade {usdSigned(r.tradeGainUsd)} · {r.nativeSymbol} price{' '}
+                            {usdSigned(r.priceMoveUsd)}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      '—'
+                    )}
                   </td>
                   <td
                     className={cn(
                       'py-2 pr-4 text-right tabular-nums',
-                      pnlClass(native ? r.realizedPnlNative : r.realizedPnlUsd),
+                      pnlClass(r.realizedPnlAfterGasUsd),
                     )}
                   >
-                    {r.sellCount > 0
-                      ? native
-                        ? nativeAmount(r.realizedPnlNative, r.nativeSymbol)
-                        : usdSigned(r.realizedPnlUsd)
-                      : '—'}
-                    {r.qtySoldWithoutBasis > 0 && (
-                      <span
-                        className="ml-1 cursor-help text-xs text-yellow-500"
-                        title={`${qty(r.qtySoldWithoutBasis)} sold without a recorded purchase (airdrop, gift, or older than the scanned history) — counted at $0 cost.`}
-                      >
-                        *
-                      </span>
-                    )}
-                    {!native && r.sellCount > 0 && Math.abs(r.priceMoveUsd) >= 1 && (
-                      <div className="text-xs text-gray-500">
-                        trade {usdSigned(r.tradeGainUsd)} · {r.nativeSymbol} price{' '}
-                        {usdSigned(r.priceMoveUsd)}
-                      </div>
+                    {r.sellCount > 0 ? usdSigned(r.realizedPnlAfterGasUsd) : '—'}
+                    {r.gasUsd > 0 && (
+                      <div className="text-xs text-gray-500">{usd(r.gasUsd)} total gas</div>
                     )}
                   </td>
-                  {!native && (
-                    <td
-                      className={cn(
-                        'py-2 pr-4 text-right tabular-nums',
-                        pnlClass(r.realizedPnlAfterGasUsd),
-                      )}
-                    >
-                      {r.sellCount > 0 ? usdSigned(r.realizedPnlAfterGasUsd) : '—'}
-                      {r.gasUsd > 0 && (
-                        <div className="text-xs text-gray-500">{usd(r.gasUsd)} total gas</div>
-                      )}
-                    </td>
-                  )}
                   <td className="py-2 text-right tabular-nums text-gray-300">
                     {r.qtyHeld > 0 ? qty(r.qtyHeld) : '—'}
                     {r.openCostBasisUsd > 0 && (
@@ -737,8 +684,8 @@ function PositionsTable({
                 </tr>
                 {expanded.has(r.key) && (
                   <tr>
-                    <td colSpan={native ? 7 : 8} className="pb-4">
-                      <NftItemsTable position={r} native={native} />
+                    <td colSpan={8} className="pb-4">
+                      <NftItemsTable position={r} />
                     </td>
                   </tr>
                 )}
@@ -746,7 +693,7 @@ function PositionsTable({
             ))}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={native ? 7 : 8} className="py-6 text-center text-gray-500">
+                <td colSpan={8} className="py-6 text-center text-gray-500">
                   No {kind === 'nft' ? 'NFT' : 'token'} buys or sales found.
                 </td>
               </tr>

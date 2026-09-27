@@ -9,6 +9,7 @@ import type {
 } from '@nexus/types';
 import { cn } from '@/lib/utils';
 import { nativeAmount, pnlClass, txExplorerUrl, usd, usdSigned } from './format';
+import { Dual } from './ui';
 
 const ACQUIRED_LABELS: Record<CashflowNftAcquiredVia, string> = {
   purchase: 'Bought',
@@ -27,7 +28,7 @@ const DISPOSED_LABELS: Record<CashflowNftDisposedVia, string> = {
 };
 
 type Filter = 'all' | 'sold' | 'held';
-type Sort = 'recent' | 'best' | 'worst' | 'longest';
+type Sort = 'recent' | 'best' | 'worst' | 'best_native' | 'worst_native' | 'longest';
 const PAGE = 50;
 
 function formatHold(seconds: number | null): string {
@@ -59,49 +60,47 @@ function TxLink({
   );
 }
 
-function PnlText({
-  item,
-  native,
-  symbol,
-}: {
-  item: CashflowNftItem;
-  native: boolean;
-  symbol: string;
-}) {
-  const v = (native ? item.realizedPnlNative : item.realizedPnlUsd) ?? 0;
-  return <span className={pnlClass(v)}>{native ? nativeAmount(v, symbol) : usdSigned(v)}</span>;
+function PnlText({ item, symbol }: { item: CashflowNftItem; symbol: string }) {
+  const u = item.realizedPnlUsd ?? 0;
+  return (
+    <>
+      <span className={pnlClass(u)}>{usdSigned(u)}</span>
+      {item.realizedPnlNative !== null && (
+        <span className={pnlClass(item.realizedPnlNative)}>
+          {' '}
+          / {nativeAmount(item.realizedPnlNative, symbol)}
+        </span>
+      )}
+    </>
+  );
 }
 
 /** One row per NFT (or per round trip when the same token was flipped more than once). */
-export function NftItemsTable({
-  position,
-  native,
-}: {
-  position: CashflowPosition;
-  native: boolean;
-}) {
+export function NftItemsTable({ position }: { position: CashflowPosition }) {
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('recent');
   const [limit, setLimit] = useState(PAGE);
   const items = position.items;
   const sym = position.nativeSymbol;
-  const pnlOf = (i: CashflowNftItem) => (native ? i.realizedPnlNative : i.realizedPnlUsd);
 
   const summary = useMemo(() => {
-    const pnl = (i: CashflowNftItem) => (native ? i.realizedPnlNative : i.realizedPnlUsd);
-    const sold = items.filter((i) => pnl(i) !== null);
-    const winners = sold.filter((i) => (pnl(i) ?? 0) > 0);
-    const ranked = [...sold].sort((a, b) => (pnl(b) ?? 0) - (pnl(a) ?? 0));
+    const sold = items.filter((i) => i.realizedPnlUsd !== null);
+    const winsUsd = sold.filter((i) => (i.realizedPnlUsd ?? 0) > 0).length;
+    const soldNative = sold.filter((i) => i.realizedPnlNative !== null);
+    const winsNative = soldNative.filter((i) => (i.realizedPnlNative ?? 0) > 0).length;
+    const ranked = [...sold].sort((a, b) => (b.realizedPnlUsd ?? 0) - (a.realizedPnlUsd ?? 0));
     const holds = sold.map((i) => i.holdSeconds).filter((h): h is number => h !== null);
     return {
       sold: sold.length,
-      winners: winners.length,
+      winsUsd,
+      soldNative: soldNative.length,
+      winsNative,
       best: ranked[0] ?? null,
       worst: ranked.length > 1 ? ranked[ranked.length - 1] : null,
       avgHold: holds.length ? holds.reduce((a, b) => a + b, 0) / holds.length : null,
       held: items.filter((i) => i.disposedAt === null).length,
     };
-  }, [items, native]);
+  }, [items]);
 
   const rows = useMemo(() => {
     const filtered = items.filter((i) =>
@@ -112,22 +111,19 @@ export function NftItemsTable({
           : true,
     );
     if (sort === 'recent') return filtered; // already newest first from the API
-    const pnl = (i: CashflowNftItem) => (native ? i.realizedPnlNative : i.realizedPnlUsd);
+    if (sort === 'longest')
+      return [...filtered].sort((a, b) => (b.holdSeconds ?? -1) - (a.holdSeconds ?? -1));
+    const byNative = sort === 'best_native' || sort === 'worst_native';
+    const desc = sort === 'best' || sort === 'best_native';
+    const pnl = (i: CashflowNftItem) => (byNative ? i.realizedPnlNative : i.realizedPnlUsd);
     return [...filtered].sort((a, b) => {
-      if (sort === 'longest') return (b.holdSeconds ?? -1) - (a.holdSeconds ?? -1);
       // Unsold items sink to the bottom for win/loss sorts.
       const pa = pnl(a);
       const pb = pnl(b);
       if (pa === null || pb === null) return pa === null ? (pb === null ? 0 : 1) : -1;
-      return sort === 'best' ? pb - pa : pa - pb;
+      return desc ? pb - pa : pa - pb;
     });
-  }, [items, filter, sort, native]);
-
-  const money = (usdValue: number | null, nativeValue: number | null, signed = false) => {
-    if (native) return nativeValue === null ? '—' : nativeAmount(nativeValue, sym, signed);
-    if (usdValue === null) return '—';
-    return signed ? usdSigned(usdValue) : usd(usdValue);
-  };
+  }, [items, filter, sort]);
 
   if (items.length === 0) {
     return (
@@ -137,6 +133,8 @@ export function NftItemsTable({
     );
   }
 
+  const pct = (n: number, d: number) => `${Math.round((n / d) * 100)}%`;
+
   return (
     <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-3">
       <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400">
@@ -144,22 +142,26 @@ export function NftItemsTable({
           <span className="text-gray-200">{summary.sold}</span> sold
           {summary.sold > 0 && (
             <>
-              {' '}
-              · <span className="text-gray-200">{summary.winners}</span> at a profit (
-              {Math.round((summary.winners / summary.sold) * 100)}%)
+              {' · '}
+              <span className="text-gray-200">{summary.winsUsd}</span> at a profit in USD (
+              {pct(summary.winsUsd, summary.sold)})
+              {summary.soldNative > 0 && (
+                <>
+                  , <span className="text-gray-200">{summary.winsNative}</span> in {sym} (
+                  {pct(summary.winsNative, summary.soldNative)})
+                </>
+              )}
             </>
           )}
         </span>
         {summary.best && (
           <span>
-            best <PnlText item={summary.best} native={native} symbol={sym} /> (#
-            {summary.best.tokenId})
+            best <PnlText item={summary.best} symbol={sym} /> (#{summary.best.tokenId})
           </span>
         )}
         {summary.worst && (
           <span>
-            worst <PnlText item={summary.worst} native={native} symbol={sym} /> (#
-            {summary.worst.tokenId})
+            worst <PnlText item={summary.worst} symbol={sym} /> (#{summary.worst.tokenId})
           </span>
         )}
         {summary.avgHold !== null && <span>avg hold {formatHold(summary.avgHold)}</span>}
@@ -203,8 +205,10 @@ export function NftItemsTable({
           className="ml-auto rounded-md border border-gray-700 bg-gray-900 px-2 py-0.5 text-xs text-gray-200"
         >
           <option value="recent">Most recent</option>
-          <option value="best">Biggest profit</option>
-          <option value="worst">Biggest loss</option>
+          <option value="best">Biggest profit ($)</option>
+          <option value="worst">Biggest loss ($)</option>
+          <option value="best_native">Biggest profit ({sym})</option>
+          <option value="worst_native">Biggest loss ({sym})</option>
           <option value="longest">Longest held</option>
         </select>
       </div>
@@ -219,90 +223,83 @@ export function NftItemsTable({
               <th className="py-1.5 pr-3 font-medium">Left your wallets</th>
               <th className="py-1.5 pr-3 text-right font-medium">Sold for</th>
               <th className="py-1.5 pr-3 text-right font-medium">P/L</th>
-              {!native && <th className="py-1.5 pr-3 text-right font-medium">After gas</th>}
+              <th className="py-1.5 pr-3 text-right font-medium">After gas</th>
               <th className="py-1.5 text-right font-medium">Held</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/60">
-            {rows.slice(0, limit).map((i, idx) => {
-              const pnl = pnlOf(i);
-              return (
-                <tr
-                  key={`${i.tokenId}:${i.acquireTxHash ?? 'x'}:${i.disposeTxHash ?? 'open'}:${idx}`}
-                >
-                  <td className="py-1.5 pr-3 font-mono text-gray-200">
-                    #
-                    {i.tokenId.length > 12
-                      ? `${i.tokenId.slice(0, 6)}…${i.tokenId.slice(-4)}`
-                      : i.tokenId}
-                    {i.qty !== 1 && <span className="ml-1 text-gray-500">×{i.qty}</span>}
-                  </td>
-                  <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
-                    <TxLink chain={position.chain} hash={i.acquireTxHash}>
-                      {ACQUIRED_LABELS[i.acquiredVia]}
-                      {i.acquiredAt && (
-                        <span className="text-gray-500"> · {shortDate(i.acquiredAt)}</span>
-                      )}
-                    </TxLink>
-                  </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
-                    {i.acquiredVia === 'unknown' ? '—' : money(i.costUsd, i.costNative)}
-                  </td>
-                  <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
-                    {i.disposedVia && i.disposedAt ? (
-                      <TxLink chain={position.chain} hash={i.disposeTxHash}>
-                        {DISPOSED_LABELS[i.disposedVia]}
-                        <span className="text-gray-500"> · {shortDate(i.disposedAt)}</span>
-                      </TxLink>
-                    ) : (
-                      <span className="text-gray-500">Still held</span>
+            {rows.slice(0, limit).map((i, idx) => (
+              <tr
+                key={`${i.tokenId}:${i.acquireTxHash ?? 'x'}:${i.disposeTxHash ?? 'open'}:${idx}`}
+                className="align-top"
+              >
+                <td className="py-1.5 pr-3 font-mono text-gray-200">
+                  #
+                  {i.tokenId.length > 12
+                    ? `${i.tokenId.slice(0, 6)}…${i.tokenId.slice(-4)}`
+                    : i.tokenId}
+                  {i.qty !== 1 && <span className="ml-1 text-gray-500">×{i.qty}</span>}
+                </td>
+                <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
+                  <TxLink chain={position.chain} hash={i.acquireTxHash}>
+                    {ACQUIRED_LABELS[i.acquiredVia]}
+                    {i.acquiredAt && (
+                      <span className="text-gray-500"> · {shortDate(i.acquiredAt)}</span>
                     )}
-                  </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
-                    {money(i.proceedsUsd, i.proceedsNative)}
-                  </td>
-                  <td
-                    className={cn(
-                      'py-1.5 pr-3 text-right tabular-nums',
-                      pnl !== null && pnlClass(pnl),
-                    )}
-                  >
-                    {pnl === null ? '—' : native ? nativeAmount(pnl, sym) : usdSigned(pnl)}
-                    {i.acquiredVia === 'unknown' && i.realizedPnlUsd !== null && (
-                      <span
-                        className="ml-1 cursor-help text-yellow-500"
-                        title="Purchase not found in your history — counted at $0 cost."
-                      >
-                        *
-                      </span>
-                    )}
-                  </td>
-                  {!native && (
-                    <td
-                      className={cn(
-                        'py-1.5 pr-3 text-right tabular-nums',
-                        i.realizedPnlAfterGasUsd !== null && pnlClass(i.realizedPnlAfterGasUsd),
-                      )}
-                      title={`Gas: ${usd(i.buyGasUsd)} to acquire, ${usd(i.sellGasUsd)} to ${i.disposedVia === 'sale' ? 'sell' : 'move'}`}
-                    >
-                      {i.realizedPnlAfterGasUsd === null
-                        ? '—'
-                        : usdSigned(i.realizedPnlAfterGasUsd)}
-                    </td>
+                  </TxLink>
+                </td>
+                <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
+                  {i.acquiredVia === 'unknown' ? (
+                    '—'
+                  ) : (
+                    <Dual usd={i.costUsd} native={i.costNative} symbol={sym} />
                   )}
-                  <td className="py-1.5 text-right tabular-nums text-gray-400">
-                    {i.disposedAt
-                      ? formatHold(i.holdSeconds)
-                      : i.acquiredAt
-                        ? formatHold((Date.now() - Date.parse(i.acquiredAt)) / 1000)
-                        : '—'}
-                  </td>
-                </tr>
-              );
-            })}
+                </td>
+                <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
+                  {i.disposedVia && i.disposedAt ? (
+                    <TxLink chain={position.chain} hash={i.disposeTxHash}>
+                      {DISPOSED_LABELS[i.disposedVia]}
+                      <span className="text-gray-500"> · {shortDate(i.disposedAt)}</span>
+                    </TxLink>
+                  ) : (
+                    <span className="text-gray-500">Still held</span>
+                  )}
+                </td>
+                <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
+                  <Dual usd={i.proceedsUsd} native={i.proceedsNative} symbol={sym} />
+                </td>
+                <td className="py-1.5 pr-3 text-right tabular-nums">
+                  <Dual usd={i.realizedPnlUsd} native={i.realizedPnlNative} symbol={sym} signed />
+                  {i.acquiredVia === 'unknown' && i.realizedPnlUsd !== null && (
+                    <span
+                      className="cursor-help text-yellow-500"
+                      title="Purchase not found in your history — counted at $0 cost."
+                    >
+                      * $0 cost
+                    </span>
+                  )}
+                </td>
+                <td
+                  className={cn(
+                    'py-1.5 pr-3 text-right tabular-nums',
+                    i.realizedPnlAfterGasUsd !== null && pnlClass(i.realizedPnlAfterGasUsd),
+                  )}
+                  title={`Gas: ${usd(i.buyGasUsd)} to acquire, ${usd(i.sellGasUsd)} to ${i.disposedVia === 'sale' ? 'sell' : 'move'}`}
+                >
+                  {i.realizedPnlAfterGasUsd === null ? '—' : usdSigned(i.realizedPnlAfterGasUsd)}
+                </td>
+                <td className="py-1.5 text-right tabular-nums text-gray-400">
+                  {i.disposedAt
+                    ? formatHold(i.holdSeconds)
+                    : i.acquiredAt
+                      ? formatHold((Date.now() - Date.parse(i.acquiredAt)) / 1000)
+                      : '—'}
+                </td>
+              </tr>
+            ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={native ? 7 : 8} className="py-4 text-center text-gray-500">
+                <td colSpan={8} className="py-4 text-center text-gray-500">
                   Nothing here.
                 </td>
               </tr>
