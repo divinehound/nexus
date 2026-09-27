@@ -441,16 +441,19 @@ function CounterpartiesTable({ report }: { report: CashflowReport }) {
   const received = report.counterparties.reduce((s, c) => s + c.receivedUsd, 0);
   return (
     <div>
-      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3">
+      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="Sent to other wallets" value={usd(sent)} swatch={OUT_COLOR} />
         <Stat label="Received from other wallets" value={usd(received)} swatch={IN_COLOR} />
         <Stat
-          label="Moved between your own wallets"
+          label="Moved between your wallets"
           value={`${report.ownWalletTransfers.count} tx · ${usd(report.ownWalletTransfers.usd)}`}
         />
+        <Stat label="Bridged between chains" value={`${report.bridges.count} tx · ${usd(report.bridges.usd)}`} />
       </div>
       <p className="mb-3 text-xs text-gray-500">
-        Plain transfers of ETH/SOL/POL/APE and stablecoins. Transfers between your own linked wallets are excluded from in/out.
+        Plain transfers of ETH/SOL/POL/APE and stablecoins. Moves between your own linked wallets — on the same chain or bridged
+        across chains — aren&apos;t counted as money in or out; only gas and what the bridge kept count as fees
+        {report.bridges.feesUsd > 0 ? ` (${usd(report.bridges.feesUsd)} in bridge fees)` : ''}.
       </p>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -549,7 +552,7 @@ const ACTIVITY_FILTERS: Array<{ id: string; label: string; types: CashflowTxType
   { id: 'all', label: 'All', types: null },
   { id: 'buys', label: 'Buys & mints', types: ['nft_purchase', 'nft_mint', 'token_purchase'] },
   { id: 'sales', label: 'Sales', types: ['nft_sale', 'token_sale'] },
-  { id: 'transfers', label: 'Transfers', types: ['transfer_in', 'transfer_out', 'sent_asset', 'received_asset', 'own_wallet_transfer'] },
+  { id: 'transfers', label: 'Transfers', types: ['transfer_in', 'transfer_out', 'sent_asset', 'received_asset', 'own_wallet_transfer', 'bridge'] },
   { id: 'swaps', label: 'Swaps', types: ['swap'] },
 ];
 const PAGE = 50;
@@ -636,7 +639,13 @@ function Coverage({ report }: { report: CashflowReport }) {
       <ul className="mt-3 list-disc space-y-1 pl-5">
         <li>Money in/out counts native coins (ETH, SOL, POL, APE), their wrapped versions, and USD stablecoins, valued at that day&apos;s price.</li>
         <li>Profit/loss per NFT is sale price minus what you paid for that exact token; tokens use average cost. Gas is tracked separately, not added to cost.</li>
-        <li>Swaps between two coins count as conversions, not spending. Moves between your own linked wallets are excluded.</li>
+        <li>Swaps between two coins count as conversions, not spending.</li>
+        <li>
+          Moves between your own linked wallets are never counted twice: same-chain transfers are dropped, and a bridge is
+          recognised by pairing money leaving one chain with the same amount (less a bridge fee) reaching one of your wallets on
+          another chain — within an hour, or up to 8 days for full-amount canonical withdrawals.
+        </li>
+        <li>Wallets you haven&apos;t linked count as other people — link them to exclude those transfers.</li>
         {report.notes.map((n) => (
           <li key={n}>{n}</li>
         ))}

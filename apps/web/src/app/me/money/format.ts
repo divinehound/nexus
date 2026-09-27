@@ -47,7 +47,7 @@ export const CATEGORY_LABELS: Record<CashflowCategory, string> = {
   nft_mint: 'NFT mints',
   token_purchase: 'Token buys',
   transfer_out: 'Sent to other wallets',
-  gas_fees: 'Gas & network fees',
+  gas_fees: 'Gas, network & bridge fees',
   nft_sale: 'NFT sales',
   token_sale: 'Token sales',
   transfer_in: 'Received from other wallets',
@@ -68,6 +68,7 @@ export const TX_TYPE_LABELS: Record<CashflowTxType, string> = {
   received_asset: 'Received asset',
   sent_asset: 'Sent asset',
   own_wallet_transfer: 'Own wallets',
+  bridge: 'Bridge',
   contract_interaction: 'Gas only',
 };
 
@@ -77,45 +78,36 @@ export const CHAIN_LABELS: Record<string, string> = {
   abstract: 'Abstract',
   apechain: 'ApeChain',
   polygon: 'Polygon',
+  arbitrum: 'Arbitrum',
+  optimism: 'Optimism',
+  zora: 'Zora',
+  blast: 'Blast',
+  linea: 'Linea',
   solana: 'Solana',
 };
 
+const EXPLORERS: Record<string, { tx: string; address: string }> = {
+  ethereum: { tx: 'https://etherscan.io/tx/', address: 'https://etherscan.io/address/' },
+  base: { tx: 'https://basescan.org/tx/', address: 'https://basescan.org/address/' },
+  polygon: { tx: 'https://polygonscan.com/tx/', address: 'https://polygonscan.com/address/' },
+  abstract: { tx: 'https://abscan.org/tx/', address: 'https://abscan.org/address/' },
+  apechain: { tx: 'https://apescan.io/tx/', address: 'https://apescan.io/address/' },
+  arbitrum: { tx: 'https://arbiscan.io/tx/', address: 'https://arbiscan.io/address/' },
+  optimism: { tx: 'https://optimistic.etherscan.io/tx/', address: 'https://optimistic.etherscan.io/address/' },
+  zora: { tx: 'https://explorer.zora.energy/tx/', address: 'https://explorer.zora.energy/address/' },
+  blast: { tx: 'https://blastscan.io/tx/', address: 'https://blastscan.io/address/' },
+  linea: { tx: 'https://lineascan.build/tx/', address: 'https://lineascan.build/address/' },
+  solana: { tx: 'https://solscan.io/tx/', address: 'https://solscan.io/account/' },
+};
+
 export function txExplorerUrl(chain: string, hash: string): string | null {
-  switch (chain) {
-    case 'ethereum':
-      return `https://etherscan.io/tx/${hash}`;
-    case 'base':
-      return `https://basescan.org/tx/${hash}`;
-    case 'polygon':
-      return `https://polygonscan.com/tx/${hash}`;
-    case 'abstract':
-      return `https://abscan.org/tx/${hash}`;
-    case 'apechain':
-      return `https://apescan.io/tx/${hash}`;
-    case 'solana':
-      return `https://solscan.io/tx/${hash}`;
-    default:
-      return null;
-  }
+  const e = EXPLORERS[chain];
+  return e ? `${e.tx}${hash}` : null;
 }
 
 export function addressExplorerUrl(chain: string, address: string): string | null {
-  switch (chain) {
-    case 'ethereum':
-      return `https://etherscan.io/address/${address}`;
-    case 'base':
-      return `https://basescan.org/address/${address}`;
-    case 'polygon':
-      return `https://polygonscan.com/address/${address}`;
-    case 'abstract':
-      return `https://abscan.org/address/${address}`;
-    case 'apechain':
-      return `https://apescan.io/address/${address}`;
-    case 'solana':
-      return `https://solscan.io/account/${address}`;
-    default:
-      return null;
-  }
+  const e = EXPLORERS[chain];
+  return e ? `${e.address}${address}` : null;
 }
 
 export function relativeTime(iso: string): string {

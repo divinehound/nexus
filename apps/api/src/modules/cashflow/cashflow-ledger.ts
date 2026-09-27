@@ -171,7 +171,6 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
   const isOwn = (chain: string, addr: string) => addr !== '' && own.has(addressIdentity(chain, addr));
 
   // ── Group movements and fees by transaction ──
-  type TxGroup = { chain: string; txHash: string; timestamp: Date; wallet: string; movements: LedgerMovement[]; fee: LedgerFee | null };
   const groups = new Map<string, TxGroup>();
   const groupFor = (chain: string, txHash: string, timestamp: Date, wallet: string) => {
     const key = `${chain}:${txHash}`;
@@ -194,7 +193,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
 
   const ordered = [...groups.values()].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime() || a.txHash.localeCompare(b.txHash));
 
-  // ── Accumulators ──
+  // ── Pass 1: split each tx into own-wallet moves, money legs, and asset legs ──
   let unpricedMovements = 0;
   const priceLeg = (m: LedgerMovement): number | null => {
     if (!m.asset.price) return null;
@@ -205,7 +204,13 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     }
     return rate * m.amount;
   };
+  const analyses = new Map<TxGroup, TxAnalysis>();
+  for (const g of ordered) analyses.set(g, analyze(g, isOwn, priceLeg, pricer));
 
+  // ── Pass 2: pair cross-chain moves between the user's own wallets ──
+  const bridgeRoles = matchBridges(ordered, analyses);
+
+  // ── Accumulators ──
   const months = new Map<string, CashflowMonth>();
   const monthFor = (d: Date) => {
     const key = monthKey(d);
@@ -267,6 +272,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
 
   const feesByChain = new Map<string, CashflowChainFees>();
   const ownTransfers = { count: 0, usd: 0 };
+  const bridges = { count: 0, usd: 0, feesUsd: 0 };
   const activity: CashflowActivity[] = [];
   let txCount = 0;
   let firstAt: Date | null = null;
@@ -306,18 +312,50 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       book(at, 'out', 'gas_fees', feeUsd);
     }
 
-    // ── Split own-wallet moves from external legs ──
-    const external: LedgerMovement[] = [];
-    let ownMoveUsd = 0;
-    let hadOwnMove = false;
-    for (const m of g.movements) {
-      if (isOwn(m.chain, m.counterparty)) {
-        hadOwnMove = true;
-        // Both sides are scanned; count value once, from the sending side.
-        if (m.direction === 'out') ownMoveUsd += (m.asset.price ? priceLegQuiet(pricer, m) : 0) ?? 0;
-      } else {
-        external.push(m);
+    const a = analyses.get(g)!;
+    const { external, hadOwnMove, ownMoveUsd, pricedIn, pricedOut, unIn, unOut, moneyIn, moneyOut } = a;
+    const bridge = bridgeRoles.get(g);
+
+    if (bridge) {
+      // ── One side of a cross-chain move between the user's own wallets ──
+      txCount++;
+      if (!firstAt || at < firstAt) firstAt = at;
+      if (!lastAt || at > lastAt) lastAt = at;
+      const pair = bridge.pair;
+      let bridgeFee = 0;
+      if (bridge.side === 'out') {
+        // Whatever didn't arrive is the bridge's fee — a real cost, like gas.
+        bridgeFee = Math.max(0, bridge.self.usd - pair.usd);
+        if (bridgeFee > 0) {
+          totalFees += bridgeFee;
+          monthFor(at).feesUsd += bridgeFee;
+          book(at, 'out', 'gas_fees', bridgeFee);
+        }
+        bridges.count++;
+        bridges.usd += bridge.self.usd;
+        bridges.feesUsd += bridgeFee;
       }
+      const legsSrc = bridge.self.legs;
+      const phrase = assetPhrase(legsSrc.map((l) => l.movement));
+      const label =
+        bridge.side === 'out'
+          ? `Bridged ${phrase} · ${chainName(g.chain)} → ${chainName(pair.group.chain)}`
+          : `Bridge arrival: ${phrase} from ${chainName(pair.group.chain)}`;
+      activity.push({
+        chain: g.chain,
+        txHash: g.txHash,
+        timestamp: at.toISOString(),
+        wallet: g.wallet,
+        type: 'bridge',
+        label,
+        inUsd: 0,
+        outUsd: feeUsd + bridgeFee,
+        feeUsd: feeUsd + bridgeFee,
+        realizedPnlUsd: null,
+        counterparty: null,
+        legs: legsSrc.map((l) => toLeg(l.movement, l.usd)),
+      });
+      continue;
     }
 
     if (external.length === 0 && !g.fee) {
@@ -331,36 +369,6 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     txCount++;
     if (!firstAt || at < firstAt) firstAt = at;
     if (!lastAt || at > lastAt) lastAt = at;
-
-    // ── Net priced legs per asset (e.g. pay 1 ETH, get 0.2 ETH refund) ──
-    const pricedIn: PricedLeg[] = [];
-    const pricedOut: PricedLeg[] = [];
-    const unIn: LedgerMovement[] = [];
-    const unOut: LedgerMovement[] = [];
-    const netByAsset = new Map<string, { in: LedgerMovement[]; out: LedgerMovement[]; net: number }>();
-    for (const m of external) {
-      if (m.asset.price) {
-        const e = netByAsset.get(m.asset.key) ?? { in: [], out: [], net: 0 };
-        e[m.direction].push(m);
-        e.net += m.direction === 'in' ? m.amount : -m.amount;
-        netByAsset.set(m.asset.key, e);
-      } else {
-        (m.direction === 'in' ? unIn : unOut).push(m);
-      }
-    }
-    for (const e of netByAsset.values()) {
-      if (Math.abs(e.net) <= EPSILON) continue;
-      const dominant = e.net > 0 ? e.in : e.out;
-      const gross = dominant.reduce((s, m) => s + m.amount, 0);
-      const scale = gross > 0 ? Math.abs(e.net) / gross : 0;
-      for (const m of dominant) {
-        const scaled: LedgerMovement = { ...m, amount: m.amount * scale };
-        (e.net > 0 ? pricedIn : pricedOut).push({ movement: scaled, usd: priceLeg(scaled) });
-      }
-    }
-    const sumUsd = (legs: PricedLeg[]) => legs.reduce((s, l) => s + (l.usd ?? 0), 0);
-    const moneyIn = sumUsd(pricedIn);
-    const moneyOut = sumUsd(pricedOut);
 
     let type: CashflowTxType;
     let realized: number | null = null;
@@ -569,11 +577,220 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       .slice(0, 250),
     fees: [...feesByChain.values()].sort((a, b) => b.feesUsd - a.feesUsd),
     ownWalletTransfers: ownTransfers,
+    bridges,
     activity: activity.slice(0, limit),
     coverage: input.coverage,
     notes: input.notes,
   };
 }
+
+interface TxGroup {
+  chain: string;
+  txHash: string;
+  timestamp: Date;
+  wallet: string;
+  movements: LedgerMovement[];
+  fee: LedgerFee | null;
+}
+
+interface TxAnalysis {
+  /** Legs whose counterparty is not one of the user's wallets. */
+  external: LedgerMovement[];
+  hadOwnMove: boolean;
+  /** Value moved between own wallets, counted once from the sending side. */
+  ownMoveUsd: number;
+  /** Money legs arriving from one of the user's own addresses with no sending leg here (bridge deposits). */
+  ownArrivals: PricedLeg[];
+  pricedIn: PricedLeg[];
+  pricedOut: PricedLeg[];
+  unIn: LedgerMovement[];
+  unOut: LedgerMovement[];
+  moneyIn: number;
+  moneyOut: number;
+}
+
+function analyze(
+  g: TxGroup,
+  isOwn: (chain: string, addr: string) => boolean,
+  priceLeg: (m: LedgerMovement) => number | null,
+  pricer: UsdPricer,
+): TxAnalysis {
+  const external: LedgerMovement[] = [];
+  const ownIn: LedgerMovement[] = [];
+  let ownMoveUsd = 0;
+  let hadOwnMove = false;
+  for (const m of g.movements) {
+    if (isOwn(m.chain, m.counterparty)) {
+      hadOwnMove = true;
+      if (m.direction === 'out') {
+        ownMoveUsd += priceLegQuiet(pricer, m) ?? 0;
+      } else {
+        ownIn.push(m);
+      }
+    } else {
+      external.push(m);
+    }
+  }
+  // Own wallets pay gas for transfers they send, so an incoming leg "from" an
+  // own address in a tx we paid no gas for was not sent on this chain: it's
+  // money arriving from another chain (canonical-bridge deposit, or the same
+  // address bridging L1→L2).
+  const ownArrivals: PricedLeg[] = [];
+  if (!g.fee) {
+    for (const m of ownIn) {
+      if (m.asset.price) ownArrivals.push({ movement: m, usd: priceLegQuiet(pricer, m) });
+    }
+  }
+
+  // Net money legs per asset (e.g. pay 1 ETH, get 0.2 ETH refund).
+  const pricedIn: PricedLeg[] = [];
+  const pricedOut: PricedLeg[] = [];
+  const unIn: LedgerMovement[] = [];
+  const unOut: LedgerMovement[] = [];
+  const netByAsset = new Map<string, { in: LedgerMovement[]; out: LedgerMovement[]; net: number }>();
+  for (const m of external) {
+    if (m.asset.price) {
+      const e = netByAsset.get(m.asset.key) ?? { in: [], out: [], net: 0 };
+      e[m.direction].push(m);
+      e.net += m.direction === 'in' ? m.amount : -m.amount;
+      netByAsset.set(m.asset.key, e);
+    } else {
+      (m.direction === 'in' ? unIn : unOut).push(m);
+    }
+  }
+  for (const e of netByAsset.values()) {
+    if (Math.abs(e.net) <= EPSILON) continue;
+    const dominant = e.net > 0 ? e.in : e.out;
+    const gross = dominant.reduce((sum, m) => sum + m.amount, 0);
+    const scale = gross > 0 ? Math.abs(e.net) / gross : 0;
+    for (const m of dominant) {
+      const scaled: LedgerMovement = { ...m, amount: m.amount * scale };
+      (e.net > 0 ? pricedIn : pricedOut).push({ movement: scaled, usd: priceLeg(scaled) });
+    }
+  }
+  const sumUsd = (legs: PricedLeg[]) => legs.reduce((sum, l) => sum + (l.usd ?? 0), 0);
+  return {
+    external,
+    hadOwnMove,
+    ownMoveUsd,
+    ownArrivals,
+    pricedIn,
+    pricedOut,
+    unIn,
+    unOut,
+    moneyIn: sumUsd(pricedIn),
+    moneyOut: sumUsd(pricedOut),
+  };
+}
+
+interface BridgeSide {
+  group: TxGroup;
+  legs: PricedLeg[];
+  /** 'ETH', 'SOL', 'USD', ... when every leg shares one price basis; null if mixed. */
+  unit: string | null;
+  amount: number;
+  usd: number;
+  usdKnown: boolean;
+}
+
+export interface BridgeRole {
+  side: 'out' | 'in';
+  self: BridgeSide;
+  pair: BridgeSide;
+}
+
+const MINUTE = 60_000;
+/** Fast bridges (Relay, Across, CCTP, …) land within minutes and keep a small fee. */
+const FAST_WINDOW_MS = 60 * MINUTE;
+const FAST_MIN_RATIO = 0.97;
+/** Canonical rollup withdrawals take ~7 days but arrive in full. */
+const SLOW_WINDOW_MS = 8 * 24 * 60 * MINUTE;
+const SLOW_MIN_RATIO = 0.999;
+/** Cross-asset hops (SOL → ETH) are matched on USD value. */
+const CROSS_ASSET_MIN_RATIO = 0.95;
+const CLOCK_SKEW_MS = 10 * MINUTE;
+
+function bridgeSide(group: TxGroup, legs: PricedLeg[]): BridgeSide {
+  const units = new Set(legs.map((l) => (l.movement.asset.price?.kind === 'native' ? l.movement.asset.price.symbol : 'USD')));
+  return {
+    group,
+    legs,
+    unit: units.size === 1 ? [...units][0] : null,
+    amount: legs.reduce((sum, l) => sum + l.movement.amount, 0),
+    usd: legs.reduce((sum, l) => sum + (l.usd ?? 0), 0),
+    usdKnown: legs.every((l) => l.usd !== null),
+  };
+}
+
+/**
+ * Pair "money left wallet X on chain A" with "money reached one of the user's
+ * wallets on chain B" so a bridge isn't counted as spending on one side and
+ * income on the other. Candidates are pure money transfers (no NFTs/tokens
+ * bought or sold in the same tx). Each outgoing transfer takes the closest
+ * eligible arrival in time; amounts must match up to a bridge fee.
+ */
+export function matchBridges(ordered: TxGroup[], analyses: Map<TxGroup, TxAnalysis>): Map<TxGroup, BridgeRole> {
+  const outs: BridgeSide[] = [];
+  const ins: BridgeSide[] = [];
+  for (const g of ordered) {
+    const a = analyses.get(g)!;
+    const pureMoney = a.unIn.length === 0 && a.unOut.length === 0;
+    if (pureMoney && a.pricedOut.length > 0 && a.pricedIn.length === 0) outs.push(bridgeSide(g, a.pricedOut));
+    else if (pureMoney && a.pricedIn.length > 0 && a.pricedOut.length === 0) ins.push(bridgeSide(g, a.pricedIn));
+    else if (a.external.length === 0 && a.ownArrivals.length > 0) ins.push(bridgeSide(g, a.ownArrivals));
+  }
+
+  const roles = new Map<TxGroup, BridgeRole>();
+  const taken = new Set<BridgeSide>();
+  for (const out of outs) {
+    const t0 = out.group.timestamp.getTime();
+    let best: BridgeSide | null = null;
+    let bestDt = Infinity;
+    for (const cand of ins) {
+      if (taken.has(cand) || cand.group.chain === out.group.chain) continue;
+      const dt = cand.group.timestamp.getTime() - t0;
+      if (dt < -CLOCK_SKEW_MS || dt > SLOW_WINDOW_MS) continue;
+      if (!bridgeAmountsMatch(out, cand, dt)) continue;
+      if (Math.abs(dt) < bestDt) {
+        best = cand;
+        bestDt = Math.abs(dt);
+      }
+    }
+    if (best) {
+      taken.add(best);
+      roles.set(out.group, { side: 'out', self: out, pair: best });
+      roles.set(best.group, { side: 'in', self: best, pair: out });
+    }
+  }
+  return roles;
+}
+
+function bridgeAmountsMatch(out: BridgeSide, arrival: BridgeSide, dt: number): boolean {
+  if (out.unit && out.unit === arrival.unit && out.amount > 0) {
+    const ratio = arrival.amount / out.amount;
+    if (ratio > 1.0005) return false;
+    if (dt <= FAST_WINDOW_MS && ratio >= FAST_MIN_RATIO) return true;
+    return ratio >= SLOW_MIN_RATIO;
+  }
+  if (!out.usdKnown || !arrival.usdKnown || out.usd <= 0 || dt > FAST_WINDOW_MS) return false;
+  const ratio = arrival.usd / out.usd;
+  return ratio >= CROSS_ASSET_MIN_RATIO && ratio <= 1.01;
+}
+
+const CHAIN_NAMES: Record<string, string> = {
+  ethereum: 'Ethereum',
+  base: 'Base',
+  abstract: 'Abstract',
+  apechain: 'ApeChain',
+  polygon: 'Polygon',
+  arbitrum: 'Arbitrum',
+  optimism: 'Optimism',
+  zora: 'Zora',
+  blast: 'Blast',
+  linea: 'Linea',
+  solana: 'Solana',
+};
+const chainName = (chain: string) => CHAIN_NAMES[chain] ?? chain;
 
 function priceLegQuiet(pricer: UsdPricer, m: LedgerMovement): number | null {
   if (!m.asset.price) return null;
@@ -646,6 +863,8 @@ function describe(
       return `Received ${moneyIn}`;
     case 'own_wallet_transfer':
       return 'Moved between your wallets';
+    case 'bridge':
+      return 'Bridged between your wallets';
     case 'contract_interaction':
       return 'Contract interaction (gas only)';
   }

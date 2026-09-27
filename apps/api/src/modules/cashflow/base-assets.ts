@@ -48,6 +48,28 @@ const KNOWN_ASSETS: Record<string, Record<string, KnownAsset>> = {
     '0xcf800f4948d16f23333508191b1b1591daf70438': { symbol: 'ApeETH', price: ETH },
     '0xa2235d059f80e176d931ef76b6c51953eb3fbef4': { symbol: 'ApeUSD', price: USD },
   },
+  arbitrum: {
+    '0x82af49447d8a07e3bd95bd0d56f35241523fbab1': { symbol: 'WETH', price: ETH },
+    '0xaf88d065e77c8cc2239327c5edb3a432268e5831': { symbol: 'USDC', price: USD },
+    '0xff970a61a04b1ca14834a43f5de4533ebddb5cc8': { symbol: 'USDC.e', price: USD },
+    '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9': { symbol: 'USDT', price: USD },
+  },
+  optimism: {
+    '0x4200000000000000000000000000000000000006': { symbol: 'WETH', price: ETH },
+    '0x0b2c639c533813f4aa9d7837caf62653d097ff85': { symbol: 'USDC', price: USD },
+    '0x94b008aa00579c1307b0ef2c499ad98a8ce58e58': { symbol: 'USDT', price: USD },
+  },
+  zora: {
+    '0x4200000000000000000000000000000000000006': { symbol: 'WETH', price: ETH },
+  },
+  blast: {
+    '0x4300000000000000000000000000000000000004': { symbol: 'WETH', price: ETH },
+    '0x4300000000000000000000000000000000000003': { symbol: 'USDB', price: USD },
+  },
+  linea: {
+    '0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f': { symbol: 'WETH', price: ETH },
+    '0x176211869ca2b568f2a7d4ee941e073a821ee1ff': { symbol: 'USDC', price: USD },
+  },
   solana: {
     So11111111111111111111111111111111111111112: { symbol: 'wSOL', price: { kind: 'native', symbol: 'SOL' } },
     EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v: { symbol: 'USDC', price: USD },

@@ -30,6 +30,7 @@ export type CashflowTxType =
   | 'received_asset'
   | 'sent_asset'
   | 'own_wallet_transfer'
+  | 'bridge'
   | 'contract_interaction';
 
 export interface CashflowTotals {
@@ -145,7 +146,10 @@ export interface CashflowReport {
   tokens: CashflowPosition[];
   counterparties: CashflowCounterparty[];
   fees: CashflowChainFees[];
+  /** Same-chain moves between linked wallets — excluded from in/out. */
   ownWalletTransfers: { count: number; usd: number };
+  /** Cross-chain moves between linked wallets — excluded from in/out; the amount lost in transit counts as a fee. */
+  bridges: { count: number; usd: number; feesUsd: number };
   /** Most recent classified transactions, newest first (capped). */
   activity: CashflowActivity[];
   coverage: CashflowWalletCoverage[];

@@ -11,6 +11,13 @@ const ALCHEMY_NETWORK: Record<string, string> = {
   polygon: 'polygon-mainnet',
   abstract: 'abstract-mainnet',
   apechain: 'apechain-mainnet',
+  // Not tracked elsewhere in the app, but common bridge destinations: scanning
+  // them lets bridged money net out instead of looking like spending.
+  arbitrum: 'arb-mainnet',
+  optimism: 'opt-mainnet',
+  zora: 'zora-mainnet',
+  blast: 'blast-mainnet',
+  linea: 'linea-mainnet',
 };
 
 export const EVM_NATIVE: Record<string, { symbol: string; name: string }> = {
@@ -19,6 +26,11 @@ export const EVM_NATIVE: Record<string, { symbol: string; name: string }> = {
   abstract: { symbol: 'ETH', name: 'Ether' },
   polygon: { symbol: 'POL', name: 'Polygon' },
   apechain: { symbol: 'APE', name: 'ApeCoin' },
+  arbitrum: { symbol: 'ETH', name: 'Ether' },
+  optimism: { symbol: 'ETH', name: 'Ether' },
+  zora: { symbol: 'ETH', name: 'Ether' },
+  blast: { symbol: 'ETH', name: 'Ether' },
+  linea: { symbol: 'ETH', name: 'Ether' },
 };
 
 export const EVM_CHAINS = Object.keys(ALCHEMY_NETWORK);
@@ -32,6 +44,7 @@ const MAX_RECEIPTS = 6000;
 
 export interface AlchemyTransfer {
   blockNum: string;
+  uniqueId?: string;
   hash: string;
   from: string;
   to: string | null;
@@ -110,8 +123,10 @@ export function normalizeEvmTransfer(
   const me = wallet.toLowerCase();
   const from = (t.from ?? '').toLowerCase();
   const to = (t.to ?? '').toLowerCase();
-  if (from === me && to === me) return [];
-  const direction: 'in' | 'out' = from === me ? 'out' : 'in';
+  // from == to == me: a self-send, or (on L2s) a bridge deposit from the same
+  // address on L1. Keep it as an arrival from ourselves; the ledger decides
+  // which from whether this wallet paid gas for it.
+  const direction: 'in' | 'out' = from === me && to !== me ? 'out' : 'in';
   const other = direction === 'out' ? to : from;
   const counterparty = other === ZERO_ADDRESS ? '' : other;
   const asset = evmAssetFor(chain, t, assets);
@@ -162,7 +177,14 @@ export class EvmActivityFetcher {
     const outgoing = await this.pageTransfers(endpoint, chain, { fromAddress: address }, categories);
     const incoming = await this.pageTransfers(endpoint, chain, { toAddress: address }, categories);
     const truncated = outgoing.truncated || incoming.truncated;
-    const all = [...outgoing.transfers, ...incoming.transfers];
+    // Self-transfers come back from both queries; keep one copy.
+    const seen = new Set<string>();
+    const all = [...outgoing.transfers, ...incoming.transfers].filter((t) => {
+      const id = t.uniqueId ?? `${t.hash}:${t.category}:${t.rawContract?.address ?? ''}:${t.erc721TokenId ?? t.tokenId ?? ''}:${t.rawContract?.value ?? ''}`;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
 
     // Fill missing block timestamps (some networks, e.g. Abstract, omit them).
     const missingBlocks = [...new Set(all.filter((t) => !t.metadata?.blockTimestamp).map((t) => t.blockNum))];

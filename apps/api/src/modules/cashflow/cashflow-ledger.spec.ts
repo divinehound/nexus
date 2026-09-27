@@ -23,10 +23,10 @@ function mv(
   asset: LedgerAsset,
   amount: number,
   counterparty: string,
-  opts: { tokenId?: string; wallet?: string } = {},
+  opts: { tokenId?: string; wallet?: string; chain?: string } = {},
 ): LedgerMovement {
   return {
-    chain: 'ethereum',
+    chain: opts.chain ?? 'ethereum',
     txHash: tx,
     timestamp: new Date(iso),
     wallet: opts.wallet ?? ME,
@@ -38,8 +38,8 @@ function mv(
   };
 }
 
-function fee(tx: string, iso: string, feeNative: number, wallet = ME): LedgerFee {
-  return { chain: 'ethereum', txHash: tx, wallet, timestamp: new Date(iso), feeNative, symbol: 'ETH' };
+function fee(tx: string, iso: string, feeNative: number, wallet = ME, chain = 'ethereum'): LedgerFee {
+  return { chain, txHash: tx, wallet, timestamp: new Date(iso), feeNative, symbol: 'ETH' };
 }
 
 function build(movements: LedgerMovement[], fees: LedgerFee[] = []) {
@@ -200,5 +200,153 @@ describe('buildCashflowReport', () => {
     });
     expect(r.totals.unpricedMovements).toBe(1);
     expect(r.totals.outUsd).toBe(0);
+  });
+
+  describe('moves between your own wallets', () => {
+    const BASE_ETH: LedgerAsset = { ...ETH, key: 'base:native', chain: 'base' };
+    const SOL: LedgerAsset = { key: 'solana:native', chain: 'solana', kind: 'native', contract: '', name: 'Solana', symbol: 'SOL', price: { kind: 'native', symbol: 'SOL' } };
+    const RELAY = '0xrelay00000000000000000000000000000000005';
+    const SOLVER = '0xsolver0000000000000000000000000000000006';
+    const PORTAL = '0xportal0000000000000000000000000000000007';
+    const SOLME = 'SoLMe1111111111111111111111111111111111111';
+    const t = (min: number) => new Date(Date.UTC(2024, 0, 10) + min * 60_000).toISOString();
+
+    const buildWith = (movements: LedgerMovement[], fees: LedgerFee[] = [], pricerOverride?: UsdPricer) =>
+      buildCashflowReport({
+        movements,
+        fees,
+        wallets: [
+          { chain: 'ethereum', address: ME },
+          { chain: 'base', address: COLD },
+          { chain: 'solana', address: SOLME },
+        ],
+        pricer: pricerOverride ?? pricer,
+        coverage: [],
+        notes: [],
+        now: new Date('2024-03-01T00:00:00Z'),
+      });
+
+    it('treats a fast bridge (Ethereum → Base via a relayer) as a move, charging only the bridge fee', () => {
+      const r = buildWith(
+        [
+          mv('0xl1', t(0), 'out', ETH, 1, RELAY),
+          mv('0xl2', t(2), 'in', BASE_ETH, 0.995, SOLVER, { chain: 'base' }),
+        ],
+        [fee('0xl1', t(0), 0.001)],
+      );
+      expect(r.inByCategory.transfer_in).toBeUndefined();
+      expect(r.outByCategory.transfer_out).toBeUndefined();
+      expect(r.totals.inUsd).toBe(0);
+      // $2 gas + $10 lost in the bridge.
+      expect(r.totals.feesUsd).toBeCloseTo(12);
+      expect(r.totals.outUsd).toBeCloseTo(12);
+      expect(r.bridges).toEqual({ count: 1, usd: 2000, feesUsd: expect.closeTo(10) });
+      expect(r.counterparties).toHaveLength(0);
+      expect(r.activity.map((a) => a.type)).toEqual(['bridge', 'bridge']);
+      expect(r.activity[1].label).toBe('Bridged 1 ETH · Ethereum → Base');
+    });
+
+    it('recognises a canonical deposit that lands on the same address on L2 (from = to = you)', () => {
+      const r = buildWith(
+        [
+          mv('0xl1', t(0), 'out', ETH, 1, PORTAL),
+          // The L2 deposit tx reports the L1 sender as `from`; no gas paid on L2.
+          mv('0xl2', t(20), 'in', BASE_ETH, 1, ME, { chain: 'base' }),
+        ],
+        [fee('0xl1', t(0), 0.001)],
+      );
+      expect(r.totals.outUsd).toBeCloseTo(2);
+      expect(r.totals.inUsd).toBe(0);
+      expect(r.bridges.count).toBe(1);
+      expect(r.ownWalletTransfers.count).toBe(0);
+    });
+
+    it('recognises a deposit to a different linked wallet whose L2 tx shows both of your wallets', () => {
+      const r = buildWith([
+        mv('0xl1', t(0), 'out', ETH, 1, PORTAL),
+        mv('0xl2', t(20), 'out', BASE_ETH, 1, COLD, { chain: 'base', wallet: ME }),
+        mv('0xl2', t(20), 'in', BASE_ETH, 1, ME, { chain: 'base', wallet: COLD }),
+      ]);
+      expect(r.totals.outUsd).toBe(0);
+      expect(r.bridges.count).toBe(1);
+    });
+
+    it('matches slow canonical withdrawals (~7 days, full amount) but not stale coincidences', () => {
+      const week = 7 * 24 * 60;
+      const matched = buildWith([
+        mv('0xw1', t(0), 'out', BASE_ETH, 2, PORTAL, { chain: 'base' }),
+        mv('0xw2', t(week), 'in', ETH, 2, PORTAL),
+      ]);
+      expect(matched.bridges.count).toBe(1);
+      expect(matched.totals.inUsd).toBe(0);
+
+      const lossy = buildWith([
+        mv('0xw1', t(0), 'out', BASE_ETH, 2, PORTAL, { chain: 'base' }),
+        mv('0xw2', t(week), 'in', ETH, 1.9, FRIEND),
+      ]);
+      expect(lossy.bridges.count).toBe(0);
+
+      const tooLate = buildWith([
+        mv('0xw1', t(0), 'out', BASE_ETH, 2, PORTAL, { chain: 'base' }),
+        mv('0xw2', t(3 * week), 'in', ETH, 2, PORTAL),
+      ]);
+      expect(tooLate.bridges.count).toBe(0);
+    });
+
+    it('matches cross-asset hops (SOL → ETH) on USD value', () => {
+      const flat: UsdPricer = { usdPerUnit: (ref) => (ref.kind === 'usd' ? 1 : ref.symbol === 'SOL' ? 100 : 2000) };
+      const r = buildWith(
+        [
+          { ...mv('sig1', t(0), 'out', SOL, 20, 'SoLRelay', { chain: 'solana', wallet: SOLME }) },
+          mv('0xb', t(1), 'in', BASE_ETH, 0.99, SOLVER, { chain: 'base', wallet: COLD }),
+        ],
+        [],
+        flat,
+      );
+      expect(r.bridges).toEqual({ count: 1, usd: 2000, feesUsd: expect.closeTo(20) });
+      expect(r.totals.inUsd).toBe(0);
+    });
+
+    it("doesn't pair unrelated transfers of different sizes", () => {
+      const r = buildWith([
+        mv('0x1', t(0), 'out', ETH, 1, FRIEND),
+        mv('0x2', t(5), 'in', BASE_ETH, 0.5, SOLVER, { chain: 'base' }),
+      ]);
+      expect(r.bridges.count).toBe(0);
+      expect(r.outByCategory.transfer_out).toBe(2000);
+      expect(r.inByCategory.transfer_in).toBe(1000);
+    });
+
+    it("doesn't pair transfers on the same chain", () => {
+      const r = buildWith([
+        mv('0x1', t(0), 'out', ETH, 1, FRIEND),
+        mv('0x2', t(5), 'in', ETH, 1, SOLVER),
+      ]);
+      expect(r.bridges.count).toBe(0);
+    });
+
+    it('nets a same-tx hop between your wallets through a contract to zero', () => {
+      const r = buildWith(
+        [
+          mv('0x1', t(0), 'out', ETH, 1, RELAY),
+          mv('0x1', t(0), 'in', ETH, 1, RELAY, { wallet: COLD }),
+        ],
+        [fee('0x1', t(0), 0.001)],
+      );
+      expect(r.totals.inUsd).toBe(0);
+      expect(r.totals.outUsd).toBeCloseTo(2);
+    });
+
+    it('does not treat a self-send you paid gas for as a bridge arrival', () => {
+      const r = buildWith(
+        [
+          mv('0xl1', t(0), 'out', ETH, 1, FRIEND),
+          mv('0xs', t(1), 'in', BASE_ETH, 1, ME, { chain: 'base' }),
+        ],
+        [fee('0xs', t(1), 0.0001, ME, 'base')],
+      );
+      expect(r.bridges.count).toBe(0);
+      expect(r.outByCategory.transfer_out).toBe(2000);
+    });
   });
 });

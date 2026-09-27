@@ -115,6 +115,7 @@ export class CashflowService {
     const movements: LedgerMovement[] = [];
     const fees: LedgerFee[] = [];
     const coverage: CashflowWalletCoverage[] = [];
+    const disabledNetworks = new Set<string>();
     for (const [i, job] of jobs.entries()) {
       entry.progress = `Scanning ${job.chain} ${shortAddress(job.address)} (${i + 1}/${jobs.length})`;
       try {
@@ -125,9 +126,20 @@ export class CashflowService {
         coverage.push({ chain: job.chain, address: job.address, transfers: r.transfers, truncated: r.truncated, error: null });
       } catch (err) {
         const message = (err as Error).message;
+        if (job.chain !== 'solana' && /HTTP 403|not enabled|unsupported network/i.test(message)) {
+          // Networks have to be enabled per Alchemy app; one that isn't is a config gap, not a failure.
+          disabledNetworks.add(job.chain);
+          continue;
+        }
         this.logger.warn(`Cash-flow scan failed for ${job.chain} ${job.address}: ${message}`);
         coverage.push({ chain: job.chain, address: job.address, transfers: 0, truncated: false, error: message });
       }
+    }
+
+    if (disabledNetworks.size > 0) {
+      notes.push(
+        `Not scanned — enable these networks on the Alchemy app to include them: ${[...disabledNetworks].join(', ')}. Bridges to them will show as money out.`,
+      );
     }
 
     entry.progress = 'Looking up collection names…';
@@ -144,7 +156,7 @@ export class CashflowService {
       'NFT and token values come from what you paid or received in ETH/SOL/POL/APE, their wrapped versions, or stablecoins in the same transaction.',
     );
     if (evmAddresses.length > 0 && alchemyKey) {
-      notes.push('On Base, Abstract and ApeChain, sale proceeds paid out by a contract in native ETH/APE cannot be traced yet; WETH/stablecoin proceeds are.');
+      notes.push('Outside Ethereum and Polygon, NFT sale proceeds paid out by a contract in native ETH/APE cannot be traced yet; WETH/stablecoin proceeds are.');
     }
 
     const report = buildCashflowReport({

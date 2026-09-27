@@ -45,6 +45,11 @@ describe('normalizeEvmTransfer', () => {
     expect(m.asset.kind).toBe('nft');
   });
 
+  it('keeps from = to = you as an arrival from yourself (same-address bridge deposits)', () => {
+    const [m] = normalizeEvmTransfer('base', ME, transfer({ from: ME, to: ME, rawContract: { value: '0x0de0b6b3a7640000', address: null, decimal: '0x12' } }), ts, new Map());
+    expect(m).toMatchObject({ direction: 'in', counterparty: ME.toLowerCase(), amount: 1 });
+  });
+
   it('expands ERC-1155 batches', () => {
     const ms = normalizeEvmTransfer('ethereum', ME, transfer({ category: 'erc1155', erc1155Metadata: [{ tokenId: '0x1', value: '0x3' }, { tokenId: '0x2', value: '0x1' }], rawContract: { value: null, address: '0xe', decimal: null } }), ts, new Map());
     expect(ms.map((m) => [m.tokenId, m.amount])).toEqual([['1', 3], ['2', 1]]);
