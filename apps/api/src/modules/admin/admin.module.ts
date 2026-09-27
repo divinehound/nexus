@@ -14,5 +14,6 @@ import { QueueModule } from '../../common/queue/queue.module';
   imports: [CollectionsModule, HoldingsModule, SearchModule, IndexingModule, QueueModule],
   controllers: [AdminController],
   providers: [AdminService, HolderHistoryService, HolderHistoryScanProcessor, PriceOracleService],
+  exports: [PriceOracleService],
 })
 export class AdminModule {}

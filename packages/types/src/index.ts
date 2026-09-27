@@ -6,3 +6,4 @@ export * from './activity';
 export * from './events';
 export * from './discovery';
 export * from './market';
+export * from './cashflow';

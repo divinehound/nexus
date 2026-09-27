@@ -14,6 +14,7 @@ export function Navbar() {
   const navLinks = [
     { href: '/discover', label: 'Discover' },
     { href: '/search', label: 'Search' },
+    ...(user ? [{ href: '/me/money', label: 'Money' }] : []),
     ...(user ? [{ href: '/me', label: 'Me' }] : []),
     ...(user?.role === 'admin' ? [{ href: '/admin', label: 'Admin' }] : []),
   ];

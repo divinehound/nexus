@@ -1,3 +1,5 @@
+import type { CashflowResponse } from '@nexus/types';
+
 // Server-side: use the internal Docker network URL to reach the API directly.
 // Client-side: use a relative path that Next.js rewrites to the API server.
 const API_BASE =
@@ -687,6 +689,11 @@ export function getMyHoldingsCollections(
     `/me/holdings/collections?tier=${encodeURIComponent(tier)}&page=${page}&limit=${limit}`,
     { token },
   );
+}
+
+/** Money in/out + PnL across linked wallets; builds in the background, poll until `status === 'ready'`. */
+export function getMyCashflow(token: string, refresh = false) {
+  return apiFetch<CashflowResponse>(`/me/cashflow${refresh ? '?refresh=true' : ''}`, { token });
 }
 
 export function getMyWallets(token: string) {
