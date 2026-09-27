@@ -280,13 +280,15 @@ export function NftItemsTable({ position }: { position: CashflowPosition }) {
                   )}
                 </td>
                 <td
-                  className={cn(
-                    'py-1.5 pr-3 text-right tabular-nums',
-                    i.realizedPnlAfterGasUsd !== null && pnlClass(i.realizedPnlAfterGasUsd),
-                  )}
-                  title={`Gas: ${usd(i.buyGasUsd)} to acquire, ${usd(i.sellGasUsd)} to ${i.disposedVia === 'sale' ? 'sell' : 'move'}`}
+                  className="py-1.5 pr-3 text-right tabular-nums"
+                  title={`Gas: ${usd(i.buyGasUsd)} (${nativeAmount(i.buyGasNative, sym, false)}) to acquire, ${usd(i.sellGasUsd)} (${nativeAmount(i.sellGasNative, sym, false)}) to ${i.disposedVia === 'sale' ? 'sell' : 'move'}`}
                 >
-                  {i.realizedPnlAfterGasUsd === null ? '—' : usdSigned(i.realizedPnlAfterGasUsd)}
+                  <Dual
+                    usd={i.realizedPnlAfterGasUsd}
+                    native={i.realizedPnlAfterGasNative}
+                    symbol={sym}
+                    signed
+                  />
                 </td>
                 <td className="py-1.5 text-right tabular-nums text-gray-400">
                   {i.disposedAt

@@ -55,7 +55,9 @@ export function CounterpartiesTable({ report }: { report: CashflowReport }) {
                     </td>
                     <td className="py-2 pr-4 text-right tabular-nums">{usd(e.withdrawnUsd)}</td>
                     <td className="py-2 pr-4 text-right tabular-nums">{usd(e.depositedUsd)}</td>
-                    <td className="py-2 text-right tabular-nums text-gray-200">{usdSigned(e.withdrawnUsd - e.depositedUsd)}</td>
+                    <td className="py-2 text-right tabular-nums text-gray-200">
+                      {usdSigned(e.withdrawnUsd - e.depositedUsd)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -63,8 +65,8 @@ export function CounterpartiesTable({ report }: { report: CashflowReport }) {
           </div>
         ) : (
           <p className="text-xs text-gray-500">
-            No exchange transfers recognised. If you sent money to your Coinbase, Kraken or other exchange account, mark that
-            address below.
+            No exchange transfers recognised. If you sent money to your Coinbase, Kraken or other
+            exchange account, mark that address below.
           </p>
         )}
       </div>
@@ -74,12 +76,19 @@ export function CounterpartiesTable({ report }: { report: CashflowReport }) {
         <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4">
           <Stat label="Sent to other wallets" value={usd(sent)} swatch={OUT_COLOR} />
           <Stat label="Received from other wallets" value={usd(received)} swatch={IN_COLOR} />
-          <Stat label="Moved between your wallets" value={`${report.ownWalletTransfers.count} tx · ${usd(report.ownWalletTransfers.usd)}`} />
-          <Stat label="Bridged between chains" value={`${report.bridges.count} tx · ${usd(report.bridges.usd)}`} />
+          <Stat
+            label="Moved between your wallets"
+            value={`${report.ownWalletTransfers.count} tx · ${usd(report.ownWalletTransfers.usd)}`}
+          />
+          <Stat
+            label="Bridged between chains"
+            value={`${report.bridges.count} tx · ${usd(report.bridges.usd)}`}
+          />
         </div>
         <p className="mb-3 text-xs text-gray-500">
-          Plain transfers of ETH/SOL/POL/APE and stablecoins. Moves between your own linked wallets — on the same chain or bridged
-          — aren&apos;t counted as money in or out; only gas and what the bridge kept count as fees
+          Plain transfers of ETH/SOL/POL/APE and stablecoins. Moves between your own linked wallets
+          — on the same chain or bridged — aren&apos;t counted as money in or out; only gas and what
+          the bridge kept count as fees
           {report.bridges.feesUsd > 0 ? ` (${usd(report.bridges.feesUsd)} in bridge fees)` : ''}.
         </p>
         <div className="overflow-x-auto">
@@ -119,7 +128,9 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
   const url = addressExplorerUrl(c.chain, c.address);
   const family = c.chain === 'solana' ? 'solana' : 'evm';
   const tag = report.addressTags.find(
-    (t) => t.chainFamily === family && (family === 'solana' ? t.address === c.address : t.address === c.address.toLowerCase()),
+    (t) =>
+      t.chainFamily === family &&
+      (family === 'solana' ? t.address === c.address : t.address === c.address.toLowerCase()),
   );
   const canTag = c.address !== 'unknown';
 
@@ -127,7 +138,12 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
     <tr className="align-top">
       <td className="py-2 pr-4">
         {url && canTag ? (
-          <a href={url} target="_blank" rel="noopener noreferrer" className="font-mono text-gray-200 hover:text-purple-300">
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-gray-200 hover:text-purple-300"
+          >
             {c.address.length > 16 ? truncateAddress(c.address) : c.address}
           </a>
         ) : (
@@ -144,7 +160,9 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
             <button
               type="button"
               disabled={busy}
-              onClick={() => void run('Tag removed', (token) => removeCashflowAddressTag(token, tag.id))}
+              onClick={() =>
+                void run('Tag removed', (token) => removeCashflowAddressTag(token, tag.id))
+              }
               className="text-gray-400 hover:text-white disabled:opacity-50"
             >
               Remove tag
@@ -153,7 +171,11 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
             canTag &&
             c.exchangeSource !== 'known' &&
             !tagging && (
-              <button type="button" onClick={() => setTagging(true)} className="text-purple-300 hover:text-purple-200">
+              <button
+                type="button"
+                onClick={() => setTagging(true)}
+                className="text-purple-300 hover:text-purple-200"
+              >
                 {c.exchange ? 'Not right?' : 'This is my exchange account'}
               </button>
             )
@@ -181,10 +203,18 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
                 </option>
               ))}
             </select>
-            <button type="submit" disabled={busy} className="rounded-md bg-purple-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-purple-500 disabled:opacity-50">
+            <button
+              type="submit"
+              disabled={busy}
+              className="rounded-md bg-purple-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-purple-500 disabled:opacity-50"
+            >
               Save
             </button>
-            <button type="button" onClick={() => setTagging(false)} className="text-xs text-gray-400 hover:text-white">
+            <button
+              type="button"
+              onClick={() => setTagging(false)}
+              className="text-xs text-gray-400 hover:text-white"
+            >
               Cancel
             </button>
           </form>
@@ -198,8 +228,12 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
         {c.receivedUsd ? usd(c.receivedUsd) : '—'}
         {c.receivedCount > 0 && <div className="text-xs text-gray-500">{c.receivedCount}×</div>}
       </td>
-      <td className={cn('py-2 pr-4 text-right tabular-nums', pnlClass(c.receivedUsd - c.sentUsd))}>{usdSigned(c.receivedUsd - c.sentUsd)}</td>
-      <td className="py-2 text-right text-xs text-gray-500">{new Date(c.lastAt).toLocaleDateString()}</td>
+      <td className={cn('py-2 pr-4 text-right tabular-nums', pnlClass(c.receivedUsd - c.sentUsd))}>
+        {usdSigned(c.receivedUsd - c.sentUsd)}
+      </td>
+      <td className="py-2 text-right text-xs text-gray-500">
+        {new Date(c.lastAt).toLocaleDateString()}
+      </td>
     </tr>
   );
 }

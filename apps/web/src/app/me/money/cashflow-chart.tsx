@@ -3,7 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import type { CashflowMonth } from '@nexus/types';
-import { CATEGORY_LABELS, IN_CATEGORIES, OUT_CATEGORIES, monthLabel, usd, usdShort, usdSigned } from './format';
+import {
+  CATEGORY_LABELS,
+  IN_CATEGORIES,
+  OUT_CATEGORIES,
+  monthLabel,
+  usd,
+  usdShort,
+  usdSigned,
+} from './format';
 
 // Categorical slots 1–2 of the validated dark palette (checked against the gray-950 surface).
 export const IN_COLOR = '#3987e5';
@@ -45,7 +53,12 @@ export function CashflowChart({ months }: { months: CashflowMonth[] }) {
     if (width === 0 || months.length === 0) return null;
     const innerW = width - MARGIN.left - MARGIN.right;
     const innerH = HEIGHT - MARGIN.top - MARGIN.bottom;
-    const x = d3.scaleBand<string>().domain(months.map((m) => m.month)).range([0, innerW]).paddingInner(0.25).paddingOuter(0.1);
+    const x = d3
+      .scaleBand<string>()
+      .domain(months.map((m) => m.month))
+      .range([0, innerW])
+      .paddingInner(0.25)
+      .paddingOuter(0.1);
     const maxIn = d3.max(months, (m) => m.inUsd) ?? 0;
     const maxOut = d3.max(months, (m) => m.outUsd) ?? 0;
     const y = d3
@@ -62,22 +75,46 @@ export function CashflowChart({ months }: { months: CashflowMonth[] }) {
 
   return (
     <div>
-      <div className="mb-3 flex flex-wrap items-center gap-4 text-xs text-gray-400" aria-hidden="true">
+      <div
+        className="mb-3 flex flex-wrap items-center gap-4 text-xs text-gray-400"
+        aria-hidden="true"
+      >
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: IN_COLOR }} /> Money in (above the line)
+          <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: IN_COLOR }} />{' '}
+          Money in (above the line)
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: OUT_COLOR }} /> Money out incl. gas (below the line)
+          <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: OUT_COLOR }} />{' '}
+          Money out incl. gas (below the line)
         </span>
       </div>
       <div ref={containerRef} className="relative w-full" onMouseLeave={() => setHover(null)}>
         {geometry && (
-          <svg width={width} height={HEIGHT} role="img" aria-label="Monthly money in versus money out">
+          <svg
+            width={width}
+            height={HEIGHT}
+            role="img"
+            aria-label="Monthly money in versus money out"
+          >
             <g transform={`translate(${MARGIN.left},${MARGIN.top})`}>
               {geometry.y.ticks(5).map((t) => (
                 <g key={t}>
-                  <line x1={0} x2={geometry.innerW} y1={geometry.y(t)} y2={geometry.y(t)} stroke={t === 0 ? '#6b7280' : '#1f2937'} strokeWidth={1} />
-                  <text x={-8} y={geometry.y(t)} dy="0.32em" textAnchor="end" className="fill-gray-500" fontSize={11}>
+                  <line
+                    x1={0}
+                    x2={geometry.innerW}
+                    y1={geometry.y(t)}
+                    y2={geometry.y(t)}
+                    stroke={t === 0 ? '#6b7280' : '#1f2937'}
+                    strokeWidth={1}
+                  />
+                  <text
+                    x={-8}
+                    y={geometry.y(t)}
+                    dy="0.32em"
+                    textAnchor="end"
+                    className="fill-gray-500"
+                    fontSize={11}
+                  >
                     {usdShort(Math.abs(t))}
                   </text>
                 </g>
@@ -92,7 +129,13 @@ export function CashflowChart({ months }: { months: CashflowMonth[] }) {
                     <path d={barPath(bx, bw, y0 - 1, geometry.y(m.inUsd))} fill={IN_COLOR} />
                     <path d={barPath(bx, bw, y0 + 1, geometry.y(-m.outUsd))} fill={OUT_COLOR} />
                     {i % geometry.every === 0 && (
-                      <text x={bx + bw / 2} y={geometry.innerH + 18} textAnchor="middle" className="fill-gray-500" fontSize={11}>
+                      <text
+                        x={bx + bw / 2}
+                        y={geometry.innerH + 18}
+                        textAnchor="middle"
+                        className="fill-gray-500"
+                        fontSize={11}
+                      >
                         {monthLabel(m.month)}
                       </text>
                     )}
@@ -141,7 +184,10 @@ function MonthTooltip({
   const W = 240;
   const GAP = 12;
   // Sit beside the hovered column (right side in the left half, left side in the right half) so it never hides the bars.
-  const preferred = columnLeft + columnWidth / 2 < containerWidth / 2 ? columnLeft + columnWidth + GAP : columnLeft - W - GAP;
+  const preferred =
+    columnLeft + columnWidth / 2 < containerWidth / 2
+      ? columnLeft + columnWidth + GAP
+      : columnLeft - W - GAP;
   const clamped = Math.min(Math.max(preferred, 0), Math.max(containerWidth - W, 0));
   const rows = (cats: typeof OUT_CATEGORIES) =>
     cats
@@ -183,7 +229,9 @@ function MonthTooltip({
       </div>
       <div className="flex justify-between text-gray-400">
         <span>after gas</span>
-        <span className="tabular-nums text-gray-200">{usdSigned(month.realizedPnlAfterGasUsd)}</span>
+        <span className="tabular-nums text-gray-200">
+          {usdSigned(month.realizedPnlAfterGasUsd)}
+        </span>
       </div>
     </div>
   );

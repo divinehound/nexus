@@ -95,6 +95,8 @@ export interface CashflowPosition {
   realizedPnlUsd: number;
   /** realizedPnlUsd minus gas paid to acquire the sold units and gas paid on the sales. */
   realizedPnlAfterGasUsd: number;
+  /** realizedPnlNative minus that gas, in the chain's own coin. */
+  realizedPnlAfterGasNative: number;
   /** All gas paid on transactions involving this asset (buys, mints, sales, swaps, sends). */
   gasUsd: number;
   /** The chain's own coin (ETH, SOL, APE, POL) that native figures are in. */
@@ -129,6 +131,7 @@ export interface CashflowNftItem {
   costUsd: number;
   costNative: number;
   buyGasUsd: number;
+  buyGasNative: number;
   /** null while still held. */
   disposedAt: string | null;
   disposedVia: CashflowNftDisposedVia | null;
@@ -137,10 +140,12 @@ export interface CashflowNftItem {
   proceedsUsd: number | null;
   proceedsNative: number | null;
   sellGasUsd: number;
+  sellGasNative: number;
   /** Sales only. */
   realizedPnlUsd: number | null;
   realizedPnlAfterGasUsd: number | null;
   realizedPnlNative: number | null;
+  realizedPnlAfterGasNative: number | null;
   holdSeconds: number | null;
 }
 

@@ -222,6 +222,14 @@ describe('buildCashflowReport', () => {
       expect(r.months[1].realizedPnlAfterGasUsd).toBeCloseTo(650);
       // Gas still counts once in money out — not double-counted by the P/L view.
       expect(r.totals.feesUsd).toBeCloseTo(50);
+      // In ETH: paid 1, got 0.9, plus 0.01 gas each way → −0.12 ETH even though USD shows a profit.
+      expect(punks.realizedPnlNative).toBeCloseTo(-0.1);
+      expect(punks.realizedPnlAfterGasNative).toBeCloseTo(-0.12);
+      const [item] = punks.items;
+      expect(item.buyGasNative).toBeCloseTo(0.01);
+      expect(item.sellGasNative).toBeCloseTo(0.01);
+      expect(item.realizedPnlAfterGasNative).toBeCloseTo(-0.12);
+      expect(item.realizedPnlAfterGasUsd).toBeCloseTo(650);
     });
 
     it('only charges the mint gas share of the units sold; the rest stays with what you hold', () => {
@@ -257,6 +265,8 @@ describe('buildCashflowReport', () => {
       const doge = r.tokens.find((t) => t.key === DOGE.key)!;
       expect(doge.realizedPnlUsd).toBeCloseTo(1000);
       expect(doge.realizedPnlAfterGasUsd).toBeCloseTo(994); // $2 × 3 txs
+      // 1 ETH in → 1.5 ETH out, minus 0.001 ETH gas on each of the three txs.
+      expect(doge.realizedPnlAfterGasNative).toBeCloseTo(0.497);
       expect(r.totals.realizedPnlAfterGasUsd).toBeCloseTo(994);
     });
   });

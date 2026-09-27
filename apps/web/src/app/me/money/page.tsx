@@ -498,6 +498,7 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
   );
   const qtyUnit = kind === 'nft' ? 'items' : 'amount';
   const pnlNative = perSymbol(traded, (r) => r.realizedPnlNative, true);
+  const pnlAfterGasNative = perSymbol(traded, (r) => r.realizedPnlAfterGasNative, true);
 
   return (
     <div>
@@ -520,6 +521,7 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
             <>
               {pnlNative && <div className="text-gray-300">{pnlNative}</div>}
               <AfterGas value={totals.pnlAfterGas} />
+              {pnlAfterGasNative && <span className="text-gray-300"> · {pnlAfterGasNative}</span>}
             </>
           }
         />
@@ -664,13 +666,17 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
                       '—'
                     )}
                   </td>
-                  <td
-                    className={cn(
-                      'py-2 pr-4 text-right tabular-nums',
-                      pnlClass(r.realizedPnlAfterGasUsd),
+                  <td className="py-2 pr-4 text-right tabular-nums">
+                    {r.sellCount > 0 ? (
+                      <Dual
+                        usd={r.realizedPnlAfterGasUsd}
+                        native={r.realizedPnlAfterGasNative}
+                        symbol={r.nativeSymbol}
+                        signed
+                      />
+                    ) : (
+                      '—'
                     )}
-                  >
-                    {r.sellCount > 0 ? usdSigned(r.realizedPnlAfterGasUsd) : '—'}
                     {r.gasUsd > 0 && (
                       <div className="text-xs text-gray-500">{usd(r.gasUsd)} total gas</div>
                     )}

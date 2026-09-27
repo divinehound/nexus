@@ -14,7 +14,14 @@ const ACTIVITY_FILTERS: Array<{ id: string; label: string; types: CashflowTxType
   {
     id: 'transfers',
     label: 'Transfers',
-    types: ['transfer_in', 'transfer_out', 'sent_asset', 'received_asset', 'own_wallet_transfer', 'bridge'],
+    types: [
+      'transfer_in',
+      'transfer_out',
+      'sent_asset',
+      'received_asset',
+      'own_wallet_transfer',
+      'bridge',
+    ],
   },
   { id: 'exchanges', label: 'Exchanges', types: ['exchange_deposit', 'exchange_withdrawal'] },
   { id: 'swaps', label: 'Swaps', types: ['swap'] },
@@ -23,7 +30,11 @@ const PAGE = 50;
 
 const OUTGOING: CashflowTxType[] = ['transfer_out', 'exchange_deposit'];
 const INCOMING: CashflowTxType[] = ['transfer_in', 'exchange_withdrawal'];
-const LINK_SOURCE_LABELS = { auto: 'Matched automatically', manual: 'Linked by you', relay: 'From Relay records' } as const;
+const LINK_SOURCE_LABELS = {
+  auto: 'Matched automatically',
+  manual: 'Linked by you',
+  relay: 'From Relay records',
+} as const;
 
 export function ActivityList({ report }: { report: CashflowReport }) {
   const [filter, setFilter] = useState('all');
@@ -33,7 +44,9 @@ export function ActivityList({ report }: { report: CashflowReport }) {
   // "All" skips unsolicited airdrops (no money, no gas) — they're still under Transfers.
   const rows = types
     ? report.activity.filter((a) => types.includes(a.type))
-    : report.activity.filter((a) => !(a.type === 'received_asset' && a.inUsd === 0 && a.outUsd === 0));
+    : report.activity.filter(
+        (a) => !(a.type === 'received_asset' && a.inUsd === 0 && a.outUsd === 0),
+      );
 
   return (
     <div>
@@ -49,7 +62,9 @@ export function ActivityList({ report }: { report: CashflowReport }) {
             }}
             className={cn(
               'rounded-lg px-3 py-1 text-xs transition-colors',
-              filter === f.id ? 'bg-purple-500/15 text-purple-300' : 'text-gray-400 hover:bg-gray-800 hover:text-white',
+              filter === f.id
+                ? 'bg-purple-500/15 text-purple-300'
+                : 'text-gray-400 hover:bg-gray-800 hover:text-white',
             )}
           >
             {f.label}
@@ -57,22 +72,33 @@ export function ActivityList({ report }: { report: CashflowReport }) {
         ))}
       </div>
       <p className="mb-3 text-xs text-gray-500">
-        Money that left one of your wallets and reappeared in another (a bridge, SimpleSwap, an exchange round-trip) can be
-        linked so it isn&apos;t counted as spending.
+        Money that left one of your wallets and reappeared in another (a bridge, SimpleSwap, an
+        exchange round-trip) can be linked so it isn&apos;t counted as spending.
       </p>
       <ul className="divide-y divide-gray-800/70">
         {rows.slice(0, limit).map((a) => {
           const key = `${a.chain}:${a.txHash}`;
           return (
             <li key={key} className="py-3">
-              <ActivityRow a={a} report={report} onLink={() => setLinking(linking === key ? null : key)} linkOpen={linking === key} />
-              {linking === key && <LinkPicker source={a} report={report} onDone={() => setLinking(null)} />}
+              <ActivityRow
+                a={a}
+                report={report}
+                onLink={() => setLinking(linking === key ? null : key)}
+                linkOpen={linking === key}
+              />
+              {linking === key && (
+                <LinkPicker source={a} report={report} onDone={() => setLinking(null)} />
+              )}
             </li>
           );
         })}
       </ul>
       {rows.length > limit && (
-        <button type="button" onClick={() => setLimit(limit + PAGE)} className="mt-3 text-xs text-gray-400 hover:text-white">
+        <button
+          type="button"
+          onClick={() => setLimit(limit + PAGE)}
+          className="mt-3 text-xs text-gray-400 hover:text-white"
+        >
           Show more ({rows.length - limit} remaining)
         </button>
       )}
@@ -101,16 +127,30 @@ function ActivityRow({
     if (!a.linkedTo) return;
     const pair =
       a.linkSide === 'out'
-      ? { fromChain: a.chain, fromTxHash: a.txHash, toChain: a.linkedTo.chain, toTxHash: a.linkedTo.txHash }
-      : { fromChain: a.linkedTo.chain, fromTxHash: a.linkedTo.txHash, toChain: a.chain, toTxHash: a.txHash };
+        ? {
+            fromChain: a.chain,
+            fromTxHash: a.txHash,
+            toChain: a.linkedTo.chain,
+            toTxHash: a.linkedTo.txHash,
+          }
+        : {
+            fromChain: a.linkedTo.chain,
+            fromTxHash: a.linkedTo.txHash,
+            toChain: a.chain,
+            toTxHash: a.txHash,
+          };
     const manual = report.links.find(
       (l) =>
         l.kind === 'link' &&
-        ((sameTx(l.fromChain, l.fromTxHash, pair.fromChain, pair.fromTxHash) && sameTx(l.toChain, l.toTxHash, pair.toChain, pair.toTxHash)) ||
-          (sameTx(l.fromChain, l.fromTxHash, pair.toChain, pair.toTxHash) && sameTx(l.toChain, l.toTxHash, pair.fromChain, pair.fromTxHash))),
+        ((sameTx(l.fromChain, l.fromTxHash, pair.fromChain, pair.fromTxHash) &&
+          sameTx(l.toChain, l.toTxHash, pair.toChain, pair.toTxHash)) ||
+          (sameTx(l.fromChain, l.fromTxHash, pair.toChain, pair.toTxHash) &&
+            sameTx(l.toChain, l.toTxHash, pair.fromChain, pair.fromTxHash))),
     );
     void run('Unlinked — counted as separate transfers again', (token) =>
-      manual ? removeCashflowLink(token, manual.id) : addCashflowLink(token, { kind: 'unlink', ...pair }),
+      manual
+        ? removeCashflowLink(token, manual.id)
+        : addCashflowLink(token, { kind: 'unlink', ...pair }),
     );
   };
 
@@ -122,9 +162,16 @@ function ActivityRow({
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[11px] text-gray-300">{TX_TYPE_LABELS[a.type]}</span>
+          <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[11px] text-gray-300">
+            {TX_TYPE_LABELS[a.type]}
+          </span>
           {url ? (
-            <a href={url} target="_blank" rel="noopener noreferrer" className="truncate text-sm text-gray-200 hover:text-purple-300">
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="truncate text-sm text-gray-200 hover:text-purple-300"
+            >
               {a.label}
             </a>
           ) : (
@@ -135,7 +182,12 @@ function ActivityRow({
           {a.counterparty && <span className="font-mono">{truncateAddress(a.counterparty)}</span>}
           {a.linkSource && <span>{LINK_SOURCE_LABELS[a.linkSource]}</span>}
           {a.type === 'bridge' && (
-            <button type="button" disabled={busy} onClick={unlink} className="text-gray-400 underline-offset-2 hover:text-white hover:underline disabled:opacity-50">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={unlink}
+              className="text-gray-400 underline-offset-2 hover:text-white hover:underline disabled:opacity-50"
+            >
               Unlink
             </button>
           )}
@@ -153,8 +205,16 @@ function ActivityRow({
       </div>
       <div className="text-right text-sm tabular-nums">
         {(a.inUsd > 0 || a.outUsd > 0) && <div className={pnlClass(net)}>{usdSigned(net)}</div>}
-        {a.realizedPnlUsd !== null && <div className={cn('text-xs', pnlClass(a.realizedPnlUsd))}>P/L {usdSigned(a.realizedPnlUsd)}</div>}
-        {a.feeUsd > 0 && <div className="text-xs text-gray-500">{a.type === 'bridge' ? 'fees' : 'gas'} {usd(a.feeUsd)}</div>}
+        {a.realizedPnlUsd !== null && (
+          <div className={cn('text-xs', pnlClass(a.realizedPnlUsd))}>
+            P/L {usdSigned(a.realizedPnlUsd)}
+          </div>
+        )}
+        {a.feeUsd > 0 && (
+          <div className="text-xs text-gray-500">
+            {a.type === 'bridge' ? 'fees' : 'gas'} {usd(a.feeUsd)}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -166,9 +226,18 @@ function sameTx(chainA: string, hashA: string, chainB: string, hashB: string) {
 }
 
 /** Money value of a transfer row, without the gas. */
-const moneyOf = (a: CashflowActivity) => (OUTGOING.includes(a.type) ? a.outUsd - a.feeUsd : a.inUsd);
+const moneyOf = (a: CashflowActivity) =>
+  OUTGOING.includes(a.type) ? a.outUsd - a.feeUsd : a.inUsd;
 
-function LinkPicker({ source, report, onDone }: { source: CashflowActivity; report: CashflowReport; onDone: () => void }) {
+function LinkPicker({
+  source,
+  report,
+  onDone,
+}: {
+  source: CashflowActivity;
+  report: CashflowReport;
+  onDone: () => void;
+}) {
   const { run, busy } = useCashflowActions();
   const sourceIsOut = OUTGOING.includes(source.type);
   const [manualChain, setManualChain] = useState(source.chain === 'solana' ? 'ethereum' : 'solana');
@@ -180,9 +249,19 @@ function LinkPicker({ source, report, onDone }: { source: CashflowActivity; repo
     const value = moneyOf(source);
     return report.activity
       .filter((b) => (sourceIsOut ? INCOMING : OUTGOING).includes(b.type) && b !== source)
-      .map((b) => ({ b, dt: new Date(b.timestamp).getTime() - t0, ratio: value > 0 ? moneyOf(b) / value : 0 }))
-      .filter(({ dt }) => (sourceIsOut ? dt > -10 * 60_000 && dt < 7 * 86_400_000 : dt < 10 * 60_000 && dt > -7 * 86_400_000))
-      .sort((x, y) => Math.abs(1 - x.ratio) - Math.abs(1 - y.ratio) || Math.abs(x.dt) - Math.abs(y.dt))
+      .map((b) => ({
+        b,
+        dt: new Date(b.timestamp).getTime() - t0,
+        ratio: value > 0 ? moneyOf(b) / value : 0,
+      }))
+      .filter(({ dt }) =>
+        sourceIsOut
+          ? dt > -10 * 60_000 && dt < 7 * 86_400_000
+          : dt < 10 * 60_000 && dt > -7 * 86_400_000,
+      )
+      .sort(
+        (x, y) => Math.abs(1 - x.ratio) - Math.abs(1 - y.ratio) || Math.abs(x.dt) - Math.abs(y.dt),
+      )
       .slice(0, 8);
   }, [report.activity, source, sourceIsOut]);
 
@@ -190,16 +269,16 @@ function LinkPicker({ source, report, onDone }: { source: CashflowActivity; repo
     const pair = sourceIsOut
       ? { fromChain: source.chain, fromTxHash: source.txHash, toChain: chain, toTxHash: txHash }
       : { fromChain: chain, fromTxHash: txHash, toChain: source.chain, toTxHash: source.txHash };
-    void run('Linked — counted as a move between your wallets', (token) => addCashflowLink(token, { kind: 'link', ...pair })).then(
-      (ok) => ok && onDone(),
-    );
+    void run('Linked — counted as a move between your wallets', (token) =>
+      addCashflowLink(token, { kind: 'link', ...pair }),
+    ).then((ok) => ok && onDone());
   };
 
   return (
     <div className="mt-3 rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-sm">
       <div className="mb-2 text-xs text-gray-400">
-        {sourceIsOut ? 'Where did this money arrive?' : 'Where did this money come from?'} Pick the matching transaction in your other
-        wallet.
+        {sourceIsOut ? 'Where did this money arrive?' : 'Where did this money come from?'} Pick the
+        matching transaction in your other wallet.
       </div>
       {candidates.length > 0 ? (
         <ul className="space-y-1">
@@ -263,8 +342,8 @@ function LinkPicker({ source, report, onDone }: { source: CashflowActivity; repo
         </button>
       </form>
       <p className="mt-2 text-[11px] text-gray-500">
-        A pasted transaction must be in one of your linked wallets. The difference between what left and what arrived is
-        counted as a fee.
+        A pasted transaction must be in one of your linked wallets. The difference between what left
+        and what arrived is counted as a fee.
       </p>
     </div>
   );
