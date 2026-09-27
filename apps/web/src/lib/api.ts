@@ -1,3 +1,5 @@
+import type { CashflowResponse } from '@nexus/types';
+
 // Server-side: use the internal Docker network URL to reach the API directly.
 // Client-side: use a relative path that Next.js rewrites to the API server.
 const API_BASE =
@@ -687,6 +689,30 @@ export function getMyHoldingsCollections(
     `/me/holdings/collections?tier=${encodeURIComponent(tier)}&page=${page}&limit=${limit}`,
     { token },
   );
+}
+
+/** Money in/out + PnL across linked wallets; builds in the background, poll until `status === 'ready'`. */
+export function getMyCashflow(token: string, refresh = false) {
+  return apiFetch<CashflowResponse>(`/me/cashflow${refresh ? '?refresh=true' : ''}`, { token });
+}
+
+export function addCashflowLink(
+  token: string,
+  input: { kind: 'link' | 'unlink'; fromChain: string; fromTxHash: string; toChain: string; toTxHash: string },
+) {
+  return apiFetch<CashflowResponse>('/me/cashflow/links', { method: 'POST', token, body: JSON.stringify(input) });
+}
+
+export function removeCashflowLink(token: string, id: string) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/links/${encodeURIComponent(id)}`, { method: 'DELETE', token });
+}
+
+export function addCashflowAddressTag(token: string, input: { chain: string; address: string; exchange: string }) {
+  return apiFetch<CashflowResponse>('/me/cashflow/address-tags', { method: 'POST', token, body: JSON.stringify(input) });
+}
+
+export function removeCashflowAddressTag(token: string, id: string) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/address-tags/${encodeURIComponent(id)}`, { method: 'DELETE', token });
 }
 
 export function getMyWallets(token: string) {

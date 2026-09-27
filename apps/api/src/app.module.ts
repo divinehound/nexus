@@ -20,6 +20,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { MeModule } from './modules/me/me.module';
 import { HoldingsModule } from './modules/holdings/holdings.module';
 import { ResolveModule } from './modules/resolve/resolve.module';
+import { CashflowModule } from './modules/cashflow/cashflow.module';
 import configuration from './config/configuration';
 import { validate } from './config/env.validation';
 
@@ -62,6 +63,7 @@ import { validate } from './config/env.validation';
     HealthScoreModule,
     WebhooksModule,
     ResolveModule,
+    CashflowModule,
   ],
   providers: [
     {

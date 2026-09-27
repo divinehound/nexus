@@ -204,6 +204,13 @@
       "when": 1784690720292,
       "tag": "0028_pnl_wallet_analysis",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790550000000,
+      "tag": "0029_cashflow_links_and_tags",
+      "breakpoints": true
     }
   ]
 }

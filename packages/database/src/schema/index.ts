@@ -9,4 +9,5 @@ export * from './ownership';
 export * from './holder-history';
 export * from './indexing';
 export * from './wallet-nicknames';
+export * from './cashflow';
 export * from './relations';

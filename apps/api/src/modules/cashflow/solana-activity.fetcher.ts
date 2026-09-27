@@ -1,0 +1,205 @@
+import { Logger } from '@nestjs/common';
+import { knownAsset } from './base-assets';
+import type { LedgerAsset, LedgerFee, LedgerMovement } from './cashflow-ledger';
+import type { ChainFetchResult } from './evm-activity.fetcher';
+import { shortAddress } from './evm-activity.fetcher';
+import { chunk, fetchJsonWithRetry, sleep } from './http';
+
+const LAMPORTS_PER_SOL = 1e9;
+const MAX_PAGES = 100; // × 100 transactions
+const NFT_STANDARDS = new Set(['NonFungible', 'ProgrammableNonFungible', 'NonFungibleEdition']);
+const FUNGIBLE_INTERFACES = new Set(['FungibleToken', 'FungibleAsset']);
+
+export interface HeliusEnhancedTx {
+  signature: string;
+  timestamp: number;
+  fee?: number;
+  feePayer?: string;
+  transactionError?: unknown;
+  nativeTransfers?: Array<{ fromUserAccount?: string | null; toUserAccount?: string | null; amount?: number }>;
+  tokenTransfers?: Array<{
+    fromUserAccount?: string | null;
+    toUserAccount?: string | null;
+    tokenAmount?: number;
+    mint?: string;
+    tokenStandard?: string;
+  }>;
+}
+
+export interface MintInfo {
+  /** null when DAS didn't say — fall back to the transfer's token standard. */
+  isNft: boolean | null;
+  name: string | null;
+  symbol: string | null;
+  /** Verified collection address for NFTs, used to group positions. */
+  collection: string | null;
+  collectionName: string | null;
+}
+
+export const SOL_ASSET_KEY = 'solana:native';
+
+function solAsset(assets: Map<string, LedgerAsset>): LedgerAsset {
+  let a = assets.get(SOL_ASSET_KEY);
+  if (!a) {
+    a = { key: SOL_ASSET_KEY, chain: 'solana', kind: 'native', contract: '', name: 'Solana', symbol: 'SOL', price: { kind: 'native', symbol: 'SOL' } };
+    assets.set(SOL_ASSET_KEY, a);
+  }
+  return a;
+}
+
+export function solanaTokenAsset(mint: string, standard: string | undefined, info: MintInfo | undefined, assets: Map<string, LedgerAsset>): LedgerAsset {
+  const known = knownAsset('solana', mint);
+  const isNft = !known && (info?.isNft ?? NFT_STANDARDS.has(standard ?? ''));
+  const groupAddress = isNft && info?.collection ? info.collection : mint;
+  const key = `solana:${groupAddress}`;
+  const existing = assets.get(key);
+  if (existing) return existing;
+  let asset: LedgerAsset;
+  if (isNft) {
+    const name = info?.collectionName ?? stripEditionNumber(info?.name) ?? shortAddress(groupAddress);
+    asset = { key, chain: 'solana', kind: 'nft', contract: groupAddress, name, symbol: info?.symbol ?? null, price: null };
+  } else {
+    const symbol = known?.symbol ?? info?.symbol ?? null;
+    asset = { key, chain: 'solana', kind: 'fungible', contract: mint, name: info?.name ?? symbol ?? shortAddress(mint), symbol, price: known?.price ?? null };
+  }
+  assets.set(key, asset);
+  return asset;
+}
+
+function stripEditionNumber(name: string | null | undefined): string | null {
+  if (!name) return null;
+  return name.replace(/\s*#\s*\d+$/, '').trim() || null;
+}
+
+/** Convert one Helius enhanced transaction into movements + fee from `wallet`'s side. */
+export function normalizeSolanaTx(
+  wallet: string,
+  tx: HeliusEnhancedTx,
+  mintInfo: Map<string, MintInfo>,
+  assets: Map<string, LedgerAsset>,
+): { movements: LedgerMovement[]; fee: LedgerFee | null } {
+  const timestamp = new Date(tx.timestamp * 1000);
+  const fee: LedgerFee | null =
+    tx.feePayer === wallet && tx.fee
+      ? { chain: 'solana', txHash: tx.signature, wallet, timestamp, feeNative: tx.fee / LAMPORTS_PER_SOL, symbol: 'SOL' }
+      : null;
+  // Failed transactions still cost the fee but move nothing.
+  if (tx.transactionError) return { movements: [], fee };
+
+  const movements: LedgerMovement[] = [];
+  const base = { chain: 'solana', txHash: tx.signature, timestamp, wallet };
+  for (const n of tx.nativeTransfers ?? []) {
+    const from = n.fromUserAccount ?? '';
+    const to = n.toUserAccount ?? '';
+    if ((from === wallet) === (to === wallet) || !n.amount) continue;
+    const direction = from === wallet ? 'out' : 'in';
+    movements.push({ ...base, direction, asset: solAsset(assets), tokenId: null, amount: n.amount / LAMPORTS_PER_SOL, counterparty: direction === 'out' ? to : from });
+  }
+  for (const t of tx.tokenTransfers ?? []) {
+    const from = t.fromUserAccount ?? '';
+    const to = t.toUserAccount ?? '';
+    if ((from === wallet) === (to === wallet) || !t.mint || !t.tokenAmount) continue;
+    const direction = from === wallet ? 'out' : 'in';
+    const asset = solanaTokenAsset(t.mint, t.tokenStandard, mintInfo.get(t.mint), assets);
+    movements.push({
+      ...base,
+      direction,
+      asset,
+      tokenId: asset.kind === 'nft' ? t.mint : null,
+      amount: t.tokenAmount,
+      counterparty: direction === 'out' ? to : from,
+    });
+  }
+  return { movements, fee };
+}
+
+/** Full transaction history for one Solana address via Helius' enhanced transactions API. */
+export class SolanaActivityFetcher {
+  private readonly logger = new Logger(SolanaActivityFetcher.name);
+
+  constructor(private readonly apiKey: string) {}
+
+  async fetch(address: string, assets: Map<string, LedgerAsset>): Promise<ChainFetchResult> {
+    const txs: HeliusEnhancedTx[] = [];
+    let before: string | undefined;
+    let truncated = true;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const url = new URL(`https://api.helius.xyz/v0/addresses/${address}/transactions`);
+      url.searchParams.set('api-key', this.apiKey);
+      url.searchParams.set('limit', '100');
+      if (before) url.searchParams.set('before', before);
+      const batch = await fetchJsonWithRetry<HeliusEnhancedTx[]>(url.toString(), { headers: { accept: 'application/json' } }, 'Helius address transactions');
+      if (!Array.isArray(batch) || batch.length === 0) {
+        truncated = false;
+        break;
+      }
+      txs.push(...batch);
+      before = batch[batch.length - 1].signature;
+      await sleep(150);
+    }
+
+    const mints = new Set<string>();
+    for (const tx of txs) for (const t of tx.tokenTransfers ?? []) if (t.mint && !knownAsset('solana', t.mint)) mints.add(t.mint);
+    const mintInfo = await this.fetchMintInfo([...mints]);
+
+    const movements: LedgerMovement[] = [];
+    const fees: LedgerFee[] = [];
+    for (const tx of txs) {
+      const r = normalizeSolanaTx(address, tx, mintInfo, assets);
+      movements.push(...r.movements);
+      if (r.fee) fees.push(r.fee);
+    }
+    return { movements, fees, transfers: txs.length, truncated, notes: [] };
+  }
+
+  /** DAS getAssetBatch: token vs NFT, names, and verified collection for grouping. */
+  private async fetchMintInfo(mints: string[]): Promise<Map<string, MintInfo>> {
+    const info = new Map<string, MintInfo>();
+    const rpc = `https://mainnet.helius-rpc.com/?api-key=${this.apiKey}`;
+    type DasAsset = {
+      id: string;
+      interface?: string;
+      content?: { metadata?: { name?: string; symbol?: string } };
+      grouping?: Array<{ group_key?: string; group_value?: string }>;
+      token_info?: { symbol?: string };
+    };
+    const getBatch = async (ids: string[]): Promise<DasAsset[]> => {
+      const json = await fetchJsonWithRetry<{ result?: Array<DasAsset | null> }>(
+        rpc,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getAssetBatch', params: { ids } }) },
+        'Helius getAssetBatch',
+      );
+      return (json.result ?? []).filter((a): a is DasAsset => !!a);
+    };
+
+    try {
+      for (const ids of chunk(mints, 1000)) {
+        for (const a of await getBatch(ids)) {
+          const collection = a.grouping?.find((g) => g.group_key === 'collection')?.group_value ?? null;
+          info.set(a.id, {
+            isNft: a.interface ? !FUNGIBLE_INTERFACES.has(a.interface) : null,
+            name: a.content?.metadata?.name?.trim() || null,
+            symbol: a.token_info?.symbol || a.content?.metadata?.symbol?.trim() || null,
+            collection,
+            collectionName: null,
+          });
+        }
+        await sleep(500);
+      }
+      // Collection names live on the collection's own asset.
+      const collections = [...new Set([...info.values()].map((i) => i.collection).filter((c): c is string => !!c))];
+      const names = new Map<string, string>();
+      for (const ids of chunk(collections, 1000)) {
+        for (const a of await getBatch(ids)) {
+          const name = a.content?.metadata?.name?.trim();
+          if (name) names.set(a.id, name);
+        }
+        await sleep(500);
+      }
+      for (const i of info.values()) if (i.collection) i.collectionName = names.get(i.collection) ?? null;
+    } catch (err) {
+      this.logger.warn(`Solana mint metadata lookup failed: ${(err as Error).message}`);
+    }
+    return info;
+  }
+}

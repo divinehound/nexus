@@ -36,6 +36,10 @@ export class EnvironmentVariables {
 
   @IsString()
   @IsOptional()
+  RELAY_API_KEY?: string;
+
+  @IsString()
+  @IsOptional()
   SOLANA_RPC_URL?: string;
 
   @IsString()
