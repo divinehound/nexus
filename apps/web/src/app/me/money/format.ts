@@ -26,6 +26,16 @@ export function pnlClass(n: number): string {
   return n > 0 ? 'text-green-400' : 'text-red-400';
 }
 
+/** Signed amount of a chain's own coin: +0.2 ETH / −12.5 SOL. */
+export function nativeAmount(n: number, symbol: string, signed = true): string {
+  const abs = Math.abs(n);
+  const digits = abs >= 100 ? 1 : abs >= 1 ? 3 : 4;
+  const body = `${abs.toLocaleString('en-US', { maximumFractionDigits: digits })} ${symbol}`;
+  if (!signed) return body;
+  if (abs < 10 ** -digits) return `0 ${symbol}`;
+  return `${n > 0 ? '+' : '−'}${body}`;
+}
+
 export function qty(n: number): string {
   if (n === 0) return '0';
   if (Math.abs(n) >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
@@ -47,14 +57,16 @@ export const CATEGORY_LABELS: Record<CashflowCategory, string> = {
   nft_mint: 'NFT mints',
   token_purchase: 'Token buys',
   transfer_out: 'Sent to other wallets',
+  exchange_deposit: 'Cashed out to exchanges',
   gas_fees: 'Gas, network & bridge fees',
   nft_sale: 'NFT sales',
   token_sale: 'Token sales',
   transfer_in: 'Received from other wallets',
+  exchange_withdrawal: 'Deposited from exchanges',
 };
 
-export const OUT_CATEGORIES: CashflowCategory[] = ['nft_purchase', 'nft_mint', 'token_purchase', 'transfer_out', 'gas_fees'];
-export const IN_CATEGORIES: CashflowCategory[] = ['nft_sale', 'token_sale', 'transfer_in'];
+export const OUT_CATEGORIES: CashflowCategory[] = ['nft_purchase', 'nft_mint', 'token_purchase', 'transfer_out', 'exchange_deposit', 'gas_fees'];
+export const IN_CATEGORIES: CashflowCategory[] = ['nft_sale', 'token_sale', 'transfer_in', 'exchange_withdrawal'];
 
 export const TX_TYPE_LABELS: Record<CashflowTxType, string> = {
   nft_purchase: 'NFT buy',
@@ -65,6 +77,8 @@ export const TX_TYPE_LABELS: Record<CashflowTxType, string> = {
   swap: 'Swap',
   transfer_out: 'Sent',
   transfer_in: 'Received',
+  exchange_deposit: 'Cash out',
+  exchange_withdrawal: 'Exchange deposit',
   received_asset: 'Received asset',
   sent_asset: 'Sent asset',
   own_wallet_transfer: 'Own wallets',

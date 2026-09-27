@@ -20,6 +20,12 @@ export default () => ({
     // key raises limits and switches to the pro-api host.
     apiKey: process.env.COINGECKO_API_KEY || '',
   },
+  relay: {
+    // Optional. Lets the Money dashboard pair Relay bridge transfers exactly
+    // (from Relay's own records) instead of by amount/timing. Self-serve key
+    // from dashboard.relay.link.
+    apiKey: process.env.RELAY_API_KEY || '',
+  },
   solana: {
     rpcUrl: process.env.SOLANA_RPC_URL || '',
   },

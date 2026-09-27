@@ -13,10 +13,12 @@ export type CashflowCategory =
   | 'nft_mint'
   | 'token_purchase'
   | 'transfer_out'
+  | 'exchange_deposit'
   | 'gas_fees'
   | 'nft_sale'
   | 'token_sale'
-  | 'transfer_in';
+  | 'transfer_in'
+  | 'exchange_withdrawal';
 
 export type CashflowTxType =
   | 'nft_purchase'
@@ -27,6 +29,8 @@ export type CashflowTxType =
   | 'swap'
   | 'transfer_out'
   | 'transfer_in'
+  | 'exchange_deposit'
+  | 'exchange_withdrawal'
   | 'received_asset'
   | 'sent_asset'
   | 'own_wallet_transfer'
@@ -41,6 +45,18 @@ export interface CashflowTotals {
   realizedPnlUsd: number;
   /** Realized P/L minus the gas paid to buy/mint and to sell what was sold. */
   realizedPnlAfterGasUsd: number;
+  /** The part of realized P/L earned in the chain's own coin, valued at the sale-day price. */
+  tradeGainUsd: number;
+  /** The rest of realized P/L: the coin's own price moving while you held (realized = trade gain + price move). */
+  priceMoveUsd: number;
+  /** Realized P/L in each chain's own coin, e.g. { ETH: 0.4, SOL: -12 }. */
+  realizedPnlNative: Record<string, number>;
+  /** Money moved from exchanges into your wallets. */
+  onRampUsd: number;
+  /** Money moved from your wallets to exchanges. */
+  offRampUsd: number;
+  /** onRamp − offRamp: how much of your own money is still in crypto. */
+  netInvestedUsd: number;
   /** Cost basis of NFTs/tokens still held (bought within the scanned history). */
   openCostBasisUsd: number;
   txCount: number;
@@ -81,6 +97,14 @@ export interface CashflowPosition {
   realizedPnlAfterGasUsd: number;
   /** All gas paid on transactions involving this asset (buys, mints, sales, swaps, sends). */
   gasUsd: number;
+  /** The chain's own coin (ETH, SOL, APE, POL) that native figures are in. */
+  nativeSymbol: string;
+  spentNative: number;
+  proceedsNative: number;
+  /** Realized P/L in the native coin: cost converted at the buy-day rate, proceeds at the sale-day rate. */
+  realizedPnlNative: number;
+  tradeGainUsd: number;
+  priceMoveUsd: number;
   /** Cost basis of units still held. */
   openCostBasisUsd: number;
   /** Units sold whose purchase was not seen (airdrop, gift, pre-history) — basis taken as $0. */
@@ -89,9 +113,15 @@ export interface CashflowPosition {
   lastAt: string;
 }
 
+export type CashflowExchangeSource = 'known' | 'detected' | 'tagged';
+
 export interface CashflowCounterparty {
   chain: string;
   address: string;
+  /** Set when this address belongs to a centralized exchange. */
+  exchange: string | null;
+  /** known = exchange's public wallet; detected = your deposit address (sweeps to the exchange); tagged = you marked it. */
+  exchangeSource: CashflowExchangeSource | null;
   sentUsd: number;
   receivedUsd: number;
   sentCount: number;
@@ -129,7 +159,41 @@ export interface CashflowActivity {
   feeUsd: number;
   realizedPnlUsd: number | null;
   counterparty: string | null;
+  /** Exchange name for exchange deposits/withdrawals. */
+  exchange: string | null;
+  /** For bridges: the other half of the move, and how the pair was established. */
+  linkedTo: { chain: string; txHash: string } | null;
+  linkSource: CashflowLinkSource | null;
+  /** Whether this row is where the money left ('out') or arrived ('in'). */
+  linkSide: 'out' | 'in' | null;
   legs: CashflowActivityLeg[];
+}
+
+export type CashflowLinkSource = 'auto' | 'manual' | 'relay';
+
+export interface CashflowExchangeSummary {
+  exchange: string;
+  /** Sent from your wallets to this exchange (cashed out). */
+  depositedUsd: number;
+  /** Withdrawn from this exchange into your wallets. */
+  withdrawnUsd: number;
+  txCount: number;
+}
+
+export interface CashflowTxLink {
+  id: string;
+  kind: 'link' | 'unlink';
+  fromChain: string;
+  fromTxHash: string;
+  toChain: string;
+  toTxHash: string;
+}
+
+export interface CashflowAddressTag {
+  id: string;
+  chainFamily: 'evm' | 'solana';
+  address: string;
+  exchange: string;
 }
 
 export interface CashflowWalletCoverage {
@@ -157,6 +221,12 @@ export interface CashflowReport {
   ownWalletTransfers: { count: number; usd: number };
   /** Cross-chain moves between linked wallets — excluded from in/out; the amount lost in transit counts as a fee. */
   bridges: { count: number; usd: number; feesUsd: number };
+  exchanges: CashflowExchangeSummary[];
+  /** The user's manual link/unlink overrides and exchange tags, echoed for the UI. */
+  links: CashflowTxLink[];
+  addressTags: CashflowAddressTag[];
+  /** Exchange names offered when tagging an address. */
+  exchangeNames: string[];
   /** Most recent classified transactions, newest first (capped). */
   activity: CashflowActivity[];
   coverage: CashflowWalletCoverage[];

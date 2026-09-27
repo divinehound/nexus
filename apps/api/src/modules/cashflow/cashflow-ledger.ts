@@ -4,13 +4,16 @@ import type {
   CashflowCategory,
   CashflowChainFees,
   CashflowCounterparty,
+  CashflowExchangeSource,
+  CashflowExchangeSummary,
+  CashflowLinkSource,
   CashflowMonth,
   CashflowPosition,
   CashflowReport,
   CashflowTxType,
   CashflowWalletCoverage,
 } from '@nexus/types';
-import type { PriceRef } from './base-assets';
+import { nativeSymbolFor, type PriceRef } from './base-assets';
 
 /**
  * Pure cash-flow engine: turns raw per-wallet asset movements + gas fees into
@@ -81,6 +84,28 @@ export interface BuildReportInput {
   notes: string[];
   now: Date;
   activityLimit?: number;
+  /** Pairs known to be one move between the user's wallets (user links, bridge-service records); applied before auto-matching. */
+  explicitLinks?: ExplicitLink[];
+  /** Pairs the user said are NOT the same move; auto-matching skips them. */
+  rejectedLinks?: TxPair[];
+  /** Exchange-owned addresses, keyed by `addressIdentity`. */
+  exchangeAddresses?: Map<string, { exchange: string; source: CashflowExchangeSource }>;
+}
+
+export interface TxPair {
+  fromChain: string;
+  fromTxHash: string;
+  toChain: string;
+  toTxHash: string;
+}
+
+export interface ExplicitLink extends TxPair {
+  source: Exclude<CashflowLinkSource, 'auto'>;
+}
+
+/** Tx hashes are case-insensitive hex on EVM, case-sensitive base58 on Solana. */
+export function txKey(chain: string, txHash: string): string {
+  return `${chain}:${chain === 'solana' ? txHash : txHash.toLowerCase()}`;
 }
 
 const EPSILON = 1e-12;
@@ -98,6 +123,8 @@ interface Lot {
   cost: number;
   /** Gas paid to acquire these units — kept apart from cost so P/L can be shown before and after gas. */
   gas: number;
+  /** Cost in the chain's own coin, converted at the acquisition-day rate. */
+  costNative: number;
 }
 
 class Position {
@@ -112,6 +139,11 @@ class Position {
   realizedPnlAfterGasUsd = 0;
   /** All gas paid on txs that bought, minted, sold, swapped or sent this asset. */
   gasUsd = 0;
+  spentNative = 0;
+  proceedsNative = 0;
+  realizedPnlNative = 0;
+  tradeGainUsd = 0;
+  priceMoveUsd = 0;
   qtySoldWithoutBasis = 0;
   firstAt: Date;
   lastAt: Date;
@@ -130,30 +162,33 @@ class Position {
     return this.asset.kind === 'nft' && tokenId !== null ? tokenId : '*';
   }
 
-  acquire(qty: number, costUsd: number, tokenId: string | null, gasUsd = 0) {
+  acquire(qty: number, costUsd: number, tokenId: string | null, gasUsd = 0, costNative = 0) {
     const key = this.lotKey(tokenId);
-    const lot = this.lots.get(key) ?? { qty: 0, cost: 0, gas: 0 };
+    const lot = this.lots.get(key) ?? { qty: 0, cost: 0, gas: 0, costNative: 0 };
     lot.qty += qty;
     lot.cost += costUsd;
     lot.gas += gasUsd;
+    lot.costNative += costNative;
     this.lots.set(key, lot);
   }
 
   /** Remove `qty` units; returns the cost basis and acquisition gas removed, and how many units had no known basis. */
-  dispose(qty: number, tokenId: string | null): { basis: number; gas: number; missing: number } {
+  dispose(qty: number, tokenId: string | null): { basis: number; gas: number; basisNative: number; missing: number } {
     const key = this.lotKey(tokenId);
     const lot = this.lots.get(key);
-    if (!lot || lot.qty <= EPSILON) return { basis: 0, gas: 0, missing: qty };
+    if (!lot || lot.qty <= EPSILON) return { basis: 0, gas: 0, basisNative: 0, missing: qty };
     const take = Math.min(qty, lot.qty);
     const fraction = lot.qty > 0 ? take / lot.qty : 0;
     const basis = lot.cost * fraction;
     const gas = lot.gas * fraction;
+    const basisNative = lot.costNative * fraction;
     lot.qty -= take;
     lot.cost -= basis;
     lot.gas -= gas;
+    lot.costNative -= basisNative;
     if (lot.qty <= EPSILON) this.lots.delete(key);
     const missing = qty - take;
-    return { basis, gas, missing: missing > EPSILON ? missing : 0 };
+    return { basis, gas, basisNative, missing: missing > EPSILON ? missing : 0 };
   }
 
   get qtyHeld(): number {
@@ -217,7 +252,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
   for (const g of ordered) analyses.set(g, analyze(g, isOwn, priceLeg, pricer));
 
   // ── Pass 2: pair cross-chain moves between the user's own wallets ──
-  const bridgeRoles = matchBridges(ordered, analyses);
+  const bridgeRoles = matchBridges(ordered, analyses, input.explicitLinks ?? [], input.rejectedLinks ?? []);
 
   // ── Accumulators ──
   const months = new Map<string, CashflowMonth>();
@@ -252,6 +287,33 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       totalOut += usd;
     }
   };
+  /** USD per unit of the chain's own coin on that day (null if unknown). */
+  const nativeRate = (chain: string, d: Date) => pricer.usdPerUnit({ kind: 'native', symbol: nativeSymbolFor(chain) }, dayKey(d));
+  const toNative = (usd: number, rate: number | null) => (rate ? usd / rate : 0);
+  let totalTradeGain = 0;
+  let totalPriceMove = 0;
+  const realizedNative: Record<string, number> = {};
+  /**
+   * Book one realized result: split into what was earned in the coin itself
+   * (trade gain, valued at the sale-day price) and the coin's own price move
+   * while held. `pnlNative` is null when no sale-day rate exists.
+   */
+  const bookSplit = (p: Position, realizedUsd: number, pnlNative: number | null, saleRate: number | null) => {
+    const tradeGain = pnlNative !== null && saleRate ? pnlNative * saleRate : realizedUsd;
+    p.tradeGainUsd += tradeGain;
+    p.priceMoveUsd += realizedUsd - tradeGain;
+    totalTradeGain += tradeGain;
+    totalPriceMove += realizedUsd - tradeGain;
+    if (pnlNative !== null) {
+      p.realizedPnlNative += pnlNative;
+      const sym = nativeSymbolFor(p.asset.chain);
+      realizedNative[sym] = (realizedNative[sym] ?? 0) + pnlNative;
+    }
+  };
+
+  const exchangeOf = (chain: string, addr: string) => (addr ? (input.exchangeAddresses?.get(addressIdentity(chain, addr)) ?? null) : null);
+  const exchangeTotals = new Map<string, CashflowExchangeSummary>();
+
   const bookRealized = (d: Date, usd: number, afterGasUsd: number) => {
     const m = monthFor(d);
     m.realizedPnlUsd += usd;
@@ -276,7 +338,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     const key = addressIdentity(chain, address) + `@${chain}`;
     let c = counterparties.get(key);
     if (!c) {
-      c = { chain, address, sentUsd: 0, receivedUsd: 0, sentCount: 0, receivedCount: 0, lastAt: at.toISOString() };
+      const ex = exchangeOf(chain, address);
+      c = {
+        chain,
+        address,
+        exchange: ex?.exchange ?? null,
+        exchangeSource: ex?.source ?? null,
+        sentUsd: 0,
+        receivedUsd: 0,
+        sentCount: 0,
+        receivedCount: 0,
+        lastAt: at.toISOString(),
+      };
       counterparties.set(key, c);
     }
     if (at.toISOString() > c.lastAt) c.lastAt = at.toISOString();
@@ -296,7 +369,22 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     const bookTransfers = (legs: PricedLeg[], dir: 'in' | 'out') => {
       for (const l of legs) {
         const usd = l.usd ?? 0;
-        book(at, dir, dir === 'in' ? 'transfer_in' : 'transfer_out', usd);
+        const ex = exchangeOf(g.chain, l.movement.counterparty);
+        const category: CashflowCategory = ex
+          ? dir === 'in'
+            ? 'exchange_withdrawal'
+            : 'exchange_deposit'
+          : dir === 'in'
+            ? 'transfer_in'
+            : 'transfer_out';
+        book(at, dir, category, usd);
+        if (ex) {
+          const e = exchangeTotals.get(ex.exchange) ?? { exchange: ex.exchange, depositedUsd: 0, withdrawnUsd: 0, txCount: 0 };
+          if (dir === 'in') e.withdrawnUsd += usd;
+          else e.depositedUsd += usd;
+          e.txCount++;
+          exchangeTotals.set(ex.exchange, e);
+        }
         const c = counterpartyFor(g.chain, l.movement.counterparty || 'unknown', at);
         if (dir === 'in') {
           c.receivedUsd += usd;
@@ -366,6 +454,10 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         feeUsd: feeUsd + bridgeFee,
         realizedPnlUsd: null,
         counterparty: null,
+        exchange: null,
+        linkedTo: { chain: pair.group.chain, txHash: pair.group.txHash },
+        linkSource: bridge.source,
+        linkSide: bridge.side,
         legs: legsSrc.map((l) => toLeg(l.movement, l.usd)),
       });
       continue;
@@ -389,6 +481,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     let txOut = feeUsd;
     const legUsd = new Map<LedgerMovement, number>();
     let counterparty: string | null = null;
+    let exchange: string | null = null;
 
     if (unIn.length > 0 && unOut.length === 0) {
       // ── Acquisition: purchase, mint, or free receive ──
@@ -398,8 +491,10 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       const allMint = unIn.every((m) => m.counterparty === '');
       for (const m of unIn) {
         const p = positionFor(m.asset, at);
-        p.acquire(m.amount, share, m.tokenId, gasShare);
+        const shareNative = toNative(share, nativeRate(m.chain, at));
+        p.acquire(m.amount, share, m.tokenId, gasShare, shareNative);
         p.gasUsd += gasShare;
+        if (cost > 0) p.spentNative += shareNative;
         if (cost > 0) {
           p.buyCount++;
           p.qtyBought += m.amount;
@@ -432,7 +527,11 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         let realizedAfterGas = 0;
         for (const m of unOut) {
           const p = positionFor(m.asset, at);
-          const { basis, gas, missing } = p.dispose(m.amount, m.tokenId);
+          const { basis, gas, basisNative, missing } = p.dispose(m.amount, m.tokenId);
+          const saleRate = nativeRate(m.chain, at);
+          const shareNative = toNative(share, saleRate);
+          p.proceedsNative += shareNative;
+          bookSplit(p, share - basis, saleRate ? shareNative - basisNative : null, saleRate);
           p.sellCount++;
           p.qtySold += m.amount;
           p.qtySoldWithoutBasis += missing;
@@ -468,16 +567,23 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       let carried = 0;
       // Acquisition gas of what's given up, plus this swap's gas, rides along into what's received.
       let carriedGas = feeUsd;
+      let carriedNative = 0;
       for (const m of unOut) {
         const d = positionFor(m.asset, at).dispose(m.amount, m.tokenId);
         carried += d.basis;
         carriedGas += d.gas;
+        carriedNative += d.basisNative;
       }
       const netMoney = moneyOut - moneyIn;
+      const swapRate = nativeRate(g.chain, at);
       if (netMoney < 0) {
         // Received money on top: realize it as a zero-basis sale.
         realized = -netMoney;
         bookRealized(at, realized, realized);
+        const p = positionFor(unOut[0].asset, at);
+        p.realizedPnlUsd += realized;
+        p.realizedPnlAfterGasUsd += realized;
+        bookSplit(p, realized, swapRate ? realized / swapRate : null, swapRate);
         book(at, 'in', 'token_sale', -netMoney);
         txIn += -netMoney;
       } else if (netMoney > 0) {
@@ -486,8 +592,9 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       }
       const basis = carried + Math.max(0, netMoney);
       const share = basis / unIn.length;
+      const basisNative = carriedNative + toNative(Math.max(0, netMoney), swapRate);
       for (const m of unIn) {
-        positionFor(m.asset, at).acquire(m.amount, share, m.tokenId, carriedGas / unIn.length);
+        positionFor(m.asset, at).acquire(m.amount, share, m.tokenId, carriedGas / unIn.length, basisNative / unIn.length);
         legUsd.set(m, share);
       }
       for (const m of [...unIn, ...unOut]) positionFor(m.asset, at).gasUsd += feeUsd / (unIn.length + unOut.length);
@@ -498,13 +605,15 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     } else if (pricedOut.length > 0) {
       bookTransfers(pricedOut, 'out');
       txOut += moneyOut;
-      type = 'transfer_out';
       counterparty = pricedOut[0].movement.counterparty || null;
+      exchange = exchangeOf(g.chain, pricedOut[0].movement.counterparty)?.exchange ?? null;
+      type = exchange ? 'exchange_deposit' : 'transfer_out';
     } else if (pricedIn.length > 0) {
       bookTransfers(pricedIn, 'in');
       txIn += moneyIn;
-      type = 'transfer_in';
       counterparty = pricedIn[0].movement.counterparty || null;
+      exchange = exchangeOf(g.chain, pricedIn[0].movement.counterparty)?.exchange ?? null;
+      type = exchange ? 'exchange_withdrawal' : 'transfer_in';
     } else {
       type = hadOwnMove ? 'own_wallet_transfer' : 'contract_interaction';
     }
@@ -526,12 +635,16 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       timestamp: at.toISOString(),
       wallet: g.wallet,
       type,
-      label: describe(type, unIn, unOut, pricedIn, pricedOut),
+      label: describe(type, unIn, unOut, pricedIn, pricedOut, exchange),
       inUsd: txIn,
       outUsd: txOut,
       feeUsd,
       realizedPnlUsd: realized,
       counterparty,
+      exchange,
+      linkedTo: null,
+      linkSource: null,
+      linkSide: null,
       legs,
     });
   }
@@ -557,6 +670,12 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       realizedPnlUsd: p.realizedPnlUsd,
       realizedPnlAfterGasUsd: p.realizedPnlAfterGasUsd,
       gasUsd: p.gasUsd,
+      nativeSymbol: nativeSymbolFor(p.asset.chain),
+      spentNative: p.spentNative,
+      proceedsNative: p.proceedsNative,
+      realizedPnlNative: p.realizedPnlNative,
+      tradeGainUsd: p.tradeGainUsd,
+      priceMoveUsd: p.priceMoveUsd,
       openCostBasisUsd: p.openCost,
       qtySoldWithoutBasis: p.qtySoldWithoutBasis,
       firstAt: p.firstAt.toISOString(),
@@ -598,6 +717,12 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       feesUsd: totalFees,
       realizedPnlUsd: totalRealized,
       realizedPnlAfterGasUsd: totalRealizedAfterGas,
+      tradeGainUsd: totalTradeGain,
+      priceMoveUsd: totalPriceMove,
+      realizedPnlNative: realizedNative,
+      onRampUsd: inByCategory.exchange_withdrawal ?? 0,
+      offRampUsd: outByCategory.exchange_deposit ?? 0,
+      netInvestedUsd: (inByCategory.exchange_withdrawal ?? 0) - (outByCategory.exchange_deposit ?? 0),
       openCostBasisUsd,
       txCount,
       unpricedMovements,
@@ -613,6 +738,10 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     fees: [...feesByChain.values()].sort((a, b) => b.feesUsd - a.feesUsd),
     ownWalletTransfers: ownTransfers,
     bridges,
+    exchanges: [...exchangeTotals.values()].sort((a, b) => b.depositedUsd + b.withdrawnUsd - (a.depositedUsd + a.withdrawnUsd)),
+    links: [],
+    addressTags: [],
+    exchangeNames: [],
     activity: activity.slice(0, limit),
     coverage: input.coverage,
     notes: input.notes,
@@ -732,6 +861,7 @@ export interface BridgeRole {
   side: 'out' | 'in';
   self: BridgeSide;
   pair: BridgeSide;
+  source: CashflowLinkSource;
 }
 
 const MINUTE = 60_000;
@@ -764,10 +894,43 @@ function bridgeSide(group: TxGroup, legs: PricedLeg[]): BridgeSide {
  * bought or sold in the same tx). Each outgoing transfer takes the closest
  * eligible arrival in time; amounts must match up to a bridge fee.
  */
-export function matchBridges(ordered: TxGroup[], analyses: Map<TxGroup, TxAnalysis>): Map<TxGroup, BridgeRole> {
+export function matchBridges(
+  ordered: TxGroup[],
+  analyses: Map<TxGroup, TxAnalysis>,
+  explicit: ExplicitLink[] = [],
+  rejected: TxPair[] = [],
+): Map<TxGroup, BridgeRole> {
+  const roles = new Map<TxGroup, BridgeRole>();
+  const byKey = new Map(ordered.map((g) => [txKey(g.chain, g.txHash), g]));
+
+  // Explicit links win: they're either the user's word or the bridge's own record.
+  for (const link of explicit) {
+    const from = byKey.get(txKey(link.fromChain, link.fromTxHash));
+    const to = byKey.get(txKey(link.toChain, link.toTxHash));
+    if (!from || !to || from === to || roles.has(from) || roles.has(to)) continue;
+    const fa = analyses.get(from)!;
+    const ta = analyses.get(to)!;
+    const outLegs = fa.pricedOut;
+    const inLegs = ta.pricedIn.length > 0 ? ta.pricedIn : ta.ownArrivals;
+    if (outLegs.length === 0 || inLegs.length === 0) continue;
+    const out = bridgeSide(from, outLegs);
+    const arrival = bridgeSide(to, inLegs);
+    roles.set(from, { side: 'out', self: out, pair: arrival, source: link.source });
+    roles.set(to, { side: 'in', self: arrival, pair: out, source: link.source });
+  }
+
+  const rejectedKeys = new Set(
+    rejected.flatMap((r) => {
+      const a = txKey(r.fromChain, r.fromTxHash);
+      const b = txKey(r.toChain, r.toTxHash);
+      return [`${a}>${b}`, `${b}>${a}`];
+    }),
+  );
+
   const outs: BridgeSide[] = [];
   const ins: BridgeSide[] = [];
   for (const g of ordered) {
+    if (roles.has(g)) continue;
     const a = analyses.get(g)!;
     const pureMoney = a.unIn.length === 0 && a.unOut.length === 0;
     if (pureMoney && a.pricedOut.length > 0 && a.pricedIn.length === 0) outs.push(bridgeSide(g, a.pricedOut));
@@ -775,7 +938,6 @@ export function matchBridges(ordered: TxGroup[], analyses: Map<TxGroup, TxAnalys
     else if (a.external.length === 0 && a.ownArrivals.length > 0) ins.push(bridgeSide(g, a.ownArrivals));
   }
 
-  const roles = new Map<TxGroup, BridgeRole>();
   const taken = new Set<BridgeSide>();
   for (const out of outs) {
     const t0 = out.group.timestamp.getTime();
@@ -783,6 +945,7 @@ export function matchBridges(ordered: TxGroup[], analyses: Map<TxGroup, TxAnalys
     let bestDt = Infinity;
     for (const cand of ins) {
       if (taken.has(cand) || cand.group.chain === out.group.chain) continue;
+      if (rejectedKeys.has(`${txKey(out.group.chain, out.group.txHash)}>${txKey(cand.group.chain, cand.group.txHash)}`)) continue;
       const dt = cand.group.timestamp.getTime() - t0;
       if (dt < -CLOCK_SKEW_MS || dt > SLOW_WINDOW_MS) continue;
       if (!bridgeAmountsMatch(out, cand, dt)) continue;
@@ -793,8 +956,8 @@ export function matchBridges(ordered: TxGroup[], analyses: Map<TxGroup, TxAnalys
     }
     if (best) {
       taken.add(best);
-      roles.set(out.group, { side: 'out', self: out, pair: best });
-      roles.set(best.group, { side: 'in', self: best, pair: out });
+      roles.set(out.group, { side: 'out', self: out, pair: best, source: 'auto' });
+      roles.set(best.group, { side: 'in', self: best, pair: out, source: 'auto' });
     }
   }
   return roles;
@@ -871,6 +1034,7 @@ function describe(
   unOut: LedgerMovement[],
   pricedIn: PricedLeg[],
   pricedOut: PricedLeg[],
+  exchange: string | null = null,
 ): string {
   const moneyIn = assetPhrase(pricedIn.map((l) => l.movement));
   const moneyOut = assetPhrase(pricedOut.map((l) => l.movement));
@@ -896,6 +1060,10 @@ function describe(
       return `Sent ${moneyOut}`;
     case 'transfer_in':
       return `Received ${moneyIn}`;
+    case 'exchange_deposit':
+      return `Cashed out ${moneyOut} to ${exchange ?? 'an exchange'}`;
+    case 'exchange_withdrawal':
+      return `Deposited ${moneyIn} from ${exchange ?? 'an exchange'}`;
     case 'own_wallet_transfer':
       return 'Moved between your wallets';
     case 'bridge':

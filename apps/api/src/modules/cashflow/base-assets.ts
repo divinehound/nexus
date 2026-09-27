@@ -82,3 +82,10 @@ export function knownAsset(chain: string, contract: string): KnownAsset | null {
   if (!table) return null;
   return table[chain === 'solana' ? contract : contract.toLowerCase()] ?? null;
 }
+
+const NATIVE_SYMBOL: Record<string, string> = { polygon: 'POL', apechain: 'APE', solana: 'SOL' };
+
+/** The coin a chain's gas and native transfers are denominated in (ETH for Ethereum and its L2s). */
+export function nativeSymbolFor(chain: string): string {
+  return NATIVE_SYMBOL[chain] ?? 'ETH';
+}

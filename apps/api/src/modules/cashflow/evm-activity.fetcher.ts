@@ -307,6 +307,43 @@ export class EvmActivityFetcher {
     return fees;
   }
 
+  /**
+   * Where `address` most recently sent money — used to spot exchange deposit
+   * addresses, which sweep everything they receive into the exchange's wallets.
+   */
+  async fetchRecentRecipients(chain: string, address: string, limit = 20): Promise<string[]> {
+    const network = ALCHEMY_NETWORK[chain];
+    if (!network) return [];
+    const json = await fetchJsonWithRetry<{ result?: { transfers?: AlchemyTransfer[] }; error?: { message?: string } }>(
+      `https://${network}.g.alchemy.com/v2/${this.apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'alchemy_getAssetTransfers',
+          params: [
+            {
+              fromBlock: '0x0',
+              toBlock: 'latest',
+              fromAddress: address,
+              category: ['external', 'erc20'],
+              withMetadata: false,
+              excludeZeroValue: true,
+              maxCount: `0x${limit.toString(16)}`,
+              order: 'desc',
+            },
+          ],
+        }),
+      },
+      `alchemy_getAssetTransfers recipients (${chain})`,
+      { retries: 2 },
+    );
+    if (json.error) throw new NonRetryableError(json.error.message ?? 'alchemy_getAssetTransfers error');
+    return (json.result?.transfers ?? []).map((t) => (t.to ?? '').toLowerCase()).filter(Boolean);
+  }
+
   /** Names for NFT contracts we couldn't resolve from our own DB. */
   async fetchContractNames(chain: string, contracts: string[]): Promise<Map<string, string>> {
     const names = new Map<string, string>();

@@ -408,4 +408,131 @@ describe('buildCashflowReport', () => {
       expect(r.outByCategory.transfer_out).toBe(2000);
     });
   });
+
+  describe('linking transfers by hand or from bridge records', () => {
+    const SOL: LedgerAsset = { key: 'solana:native', chain: 'solana', kind: 'native', contract: '', name: 'Solana', symbol: 'SOL', price: { kind: 'native', symbol: 'SOL' } };
+    const SOLME = 'SoLMe1111111111111111111111111111111111111';
+    const SIMPLESWAP = '0xsimpleswap00000000000000000000000000008';
+    const flat: UsdPricer = { usdPerUnit: (ref) => (ref.kind === 'usd' ? 1 : ref.symbol === 'SOL' ? 100 : 2000) };
+    const t = (min: number) => new Date(Date.UTC(2024, 0, 10) + min * 60_000).toISOString();
+    // A slow, pricey swap service: 1 ETH ($2000) → 18 SOL ($1800) three hours later.
+    const movements = () => [
+      mv('0xeth', t(0), 'out', ETH, 1, SIMPLESWAP),
+      mv('SoLsig', t(180), 'in', SOL, 18, 'SSHotWallet', { chain: 'solana', wallet: SOLME }),
+    ];
+    const run = (extra: Partial<Parameters<typeof buildCashflowReport>[0]>) =>
+      buildCashflowReport({
+        movements: movements(),
+        fees: [],
+        wallets: [
+          { chain: 'ethereum', address: ME },
+          { chain: 'solana', address: SOLME },
+        ],
+        pricer: flat,
+        coverage: [],
+        notes: [],
+        now: new Date('2024-03-01T00:00:00Z'),
+        ...extra,
+      });
+
+    it('leaves a slow cross-asset swap unmatched on its own', () => {
+      const r = run({});
+      expect(r.bridges.count).toBe(0);
+      expect(r.outByCategory.transfer_out).toBe(2000);
+    });
+
+    it('treats a manually linked pair as one move and charges the difference as a fee', () => {
+      const r = run({ explicitLinks: [{ fromChain: 'ethereum', fromTxHash: '0xETH', toChain: 'solana', toTxHash: 'SoLsig', source: 'manual' }] });
+      expect(r.bridges).toEqual({ count: 1, usd: 2000, feesUsd: 200 });
+      expect(r.totals.inUsd).toBe(0);
+      expect(r.totals.outUsd).toBe(200);
+      const out = r.activity.find((a) => a.chain === 'ethereum')!;
+      expect(out).toMatchObject({ type: 'bridge', linkSource: 'manual', linkSide: 'out', linkedTo: { chain: 'solana', txHash: 'SoLsig' } });
+    });
+
+    it('applies bridge-service records the same way', () => {
+      const r = run({ explicitLinks: [{ fromChain: 'ethereum', fromTxHash: '0xeth', toChain: 'solana', toTxHash: 'SoLsig', source: 'relay' }] });
+      expect(r.activity.every((a) => a.linkSource === 'relay')).toBe(true);
+    });
+
+    it('lets the user reject an automatic match', () => {
+      const BASE_ETH: LedgerAsset = { ...ETH, key: 'base:native', chain: 'base' };
+      const base = {
+        movements: [mv('0x1', t(0), 'out', ETH, 1, FRIEND), mv('0x2', t(2), 'in', BASE_ETH, 0.99, MARKET, { chain: 'base' })],
+        fees: [],
+        wallets: [{ chain: 'ethereum', address: ME }],
+        pricer: flat,
+        coverage: [],
+        notes: [],
+        now: new Date(),
+      };
+      expect(buildCashflowReport(base).bridges.count).toBe(1);
+      const r = buildCashflowReport({ ...base, rejectedLinks: [{ fromChain: 'base', fromTxHash: '0x2', toChain: 'ethereum', toTxHash: '0x1' }] });
+      expect(r.bridges.count).toBe(0);
+      expect(r.outByCategory.transfer_out).toBe(2000);
+    });
+  });
+
+  describe('exchanges', () => {
+    const COINBASE_HOT = '0xc0ffee0000000000000000000000000000000001';
+    const MY_DEPOSIT = '0xdeadbeef00000000000000000000000000000002';
+    it('books exchange deposits/withdrawals as off-/on-ramps and nets them into "net invested"', () => {
+      const r = buildCashflowReport({
+        movements: [
+          mv('0x1', '2024-01-01T00:00:00Z', 'in', ETH, 2, COINBASE_HOT),
+          mv('0x2', '2024-01-05T00:00:00Z', 'out', USDC, 500, MY_DEPOSIT),
+          mv('0x3', '2024-01-06T00:00:00Z', 'out', ETH, 0.1, FRIEND),
+        ],
+        fees: [],
+        wallets: [{ chain: 'ethereum', address: ME }],
+        pricer,
+        coverage: [],
+        notes: [],
+        now: new Date(),
+        exchangeAddresses: new Map([
+          ['evm:' + COINBASE_HOT, { exchange: 'Coinbase', source: 'known' as const }],
+          ['evm:' + MY_DEPOSIT, { exchange: 'Coinbase', source: 'detected' as const }],
+        ]),
+      });
+      expect(r.inByCategory.exchange_withdrawal).toBe(4000);
+      expect(r.outByCategory.exchange_deposit).toBe(500);
+      expect(r.outByCategory.transfer_out).toBe(200);
+      expect(r.totals).toMatchObject({ onRampUsd: 4000, offRampUsd: 500, netInvestedUsd: 3500 });
+      expect(r.exchanges).toEqual([{ exchange: 'Coinbase', depositedUsd: 500, withdrawnUsd: 4000, txCount: 2 }]);
+      expect(r.activity.find((a) => a.txHash === '0x2')).toMatchObject({ type: 'exchange_deposit', exchange: 'Coinbase', label: 'Cashed out 500 USDC to Coinbase' });
+      expect(r.counterparties.find((c) => c.address === MY_DEPOSIT)).toMatchObject({ exchange: 'Coinbase', exchangeSource: 'detected' });
+    });
+  });
+
+  describe('P/L in the native coin', () => {
+    // ETH $4000 in January, $3000 in February.
+    const ethDrop: UsdPricer = { usdPerUnit: (ref, day) => (ref.kind === 'usd' ? 1 : day < '2024-02-01' ? 4000 : 3000) };
+    it('shows an ETH profit as a USD loss and splits it into trade gain vs price move', () => {
+      const r = buildCashflowReport({
+        movements: [
+          mv('0xa', '2024-01-10T00:00:00Z', 'out', ETH, 1, MARKET),
+          mv('0xa', '2024-01-10T00:00:00Z', 'in', PUNKS, 1, FRIEND, { tokenId: '7' }),
+          mv('0xb', '2024-02-10T00:00:00Z', 'out', PUNKS, 1, FRIEND, { tokenId: '7' }),
+          mv('0xb', '2024-02-10T00:00:00Z', 'in', ETH, 1.2, MARKET),
+        ],
+        fees: [],
+        wallets: [{ chain: 'ethereum', address: ME }],
+        pricer: ethDrop,
+        coverage: [],
+        notes: [],
+        now: new Date(),
+      });
+      const punks = r.collections[0];
+      expect(punks.realizedPnlUsd).toBeCloseTo(-400);
+      expect(punks.nativeSymbol).toBe('ETH');
+      expect(punks.spentNative).toBeCloseTo(1);
+      expect(punks.proceedsNative).toBeCloseTo(1.2);
+      expect(punks.realizedPnlNative).toBeCloseTo(0.2);
+      expect(punks.tradeGainUsd).toBeCloseTo(600);
+      expect(punks.priceMoveUsd).toBeCloseTo(-1000);
+      expect(r.totals.realizedPnlNative).toEqual({ ETH: expect.closeTo(0.2) });
+      expect(r.totals.tradeGainUsd).toBeCloseTo(600);
+      expect(r.totals.priceMoveUsd).toBeCloseTo(-1000);
+    });
+  });
 });

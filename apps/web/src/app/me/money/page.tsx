@@ -2,25 +2,27 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import type { CashflowCategory, CashflowMonth, CashflowPosition, CashflowReport, CashflowResponse, CashflowTxType } from '@nexus/types';
+import type { CashflowCategory, CashflowMonth, CashflowPosition, CashflowReport, CashflowResponse } from '@nexus/types';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { useAuth } from '@/context/auth-context';
 import { getMyCashflow } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
+import { CashflowActionsProvider } from './actions';
+import { ActivityList } from './activity-list';
 import { CashflowChart, IN_COLOR, OUT_COLOR } from './cashflow-chart';
+import { CounterpartiesTable } from './counterparties';
+import { AfterGas, Stat } from './ui';
 import {
   CATEGORY_LABELS,
   CHAIN_LABELS,
   IN_CATEGORIES,
   OUT_CATEGORIES,
-  TX_TYPE_LABELS,
-  addressExplorerUrl,
   monthLabel,
+  nativeAmount,
   pnlClass,
   qty,
   relativeTime,
-  txExplorerUrl,
   usd,
   usdSigned,
 } from './format';
@@ -123,7 +125,11 @@ function MoneyContent() {
         </div>
       )}
 
-      {report && <Dashboard report={report} />}
+      {report && (
+        <CashflowActionsProvider token={accessToken} onResponse={setResponse}>
+          <Dashboard report={report} />
+        </CashflowActionsProvider>
+      )}
     </div>
   );
 }
@@ -163,7 +169,8 @@ function Dashboard({ report }: { report: CashflowReport }) {
       realizedAfterGas += m.realizedPnlAfterGasUsd;
       for (const [k, v] of Object.entries(m.byCategory) as Array<[CashflowCategory, number]>) byCategory[k] = (byCategory[k] ?? 0) + v;
     }
-    return { inUsd, outUsd, feesUsd, realized, realizedAfterGas, net: inUsd - outUsd, byCategory };
+    const netInvested = (byCategory.exchange_withdrawal ?? 0) - (byCategory.exchange_deposit ?? 0);
+    return { inUsd, outUsd, feesUsd, realized, realizedAfterGas, net: inUsd - outUsd, netInvested, byCategory };
   }, [months]);
 
   if (report.totals.txCount === 0) {
@@ -197,7 +204,7 @@ function Dashboard({ report }: { report: CashflowReport }) {
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <Stat label="Money in" value={usd(totals.inUsd)} swatch={IN_COLOR} />
         <Stat label="Money out" value={usd(totals.outUsd)} swatch={OUT_COLOR} />
         <Stat label="Net cash flow" value={usdSigned(totals.net)} valueClass={pnlClass(totals.net)} />
@@ -208,6 +215,11 @@ function Dashboard({ report }: { report: CashflowReport }) {
           sub={<AfterGas value={totals.realizedAfterGas} />}
         />
         <Stat label="Gas & fees" value={usd(totals.feesUsd)} />
+        <Stat
+          label="Net invested from exchanges"
+          value={usdSigned(totals.netInvested)}
+          sub={`${usd(totals.byCategory.exchange_withdrawal ?? 0)} in · ${usd(totals.byCategory.exchange_deposit ?? 0)} cashed out`}
+        />
       </div>
 
       <section className="rounded-xl border border-gray-800 p-6">
@@ -224,31 +236,6 @@ function Dashboard({ report }: { report: CashflowReport }) {
       <DetailTabs report={report} />
 
       <Coverage report={report} />
-    </div>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  valueClass,
-  swatch,
-  sub,
-}: {
-  label: string;
-  value: string;
-  valueClass?: string;
-  swatch?: string;
-  sub?: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-lg border border-gray-800 p-3">
-      <div className="flex items-center gap-1.5 text-xs text-gray-500">
-        {swatch && <span className="inline-block h-2 w-2 rounded-sm" style={{ background: swatch }} aria-hidden="true" />}
-        {label}
-      </div>
-      <div className={cn('mt-1 text-xl font-semibold tabular-nums', valueClass)}>{value}</div>
-      {sub && <div className="mt-0.5 text-xs text-gray-500">{sub}</div>}
     </div>
   );
 }
@@ -341,10 +328,11 @@ type Tab = 'collections' | 'tokens' | 'counterparties' | 'fees' | 'activity';
 
 function DetailTabs({ report }: { report: CashflowReport }) {
   const [tab, setTab] = useState<Tab>('collections');
+  const [unit, setUnit] = useState<Unit>('usd');
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'collections', label: `NFT collections (${report.collections.length})` },
     { id: 'tokens', label: `Tokens (${report.tokens.length})` },
-    { id: 'counterparties', label: `Sent & received (${report.counterparties.length})` },
+    { id: 'counterparties', label: 'Transfers & exchanges' },
     { id: 'fees', label: 'Gas by chain' },
     { id: 'activity', label: 'Activity' },
   ];
@@ -368,8 +356,8 @@ function DetailTabs({ report }: { report: CashflowReport }) {
         ))}
       </div>
       <div className="p-4 md:p-6">
-        {tab === 'collections' && <PositionsTable rows={report.collections} kind="nft" />}
-        {tab === 'tokens' && <PositionsTable rows={report.tokens} kind="fungible" />}
+        {tab === 'collections' && <PositionsTable rows={report.collections} kind="nft" unit={unit} setUnit={setUnit} />}
+        {tab === 'tokens' && <PositionsTable rows={report.tokens} kind="fungible" unit={unit} setUnit={setUnit} />}
         {tab === 'counterparties' && <CounterpartiesTable report={report} />}
         {tab === 'fees' && <FeesTable report={report} />}
         {tab === 'activity' && <ActivityList report={report} />}
@@ -378,7 +366,54 @@ function DetailTabs({ report }: { report: CashflowReport }) {
   );
 }
 
-function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' | 'fungible' }) {
+type Unit = 'usd' | 'native';
+
+/** Sum a native-coin field per symbol and format as "+0.4 ETH · −12 SOL". */
+function perSymbol(rows: CashflowPosition[], pick: (r: CashflowPosition) => number, signed: boolean): string {
+  const sums = new Map<string, number>();
+  for (const r of rows) sums.set(r.nativeSymbol, (sums.get(r.nativeSymbol) ?? 0) + pick(r));
+  const parts = [...sums.entries()].filter(([, v]) => Math.abs(v) > 1e-9).map(([sym, v]) => nativeAmount(v, sym, signed));
+  return parts.length ? parts.join(' · ') : '—';
+}
+
+function UnitToggle({ unit, setUnit }: { unit: Unit; setUnit: (u: Unit) => void }) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-gray-400" role="group" aria-label="Show values in">
+      <span>Show values in</span>
+      {(
+        [
+          ['usd', 'USD'],
+          ['native', 'Coin (ETH, SOL…)'],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          aria-pressed={unit === id}
+          onClick={() => setUnit(id)}
+          className={cn(
+            'rounded-md px-2 py-1 transition-colors',
+            unit === id ? 'bg-purple-500/15 text-purple-300' : 'hover:bg-gray-800 hover:text-white',
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PositionsTable({
+  rows,
+  kind,
+  unit,
+  setUnit,
+}: {
+  rows: CashflowPosition[];
+  kind: 'nft' | 'fungible';
+  unit: Unit;
+  setUnit: (u: Unit) => void;
+}) {
   const [showAll, setShowAll] = useState(false);
   // Spam airdrops never involve money — hide them unless asked.
   const traded = rows.filter((r) => r.spentUsd > 0 || r.proceedsUsd > 0);
@@ -389,41 +424,68 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
       proceeds: acc.proceeds + r.proceedsUsd,
       pnl: acc.pnl + r.realizedPnlUsd,
       pnlAfterGas: acc.pnlAfterGas + r.realizedPnlAfterGasUsd,
+      tradeGain: acc.tradeGain + r.tradeGainUsd,
+      priceMove: acc.priceMove + r.priceMoveUsd,
       gas: acc.gas + r.gasUsd,
       open: acc.open + r.openCostBasisUsd,
     }),
-    { spent: 0, proceeds: 0, pnl: 0, pnlAfterGas: 0, gas: 0, open: 0 },
+    { spent: 0, proceeds: 0, pnl: 0, pnlAfterGas: 0, tradeGain: 0, priceMove: 0, gas: 0, open: 0 },
   );
-  const unit = kind === 'nft' ? 'items' : 'amount';
+  const qtyUnit = kind === 'nft' ? 'items' : 'amount';
+  const native = unit === 'native';
 
   return (
     <div>
-      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Total spent" value={usd(totals.spent)} />
-        <Stat label="Total sold for" value={usd(totals.proceeds)} />
+      <div className="mb-3 flex justify-end">
+        <UnitToggle unit={unit} setUnit={setUnit} />
+      </div>
+      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-5">
+        <Stat label="Total spent" value={native ? perSymbol(traded, (r) => r.spentNative, false) : usd(totals.spent)} />
+        <Stat label="Total sold for" value={native ? perSymbol(traded, (r) => r.proceedsNative, false) : usd(totals.proceeds)} />
+        {native ? (
+          <Stat label="Realized profit / loss" value={perSymbol(traded, (r) => r.realizedPnlNative, true)} sub="in each chain's own coin" />
+        ) : (
+          <Stat
+            label="Realized profit / loss"
+            value={usdSigned(totals.pnl)}
+            valueClass={pnlClass(totals.pnl)}
+            sub={<AfterGas value={totals.pnlAfterGas} />}
+          />
+        )}
         <Stat
-          label="Realized profit / loss"
-          value={usdSigned(totals.pnl)}
-          valueClass={pnlClass(totals.pnl)}
-          sub={<AfterGas value={totals.pnlAfterGas} />}
+          label="From trading vs. coin price"
+          value={usdSigned(totals.tradeGain)}
+          valueClass={pnlClass(totals.tradeGain)}
+          sub={
+            <>
+              coin price moved <span className={cn('tabular-nums', pnlClass(totals.priceMove))}>{usdSigned(totals.priceMove)}</span>
+            </>
+          }
         />
         <Stat label="Cost of what you still hold" value={usd(totals.open)} sub={`${usd(totals.gas)} gas spent in total`} />
       </div>
+      <p className="mb-3 text-xs text-gray-500">
+        {native
+          ? 'Coin view: what you paid is converted to ETH/SOL/… at the buy-day price and what you received at the sale-day price, so a profit in ETH shows as a profit even if ETH fell.'
+          : '“From trading” is your profit in the coin itself, valued at the sale-day price; “coin price moved” is the rest — the coin getting cheaper or pricier while you held.'}
+      </p>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-gray-500">
             <tr>
               <th className="py-2 pr-4 font-medium">{kind === 'nft' ? 'Collection' : 'Token'}</th>
-              <th className="py-2 pr-4 text-right font-medium">Bought ({unit})</th>
+              <th className="py-2 pr-4 text-right font-medium">Bought ({qtyUnit})</th>
               <th className="py-2 pr-4 text-right font-medium">Spent</th>
-              <th className="py-2 pr-4 text-right font-medium">Sold ({unit})</th>
+              <th className="py-2 pr-4 text-right font-medium">Sold ({qtyUnit})</th>
               <th className="py-2 pr-4 text-right font-medium">Sold for</th>
               <th className="py-2 pr-4 text-right font-medium" title="Sale proceeds (after marketplace fees and royalties) minus what you paid">
                 Realized P/L
               </th>
-              <th className="py-2 pr-4 text-right font-medium" title="Also subtracts gas paid to buy or mint what you sold, and gas paid to sell it">
-                P/L after gas
-              </th>
+              {!native && (
+                <th className="py-2 pr-4 text-right font-medium" title="Also subtracts gas paid to buy or mint what you sold, and gas paid to sell it">
+                  P/L after gas
+                </th>
+              )}
               <th className="py-2 text-right font-medium">Still held</th>
             </tr>
           </thead>
@@ -438,11 +500,20 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
                   </div>
                 </td>
                 <td className="py-2 pr-4 text-right tabular-nums text-gray-300">{r.qtyBought ? qty(r.qtyBought) : '—'}</td>
-                <td className="py-2 pr-4 text-right tabular-nums">{r.spentUsd ? usd(r.spentUsd) : '—'}</td>
+                <td className="py-2 pr-4 text-right tabular-nums">
+                  {r.spentUsd ? (native ? nativeAmount(r.spentNative, r.nativeSymbol, false) : usd(r.spentUsd)) : '—'}
+                </td>
                 <td className="py-2 pr-4 text-right tabular-nums text-gray-300">{r.qtySold ? qty(r.qtySold) : '—'}</td>
-                <td className="py-2 pr-4 text-right tabular-nums">{r.proceedsUsd ? usd(r.proceedsUsd) : '—'}</td>
-                <td className={cn('py-2 pr-4 text-right tabular-nums', pnlClass(r.realizedPnlUsd))}>
-                  {r.sellCount > 0 ? usdSigned(r.realizedPnlUsd) : '—'}
+                <td className="py-2 pr-4 text-right tabular-nums">
+                  {r.proceedsUsd ? (native ? nativeAmount(r.proceedsNative, r.nativeSymbol, false) : usd(r.proceedsUsd)) : '—'}
+                </td>
+                <td
+                  className={cn(
+                    'py-2 pr-4 text-right tabular-nums',
+                    pnlClass(native ? r.realizedPnlNative : r.realizedPnlUsd),
+                  )}
+                >
+                  {r.sellCount > 0 ? (native ? nativeAmount(r.realizedPnlNative, r.nativeSymbol) : usdSigned(r.realizedPnlUsd)) : '—'}
                   {r.qtySoldWithoutBasis > 0 && (
                     <span
                       className="ml-1 cursor-help text-xs text-yellow-500"
@@ -451,11 +522,18 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
                       *
                     </span>
                   )}
+                  {!native && r.sellCount > 0 && Math.abs(r.priceMoveUsd) >= 1 && (
+                    <div className="text-xs text-gray-500">
+                      trade {usdSigned(r.tradeGainUsd)} · {r.nativeSymbol} price {usdSigned(r.priceMoveUsd)}
+                    </div>
+                  )}
                 </td>
-                <td className={cn('py-2 pr-4 text-right tabular-nums', pnlClass(r.realizedPnlAfterGasUsd))}>
-                  {r.sellCount > 0 ? usdSigned(r.realizedPnlAfterGasUsd) : '—'}
-                  {r.gasUsd > 0 && <div className="text-xs text-gray-500">{usd(r.gasUsd)} total gas</div>}
-                </td>
+                {!native && (
+                  <td className={cn('py-2 pr-4 text-right tabular-nums', pnlClass(r.realizedPnlAfterGasUsd))}>
+                    {r.sellCount > 0 ? usdSigned(r.realizedPnlAfterGasUsd) : '—'}
+                    {r.gasUsd > 0 && <div className="text-xs text-gray-500">{usd(r.gasUsd)} total gas</div>}
+                  </td>
+                )}
                 <td className="py-2 text-right tabular-nums text-gray-300">
                   {r.qtyHeld > 0 ? qty(r.qtyHeld) : '—'}
                   {r.openCostBasisUsd > 0 && <div className="text-xs text-gray-500">cost {usd(r.openCostBasisUsd)}</div>}
@@ -464,7 +542,7 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
             ))}
             {visible.length === 0 && (
               <tr>
-                <td colSpan={8} className="py-6 text-center text-gray-500">
+                <td colSpan={native ? 7 : 8} className="py-6 text-center text-gray-500">
                   No {kind === 'nft' ? 'NFT' : 'token'} buys or sales found.
                 </td>
               </tr>
@@ -477,80 +555,6 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
           {showAll ? 'Hide' : 'Show'} {rows.length - traded.length} with no money involved (airdrops, free mints, spam)
         </button>
       )}
-    </div>
-  );
-}
-
-function CounterpartiesTable({ report }: { report: CashflowReport }) {
-  const sent = report.counterparties.reduce((s, c) => s + c.sentUsd, 0);
-  const received = report.counterparties.reduce((s, c) => s + c.receivedUsd, 0);
-  return (
-    <div>
-      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Sent to other wallets" value={usd(sent)} swatch={OUT_COLOR} />
-        <Stat label="Received from other wallets" value={usd(received)} swatch={IN_COLOR} />
-        <Stat
-          label="Moved between your wallets"
-          value={`${report.ownWalletTransfers.count} tx · ${usd(report.ownWalletTransfers.usd)}`}
-        />
-        <Stat label="Bridged between chains" value={`${report.bridges.count} tx · ${usd(report.bridges.usd)}`} />
-      </div>
-      <p className="mb-3 text-xs text-gray-500">
-        Plain transfers of ETH/SOL/POL/APE and stablecoins. Moves between your own linked wallets — on the same chain or bridged
-        across chains — aren&apos;t counted as money in or out; only gas and what the bridge kept count as fees
-        {report.bridges.feesUsd > 0 ? ` (${usd(report.bridges.feesUsd)} in bridge fees)` : ''}.
-      </p>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="text-left text-xs text-gray-500">
-            <tr>
-              <th className="py-2 pr-4 font-medium">Address</th>
-              <th className="py-2 pr-4 text-right font-medium">Sent to</th>
-              <th className="py-2 pr-4 text-right font-medium">Received from</th>
-              <th className="py-2 pr-4 text-right font-medium">Net</th>
-              <th className="py-2 text-right font-medium">Last</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-800/70">
-            {report.counterparties.map((c) => {
-              const url = addressExplorerUrl(c.chain, c.address);
-              return (
-                <tr key={`${c.chain}:${c.address}`}>
-                  <td className="py-2 pr-4">
-                    {url ? (
-                      <a href={url} target="_blank" rel="noopener noreferrer" className="font-mono text-gray-200 hover:text-purple-300">
-                        {c.address.length > 16 ? truncateAddress(c.address) : c.address}
-                      </a>
-                    ) : (
-                      <span className="font-mono text-gray-200">{c.address}</span>
-                    )}
-                    <div className="text-xs text-gray-500">{CHAIN_LABELS[c.chain] ?? c.chain}</div>
-                  </td>
-                  <td className="py-2 pr-4 text-right tabular-nums">
-                    {c.sentUsd ? usd(c.sentUsd) : '—'}
-                    {c.sentCount > 0 && <div className="text-xs text-gray-500">{c.sentCount}×</div>}
-                  </td>
-                  <td className="py-2 pr-4 text-right tabular-nums">
-                    {c.receivedUsd ? usd(c.receivedUsd) : '—'}
-                    {c.receivedCount > 0 && <div className="text-xs text-gray-500">{c.receivedCount}×</div>}
-                  </td>
-                  <td className={cn('py-2 pr-4 text-right tabular-nums', pnlClass(c.receivedUsd - c.sentUsd))}>
-                    {usdSigned(c.receivedUsd - c.sentUsd)}
-                  </td>
-                  <td className="py-2 text-right text-xs text-gray-500">{new Date(c.lastAt).toLocaleDateString()}</td>
-                </tr>
-              );
-            })}
-            {report.counterparties.length === 0 && (
-              <tr>
-                <td colSpan={5} className="py-6 text-center text-gray-500">
-                  No transfers to or from other wallets.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }
@@ -593,89 +597,6 @@ function FeesTable({ report }: { report: CashflowReport }) {
   );
 }
 
-const ACTIVITY_FILTERS: Array<{ id: string; label: string; types: CashflowTxType[] | null }> = [
-  { id: 'all', label: 'All', types: null },
-  { id: 'buys', label: 'Buys & mints', types: ['nft_purchase', 'nft_mint', 'token_purchase'] },
-  { id: 'sales', label: 'Sales', types: ['nft_sale', 'token_sale'] },
-  { id: 'transfers', label: 'Transfers', types: ['transfer_in', 'transfer_out', 'sent_asset', 'received_asset', 'own_wallet_transfer', 'bridge'] },
-  { id: 'swaps', label: 'Swaps', types: ['swap'] },
-];
-const PAGE = 50;
-
-function ActivityList({ report }: { report: CashflowReport }) {
-  const [filter, setFilter] = useState('all');
-  const [limit, setLimit] = useState(PAGE);
-  const types = ACTIVITY_FILTERS.find((f) => f.id === filter)?.types;
-  // "All" skips unsolicited airdrops (no money, no gas) — they're still under Transfers.
-  const rows = types
-    ? report.activity.filter((a) => types.includes(a.type))
-    : report.activity.filter((a) => !(a.type === 'received_asset' && a.inUsd === 0 && a.outUsd === 0));
-
-  return (
-    <div>
-      <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Activity type">
-        {ACTIVITY_FILTERS.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            aria-pressed={filter === f.id}
-            onClick={() => {
-              setFilter(f.id);
-              setLimit(PAGE);
-            }}
-            className={cn(
-              'rounded-lg px-3 py-1 text-xs transition-colors',
-              filter === f.id ? 'bg-purple-500/15 text-purple-300' : 'text-gray-400 hover:bg-gray-800 hover:text-white',
-            )}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
-      <ul className="divide-y divide-gray-800/70">
-        {rows.slice(0, limit).map((a) => {
-          const url = txExplorerUrl(a.chain, a.txHash);
-          const net = a.inUsd - a.outUsd;
-          return (
-            <li key={`${a.chain}:${a.txHash}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-3">
-              <div className="w-24 shrink-0 text-xs text-gray-500">
-                {new Date(a.timestamp).toLocaleDateString()}
-                <div>{CHAIN_LABELS[a.chain] ?? a.chain}</div>
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[11px] text-gray-300">{TX_TYPE_LABELS[a.type]}</span>
-                  {url ? (
-                    <a href={url} target="_blank" rel="noopener noreferrer" className="truncate text-sm text-gray-200 hover:text-purple-300">
-                      {a.label}
-                    </a>
-                  ) : (
-                    <span className="truncate text-sm text-gray-200">{a.label}</span>
-                  )}
-                </div>
-                {a.counterparty && <div className="mt-0.5 font-mono text-xs text-gray-500">{truncateAddress(a.counterparty)}</div>}
-              </div>
-              <div className="text-right text-sm tabular-nums">
-                {(a.inUsd > 0 || a.outUsd > 0) && <div className={pnlClass(net)}>{usdSigned(net)}</div>}
-                {a.realizedPnlUsd !== null && (
-                  <div className={cn('text-xs', pnlClass(a.realizedPnlUsd))}>P/L {usdSigned(a.realizedPnlUsd)}</div>
-                )}
-                {a.feeUsd > 0 && <div className="text-xs text-gray-500">gas {usd(a.feeUsd)}</div>}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-      {rows.length > limit && (
-        <button type="button" onClick={() => setLimit(limit + PAGE)} className="mt-3 text-xs text-gray-400 hover:text-white">
-          Show more ({rows.length - limit} remaining)
-        </button>
-      )}
-      {rows.length === 0 && <p className="py-6 text-center text-sm text-gray-500">Nothing here.</p>}
-    </div>
-  );
-}
-
 function Coverage({ report }: { report: CashflowReport }) {
   const failed = report.coverage.filter((c) => c.error);
   return (
@@ -695,6 +616,14 @@ function Coverage({ report }: { report: CashflowReport }) {
           another chain — within an hour, or up to 8 days for full-amount canonical withdrawals.
         </li>
         <li>Wallets you haven&apos;t linked count as other people — link them to exclude those transfers.</li>
+        <li>
+          Transfers to and from Coinbase, Kraken, Binance and other exchanges are recognised from their public wallets and from
+          deposit addresses that forward into them; mark any others yourself under Transfers &amp; exchanges.
+        </li>
+        <li>
+          USD figures use each day&apos;s price, so a trade that gained ETH can still show a USD loss if ETH fell — switch the
+          tables to coin view, or see the &ldquo;from trading vs. coin price&rdquo; split.
+        </li>
         {report.notes.map((n) => (
           <li key={n}>{n}</li>
         ))}
@@ -709,10 +638,3 @@ function Coverage({ report }: { report: CashflowReport }) {
   );
 }
 
-function AfterGas({ value }: { value: number }) {
-  return (
-    <>
-      after gas <span className={cn('tabular-nums', pnlClass(value))}>{usdSigned(value)}</span>
-    </>
-  );
-}
