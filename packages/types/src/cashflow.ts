@@ -111,6 +111,37 @@ export interface CashflowPosition {
   qtySoldWithoutBasis: number;
   firstAt: string;
   lastAt: string;
+  /** NFTs only: one row per token held — or per round trip, if bought and sold more than once. Newest first. */
+  items: CashflowNftItem[];
+}
+
+export type CashflowNftAcquiredVia = 'purchase' | 'mint' | 'free_mint' | 'received' | 'swap' | 'unknown';
+export type CashflowNftDisposedVia = 'sale' | 'sent' | 'burned' | 'swap';
+
+export interface CashflowNftItem {
+  tokenId: string;
+  /** Usually 1; ERC-1155 editions can be more. */
+  qty: number;
+  /** null when the purchase wasn't seen (sold something never bought in the scanned history). */
+  acquiredAt: string | null;
+  acquiredVia: CashflowNftAcquiredVia;
+  acquireTxHash: string | null;
+  costUsd: number;
+  costNative: number;
+  buyGasUsd: number;
+  /** null while still held. */
+  disposedAt: string | null;
+  disposedVia: CashflowNftDisposedVia | null;
+  disposeTxHash: string | null;
+  /** After marketplace fees and royalties; null unless sold. */
+  proceedsUsd: number | null;
+  proceedsNative: number | null;
+  sellGasUsd: number;
+  /** Sales only. */
+  realizedPnlUsd: number | null;
+  realizedPnlAfterGasUsd: number | null;
+  realizedPnlNative: number | null;
+  holdSeconds: number | null;
 }
 
 export type CashflowExchangeSource = 'known' | 'detected' | 'tagged';

@@ -535,4 +535,102 @@ describe('buildCashflowReport', () => {
       expect(r.totals.priceMoveUsd).toBeCloseTo(-1000);
     });
   });
+
+  describe('per-NFT breakdown', () => {
+    const sum = (xs: Array<number | null>) => xs.reduce<number>((a, b) => a + (b ?? 0), 0);
+
+    it('gives each token its own row: sold ones with P/L and hold time, held ones with cost', () => {
+      const r = build(
+        [
+          mv('0xm', '2024-01-05T00:00:00Z', 'out', ETH, 0.2, MARKET),
+          mv('0xm', '2024-01-05T00:00:00Z', 'in', PUNKS, 1, '', { tokenId: '1' }),
+          mv('0xm', '2024-01-05T00:00:00Z', 'in', PUNKS, 1, '', { tokenId: '2' }),
+          mv('0xs', '2024-01-20T00:00:00Z', 'out', PUNKS, 1, FRIEND, { tokenId: '2' }),
+          mv('0xs', '2024-01-20T00:00:00Z', 'in', ETH, 0.15, MARKET),
+        ],
+        [fee('0xm', '2024-01-05T00:00:00Z', 0.02), fee('0xs', '2024-01-20T00:00:00Z', 0.005)],
+      );
+      const [sold, held] = r.collections[0].items;
+      expect(sold).toMatchObject({
+        tokenId: '2',
+        acquiredVia: 'mint',
+        acquireTxHash: '0xm',
+        disposedVia: 'sale',
+        disposeTxHash: '0xs',
+        acquiredAt: '2024-01-05T00:00:00.000Z',
+        disposedAt: '2024-01-20T00:00:00.000Z',
+        holdSeconds: 15 * 86400,
+      });
+      expect(sold.costUsd).toBeCloseTo(200);
+      expect(sold.proceedsUsd).toBeCloseTo(300);
+      expect(sold.realizedPnlUsd).toBeCloseTo(100);
+      expect(sold.realizedPnlAfterGasUsd).toBeCloseTo(70); // − $20 mint gas share − $10 sale gas
+      expect(sold.realizedPnlNative).toBeCloseTo(0.05);
+      expect(held).toMatchObject({ tokenId: '1', disposedAt: null, disposedVia: null, realizedPnlUsd: null, holdSeconds: null });
+      expect(held.costUsd).toBeCloseTo(200);
+      expect(held.buyGasUsd).toBeCloseTo(20);
+    });
+
+    it('shows each round trip when the same token is flipped twice, and reconciles with the collection total', () => {
+      const r = build([
+        mv('0x1', '2024-01-01T00:00:00Z', 'out', ETH, 1, MARKET),
+        mv('0x1', '2024-01-01T00:00:00Z', 'in', PUNKS, 1, FRIEND, { tokenId: '7' }),
+        mv('0x2', '2024-01-10T00:00:00Z', 'out', PUNKS, 1, FRIEND, { tokenId: '7' }),
+        mv('0x2', '2024-01-10T00:00:00Z', 'in', ETH, 1.5, MARKET),
+        mv('0x3', '2024-02-01T00:00:00Z', 'out', ETH, 1, MARKET),
+        mv('0x3', '2024-02-01T00:00:00Z', 'in', PUNKS, 1, FRIEND, { tokenId: '7' }),
+        mv('0x4', '2024-02-05T00:00:00Z', 'out', PUNKS, 1, FRIEND, { tokenId: '7' }),
+        mv('0x4', '2024-02-05T00:00:00Z', 'in', ETH, 0.8, MARKET),
+      ]);
+      const c = r.collections[0];
+      expect(c.items.map((i) => [i.tokenId, i.acquireTxHash, i.disposeTxHash])).toEqual([
+        ['7', '0x3', '0x4'],
+        ['7', '0x1', '0x2'],
+      ]);
+      expect(c.items[0].realizedPnlUsd).toBeCloseTo(-600); // bought $3000, sold $2400
+      expect(c.items[1].realizedPnlUsd).toBeCloseTo(1000);
+      expect(sum(c.items.map((i) => i.realizedPnlUsd))).toBeCloseTo(c.realizedPnlUsd);
+    });
+
+    it('marks sales of tokens never bought as unknown origin, and sends/burns without P/L', () => {
+      const r = build([
+        mv('0x1', '2024-01-01T00:00:00Z', 'out', PUNKS, 1, FRIEND, { tokenId: '5' }),
+        mv('0x1', '2024-01-01T00:00:00Z', 'in', ETH, 1, MARKET),
+        mv('0x2', '2024-01-02T00:00:00Z', 'in', PUNKS, 1, FRIEND, { tokenId: '8' }),
+        mv('0x3', '2024-01-03T00:00:00Z', 'out', PUNKS, 1, FRIEND, { tokenId: '8' }),
+        mv('0x4', '2024-01-04T00:00:00Z', 'in', PUNKS, 1, FRIEND, { tokenId: '9' }),
+        mv('0x5', '2024-01-05T00:00:00Z', 'out', PUNKS, 1, '', { tokenId: '9' }),
+      ]);
+      const byId = Object.fromEntries(r.collections[0].items.map((i) => [i.tokenId, i]));
+      expect(byId['5']).toMatchObject({ acquiredVia: 'unknown', acquiredAt: null, disposedVia: 'sale', costUsd: 0, realizedPnlUsd: 2000, holdSeconds: null });
+      expect(byId['8']).toMatchObject({ acquiredVia: 'received', disposedVia: 'sent', realizedPnlUsd: null });
+      expect(byId['9']).toMatchObject({ disposedVia: 'burned' });
+    });
+
+    it('splits ERC-1155 editions when only some are sold', () => {
+      const r = build([
+        mv('0x1', '2024-01-01T00:00:00Z', 'out', ETH, 3, MARKET),
+        mv('0x1', '2024-01-01T00:00:00Z', 'in', PUNKS, 3, FRIEND, { tokenId: '5' }),
+        mv('0x2', '2024-02-01T00:00:00Z', 'out', PUNKS, 1, FRIEND, { tokenId: '5' }),
+        mv('0x2', '2024-02-01T00:00:00Z', 'in', ETH, 1, MARKET),
+      ]);
+      const c = r.collections[0];
+      const sold = c.items.find((i) => i.disposedVia === 'sale')!;
+      const held = c.items.find((i) => i.disposedVia === null)!;
+      expect(sold.qty).toBe(1);
+      expect(sold.costUsd).toBeCloseTo(2000);
+      expect(sold.realizedPnlUsd).toBeCloseTo(1000);
+      expect(held.qty).toBe(2);
+      expect(held.costUsd).toBeCloseTo(4000);
+      expect(sum(c.items.map((i) => i.realizedPnlUsd))).toBeCloseTo(c.realizedPnlUsd);
+    });
+
+    it('does not attach items to fungible tokens', () => {
+      const r = build([
+        mv('0x1', '2024-01-01T00:00:00Z', 'out', ETH, 1, MARKET),
+        mv('0x1', '2024-01-01T00:00:00Z', 'in', PEPE, 100, MARKET),
+      ]);
+      expect(r.tokens[0].items).toEqual([]);
+    });
+  });
 });
