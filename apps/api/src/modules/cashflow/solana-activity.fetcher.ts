@@ -242,6 +242,12 @@ export function normalizeSolanaTx(
       }
     }
   }
+  // A token-for-token swap moves no money through the wallet, but the route
+  // usually passes SOL or a stablecoin between its pools: that amount is what
+  // the swap was worth. Recorded as a valuation, not as the wallet's money.
+  const swapValue = swapValuation(wallet, tx, movements, assets);
+  if (swapValue) movements.push({ ...base, ...swapValue, valuation: true });
+
   // Metaplex Core mints/transfers/burns, read from the instructions themselves
   // (Helius often has no event for them, and there's no token transfer).
   for (const move of coreAssetMoves(tx, wallet, coreHeld)) {
@@ -266,6 +272,45 @@ export function normalizeSolanaTx(
     });
   }
   return { movements, fee };
+}
+
+/**
+ * The money (SOL/wSOL/stablecoin) that passed between the pools of a
+ * token-for-token swap the wallet made: of the accounts that received it, the
+ * one that received the most. Only when the wallet swapped a token for a token
+ * (no NFTs) — used to value the swap.
+ */
+export function swapValuation(
+  wallet: string,
+  tx: HeliusEnhancedTx,
+  walletMovements: LedgerMovement[],
+  assets: Map<string, LedgerAsset>,
+): Pick<LedgerMovement, 'direction' | 'asset' | 'tokenId' | 'amount' | 'counterparty'> | null {
+  const tokens = walletMovements.filter((m) => !m.asset.price);
+  const tokenOut = tokens.some((m) => m.direction === 'out');
+  const tokenIn = tokens.some((m) => m.direction === 'in');
+  if (!tokenOut || !tokenIn || tokens.some((m) => m.asset.kind === 'nft')) return null;
+  const received = new Map<string, { mint: string; amount: number }>();
+  for (const t of tx.tokenTransfers ?? []) {
+    const from = t.fromUserAccount ?? '';
+    const to = t.toUserAccount ?? '';
+    if (!t.mint || !t.tokenAmount || from === wallet || to === wallet || !to) continue;
+    if (!knownAsset('solana', t.mint)?.price) continue;
+    const key = `${to}:${t.mint}`;
+    const e = received.get(key) ?? { mint: t.mint, amount: 0 };
+    e.amount += Number(t.tokenAmount);
+    received.set(key, e);
+  }
+  let best: { mint: string; amount: number } | null = null;
+  for (const e of received.values()) if (!best || e.amount > best.amount) best = e;
+  if (!best || !(best.amount > 0)) return null;
+  return {
+    direction: 'in',
+    asset: solanaTokenAsset(best.mint, 'Fungible', undefined, assets),
+    tokenId: null,
+    amount: best.amount,
+    counterparty: '',
+  };
 }
 
 export interface CoreAssetMove {
@@ -501,7 +546,8 @@ export class SolanaActivityFetcher {
     const stats = {
       transactions: txs.length,
       nftLegs: movements.filter((m) => m.asset.kind === 'nft').length,
-      tokenLegs: movements.filter((m) => m.asset.kind === 'fungible').length,
+      tokenLegs: movements.filter((m) => m.asset.kind === 'fungible' && !m.valuation).length,
+      swapsValued: movements.filter((m) => m.valuation).length,
       nftsFromEvents: movements.filter((m) => m.fromEvent).length,
       coreNfts: movements.filter((m) => m.fromCore).length,
       escrowPayments: movements.filter((m) => m.inferred).length,
