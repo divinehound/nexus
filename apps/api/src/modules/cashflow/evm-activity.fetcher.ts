@@ -35,6 +35,16 @@ export const EVM_NATIVE: Record<string, { symbol: string; name: string }> = {
 
 export const EVM_CHAINS = Object.keys(ALCHEMY_NETWORK);
 
+/** zkSync-stack chains, where ETH itself is an ERC-20-like system contract. */
+const ZKSYNC_CHAINS = new Set(['abstract']);
+const ZKSYNC_ETH = '0x000000000000000000000000000000000000800a';
+const ZKSYNC_BOOTLOADER = '0x0000000000000000000000000000000000008001';
+
+/** Transactions per wallet+chain checked for payments hidden inside contract calls. */
+const MAX_BALANCE_PROBES = 400;
+/** Ignore balance differences smaller than this (wei) — rounding and dust. */
+const BALANCE_PROBE_MIN_WEI = 10n ** 12n;
+
 /** Alchemy only traces internal (contract → wallet) ETH transfers on these networks. */
 const INTERNAL_SUPPORTED = new Set(['ethereum', 'polygon']);
 
@@ -186,13 +196,17 @@ export class EvmActivityFetcher {
       return true;
     });
 
+    const transfers = ZKSYNC_CHAINS.has(chain) ? normalizeZkSyncEth(all) : all;
+
     // Fill missing block timestamps (some networks, e.g. Abstract, omit them).
-    const missingBlocks = [...new Set(all.filter((t) => !t.metadata?.blockTimestamp).map((t) => t.blockNum))];
+    const missingBlocks = [...new Set(transfers.filter((t) => !t.metadata?.blockTimestamp).map((t) => t.blockNum))];
     const blockTimes = missingBlocks.length > 0 ? await this.fetchBlockTimestamps(endpoint, missingBlocks) : new Map<string, Date>();
 
     const movements: LedgerMovement[] = [];
     const txTimes = new Map<string, Date>();
-    for (const t of all) {
+    const txBlocks = new Map<string, string>();
+    for (const t of transfers) {
+      txBlocks.set(t.hash, t.blockNum);
       const ts = t.metadata?.blockTimestamp ? new Date(t.metadata.blockTimestamp) : blockTimes.get(t.blockNum);
       if (!ts || Number.isNaN(ts.getTime())) continue;
       txTimes.set(t.hash, ts);
@@ -207,6 +221,39 @@ export class EvmActivityFetcher {
       sentHashes = sentHashes.slice(-MAX_RECEIPTS);
     }
     const fees = await this.fetchFees(endpoint, chain, address, sentHashes, txTimes);
+
+    // Payments the transfer index can't see (ETH moved inside a contract call on
+    // chains without internal tracing, or by a smart-contract wallet) show up
+    // in the wallet's balance. Probe the txs that look incomplete.
+    const probes = balanceProbeCandidates(movements, txBlocks).slice(0, MAX_BALANCE_PROBES);
+    if (probes.length > 0) {
+      try {
+        const feeWei = new Map(fees.map((f) => [f.txHash, BigInt(Math.round(f.feeNative * 1e18))]));
+        const deltas = await this.fetchBalanceDeltas(endpoint, address, probes.map((p) => p.block));
+        const nativeAsset = evmAssetFor(chain, { category: 'external' } as AlchemyTransfer, assets);
+        probes.forEach((probe, i) => {
+          const delta = deltas[i];
+          if (delta === null) return;
+          const inferred = inferHiddenNative(delta, feeWei.get(probe.txHash) ?? 0n, probe.visibleNativeWei);
+          if (inferred === 0n) return;
+          movements.push({
+            chain,
+            txHash: probe.txHash,
+            timestamp: probe.timestamp,
+            wallet: address.toLowerCase(),
+            direction: inferred < 0n ? 'out' : 'in',
+            asset: nativeAsset,
+            tokenId: null,
+            amount: scaled(inferred < 0n ? -inferred : inferred, 18),
+            counterparty: 'contract',
+            inferred: true,
+          });
+        });
+      } catch (err) {
+        this.logger.warn(`${chain} balance probe failed for ${address}: ${(err as Error).message}`);
+        notes.push(`${chain} ${shortAddress(address)}: couldn't check balances for payments made inside contract calls.`);
+      }
+    }
 
     return { movements, fees, transfers: all.length, truncated, notes };
   }
@@ -266,6 +313,27 @@ export class EvmActivityFetcher {
     const out: Array<T | null> = new Array(paramsList.length).fill(null);
     for (const row of data) {
       if (typeof row.id === 'number' && row.id < out.length) out[row.id] = row.result ?? null;
+    }
+    return out;
+  }
+
+  /** Native balance change across each block (balance at N minus balance at N−1), in wei. */
+  private async fetchBalanceDeltas(endpoint: string, address: string, blocks: string[]): Promise<Array<bigint | null>> {
+    const out: Array<bigint | null> = [];
+    for (const batch of chunk(blocks, 50)) {
+      const params = batch.flatMap((b) => {
+        const n = BigInt(b);
+        return [
+          [address, `0x${(n - 1n).toString(16)}`],
+          [address, `0x${n.toString(16)}`],
+        ];
+      });
+      const rows = await this.rpcBatch<string>(endpoint, 'eth_getBalance', params, 'eth_getBalance batch');
+      for (let i = 0; i < batch.length; i++) {
+        const before = hexToBigInt(rows[2 * i]);
+        const after = hexToBigInt(rows[2 * i + 1]);
+        out.push(before === null || after === null ? null : after - before);
+      }
     }
     return out;
   }
@@ -369,6 +437,87 @@ export class EvmActivityFetcher {
     }
     return names;
   }
+}
+
+/**
+ * On zkSync-stack chains ETH moves also appear as ERC-20 `Transfer`s of the
+ * 0x…800a system contract. Drop the fee plumbing (to/from the bootloader) and
+ * copies of ETH moves already reported as native; keep the rest as native ETH
+ * (e.g. value a contract forwarded, which has no 'external' record).
+ */
+export function normalizeZkSyncEth(transfers: AlchemyTransfer[]): AlchemyTransfer[] {
+  const nativeKeys = new Set(
+    transfers
+      .filter((t) => t.category === 'external' || t.category === 'internal')
+      .map((t) => `${t.hash}:${(t.from ?? '').toLowerCase()}:${(t.to ?? '').toLowerCase()}:${hexToBigInt(t.rawContract?.value) ?? ''}`),
+  );
+  const out: AlchemyTransfer[] = [];
+  for (const t of transfers) {
+    if (t.category !== 'erc20' || (t.rawContract?.address ?? '').toLowerCase() !== ZKSYNC_ETH) {
+      out.push(t);
+      continue;
+    }
+    const from = (t.from ?? '').toLowerCase();
+    const to = (t.to ?? '').toLowerCase();
+    if (from === ZKSYNC_BOOTLOADER || to === ZKSYNC_BOOTLOADER) continue;
+    if (nativeKeys.has(`${t.hash}:${from}:${to}:${hexToBigInt(t.rawContract?.value) ?? ''}`)) continue;
+    out.push({ ...t, category: 'internal', asset: 'ETH', rawContract: { value: t.rawContract?.value ?? null, address: null, decimal: '0x12' } });
+  }
+  return out;
+}
+
+export interface BalanceProbe {
+  txHash: string;
+  block: string;
+  timestamp: Date;
+  /** Native coin already visible in the tx for this wallet (in − out), in wei. */
+  visibleNativeWei: bigint;
+}
+
+/**
+ * Txs where the wallet got or gave away an asset but no payment is visible —
+ * a mint/buy with no money out, or a sale with no money in. Txs sharing a
+ * block with another of the wallet's txs are skipped: the balance change
+ * across the block would mix them.
+ */
+export function balanceProbeCandidates(movements: LedgerMovement[], txBlocks: Map<string, string>): BalanceProbe[] {
+  const byTx = new Map<string, LedgerMovement[]>();
+  for (const m of movements) byTx.set(m.txHash, [...(byTx.get(m.txHash) ?? []), m]);
+  const txsPerBlock = new Map<string, number>();
+  for (const block of txBlocks.values()) txsPerBlock.set(block, (txsPerBlock.get(block) ?? 0) + 1);
+
+  const probes: BalanceProbe[] = [];
+  for (const [txHash, legs] of byTx) {
+    const block = txBlocks.get(txHash);
+    if (!block || (txsPerBlock.get(block) ?? 0) > 1) continue;
+    const assetIn = legs.some((m) => m.direction === 'in' && !m.asset.price);
+    const assetOut = legs.some((m) => m.direction === 'out' && !m.asset.price);
+    const moneyIn = legs.some((m) => m.direction === 'in' && m.asset.price);
+    const moneyOut = legs.some((m) => m.direction === 'out' && m.asset.price);
+    const looksUnpaid = assetIn && !assetOut && !moneyOut;
+    const looksUnsold = assetOut && !assetIn && !moneyIn;
+    if (!looksUnpaid && !looksUnsold) continue;
+    let visibleNativeWei = 0n;
+    for (const m of legs) {
+      if (m.asset.kind !== 'native') continue;
+      const wei = BigInt(Math.round(m.amount * 1e18));
+      visibleNativeWei += m.direction === 'in' ? wei : -wei;
+    }
+    probes.push({ txHash, block, timestamp: legs[0].timestamp, visibleNativeWei });
+  }
+  // Newest first, matching the transfer paging.
+  return probes.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+}
+
+/**
+ * The part of a wallet's balance change the transfer index didn't explain:
+ * balance delta, plus the gas it paid (which also left the balance), minus
+ * native moves already visible. Tiny differences are treated as zero.
+ */
+export function inferHiddenNative(balanceDeltaWei: bigint, gasWei: bigint, visibleNativeWei: bigint): bigint {
+  const hidden = balanceDeltaWei + gasWei - visibleNativeWei;
+  const abs = hidden < 0n ? -hidden : hidden;
+  return abs < BALANCE_PROBE_MIN_WEI ? 0n : hidden;
 }
 
 export function shortAddress(address: string): string {

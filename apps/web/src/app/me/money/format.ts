@@ -1,8 +1,21 @@
 import type { CashflowCategory, CashflowTxType } from '@nexus/types';
 
-const usdFull = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-const usdCents = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
-const usdCompact = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 });
+const usdFull = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 0,
+});
+const usdCents = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  maximumFractionDigits: 2,
+});
+const usdCompact = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
 
 /** $1,234 — cents only under $100 so small gas figures stay meaningful. */
 export function usd(n: number): string {
@@ -65,8 +78,20 @@ export const CATEGORY_LABELS: Record<CashflowCategory, string> = {
   exchange_withdrawal: 'Deposited from exchanges',
 };
 
-export const OUT_CATEGORIES: CashflowCategory[] = ['nft_purchase', 'nft_mint', 'token_purchase', 'transfer_out', 'exchange_deposit', 'gas_fees'];
-export const IN_CATEGORIES: CashflowCategory[] = ['nft_sale', 'token_sale', 'transfer_in', 'exchange_withdrawal'];
+export const OUT_CATEGORIES: CashflowCategory[] = [
+  'nft_purchase',
+  'nft_mint',
+  'token_purchase',
+  'transfer_out',
+  'exchange_deposit',
+  'gas_fees',
+];
+export const IN_CATEGORIES: CashflowCategory[] = [
+  'nft_sale',
+  'token_sale',
+  'transfer_in',
+  'exchange_withdrawal',
+];
 
 export const TX_TYPE_LABELS: Record<CashflowTxType, string> = {
   nft_purchase: 'NFT buy',
@@ -107,12 +132,36 @@ const EXPLORERS: Record<string, { tx: string; address: string }> = {
   abstract: { tx: 'https://abscan.org/tx/', address: 'https://abscan.org/address/' },
   apechain: { tx: 'https://apescan.io/tx/', address: 'https://apescan.io/address/' },
   arbitrum: { tx: 'https://arbiscan.io/tx/', address: 'https://arbiscan.io/address/' },
-  optimism: { tx: 'https://optimistic.etherscan.io/tx/', address: 'https://optimistic.etherscan.io/address/' },
-  zora: { tx: 'https://explorer.zora.energy/tx/', address: 'https://explorer.zora.energy/address/' },
+  optimism: {
+    tx: 'https://optimistic.etherscan.io/tx/',
+    address: 'https://optimistic.etherscan.io/address/',
+  },
+  zora: {
+    tx: 'https://explorer.zora.energy/tx/',
+    address: 'https://explorer.zora.energy/address/',
+  },
   blast: { tx: 'https://blastscan.io/tx/', address: 'https://blastscan.io/address/' },
   linea: { tx: 'https://lineascan.build/tx/', address: 'https://lineascan.build/address/' },
   solana: { tx: 'https://solscan.io/tx/', address: 'https://solscan.io/account/' },
 };
+
+const EXPLORER_NAMES: Record<string, string> = {
+  ethereum: 'Etherscan',
+  base: 'Basescan',
+  polygon: 'Polygonscan',
+  abstract: 'Abscan',
+  apechain: 'ApeScan',
+  arbitrum: 'Arbiscan',
+  optimism: 'Optimism Etherscan',
+  zora: 'Zora Explorer',
+  blast: 'Blastscan',
+  linea: 'Lineascan',
+  solana: 'Solscan',
+};
+
+export function explorerName(chain: string): string {
+  return EXPLORER_NAMES[chain] ?? 'explorer';
+}
 
 export function txExplorerUrl(chain: string, hash: string): string | null {
   const e = EXPLORERS[chain];

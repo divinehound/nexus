@@ -25,6 +25,8 @@ import {
   CHAIN_LABELS,
   IN_CATEGORIES,
   OUT_CATEGORIES,
+  addressExplorerUrl,
+  explorerName,
   monthLabel,
   nativeAmount,
   pnlClass,
@@ -50,18 +52,23 @@ function MoneyContent() {
   const { accessToken } = useAuth();
   const [response, setResponse] = useState<CashflowResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Linked address to report on alone; null = all wallets. */
+  const [wallet, setWallet] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
 
   const load = useCallback(
     async (refresh = false) => {
       if (!accessToken) return;
       try {
         setError(null);
-        setResponse(await getMyCashflow(accessToken, refresh));
+        setResponse(await getMyCashflow(accessToken, refresh, wallet));
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load your money dashboard');
+      } finally {
+        setSwitching(false);
       }
     },
-    [accessToken],
+    [accessToken, wallet],
   );
 
   useEffect(() => {
@@ -150,8 +157,16 @@ function MoneyContent() {
       )}
 
       {report && (
-        <CashflowActionsProvider token={accessToken} onResponse={setResponse}>
-          <Dashboard report={report} />
+        <CashflowActionsProvider token={accessToken} wallet={wallet} onResponse={setResponse}>
+          <Dashboard
+            report={report}
+            wallet={wallet}
+            switching={switching}
+            onWalletChange={(w) => {
+              setSwitching(true);
+              setWallet(w);
+            }}
+          />
         </CashflowActionsProvider>
       )}
     </div>
@@ -176,7 +191,68 @@ function filterMonths(months: CashflowMonth[], range: Range): CashflowMonth[] {
   return months.filter((m) => m.month >= start);
 }
 
-function Dashboard({ report }: { report: CashflowReport }) {
+/** Linked wallets for the filter; an EVM address is one wallet across every EVM chain. */
+function walletOptions(report: CashflowReport): Array<{ address: string; label: string }> {
+  const seen = new Map<string, { address: string; label: string }>();
+  for (const w of report.wallets) {
+    const evm = w.chain !== 'solana';
+    const key = evm ? w.address.toLowerCase() : w.address;
+    if (seen.has(key)) continue;
+    seen.set(key, {
+      address: key,
+      label: `${truncateAddress(w.address)} · ${evm ? 'EVM' : 'Solana'}`,
+    });
+  }
+  return [...seen.values()];
+}
+
+function WalletFilter({
+  report,
+  wallet,
+  switching,
+  onChange,
+}: {
+  report: CashflowReport;
+  wallet: string | null;
+  switching: boolean;
+  onChange: (w: string | null) => void;
+}) {
+  const options = walletOptions(report);
+  if (options.length < 2) return null;
+  return (
+    <label className="flex items-center gap-2 text-xs text-gray-400">
+      Wallet
+      <select
+        value={wallet ?? ''}
+        onChange={(e) => onChange(e.target.value || null)}
+        disabled={switching}
+        className="rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200 disabled:opacity-50"
+      >
+        <option value="">All wallets ({options.length})</option>
+        {options.map((o) => (
+          <option key={o.address} value={o.address}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {switching && (
+        <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-600 border-t-purple-400" />
+      )}
+    </label>
+  );
+}
+
+function Dashboard({
+  report,
+  wallet,
+  switching,
+  onWalletChange,
+}: {
+  report: CashflowReport;
+  wallet: string | null;
+  switching: boolean;
+  onWalletChange: (w: string | null) => void;
+}) {
   const [range, setRange] = useState<Range>('all');
   const months = useMemo(() => filterMonths(report.months, range), [report.months, range]);
 
@@ -211,9 +287,20 @@ function Dashboard({ report }: { report: CashflowReport }) {
 
   if (report.totals.txCount === 0) {
     return (
-      <div className="rounded-xl border border-gray-800 p-8 text-center text-gray-400">
-        No transactions found yet for your linked wallets.
-        <Coverage report={report} />
+      <div className="space-y-4">
+        <div className="flex justify-end">
+          <WalletFilter
+            report={report}
+            wallet={wallet}
+            switching={switching}
+            onChange={onWalletChange}
+          />
+        </div>
+        <div className="rounded-xl border border-gray-800 p-8 text-center text-gray-400">
+          No transactions found yet for{' '}
+          {report.walletFilter ? 'this wallet' : 'your linked wallets'}.
+          <Coverage report={report} />
+        </div>
       </div>
     );
   }
@@ -237,10 +324,18 @@ function Dashboard({ report }: { report: CashflowReport }) {
             {r.label}
           </button>
         ))}
-        <span className="ml-auto text-xs text-gray-500">
-          {report.wallets.length} linked wallet{report.wallets.length === 1 ? '' : 's'} ·{' '}
-          {report.totals.txCount.toLocaleString()} transactions
-        </span>
+        <div className="ml-auto flex flex-wrap items-center gap-3">
+          <WalletFilter
+            report={report}
+            wallet={wallet}
+            switching={switching}
+            onChange={onWalletChange}
+          />
+          <span className="text-xs text-gray-500">
+            {report.totals.txCount.toLocaleString()} transactions
+            {report.walletFilter ? ' in this wallet' : ''}
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
@@ -456,6 +551,21 @@ function DetailTabs({ report }: { report: CashflowReport }) {
   );
 }
 
+function ContractLink({ chain, contract }: { chain: string; contract: string }) {
+  const url = contract ? addressExplorerUrl(chain, contract) : null;
+  if (!url) return null;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="ml-5 text-[11px] text-gray-500 underline-offset-2 hover:text-purple-300 hover:underline"
+    >
+      {chain === 'solana' ? 'collection' : 'contract'} on {explorerName(chain)} ↗
+    </a>
+  );
+}
+
 /** Sum a native-coin field per symbol and format as "+0.4 ETH · −12 SOL". */
 function perSymbol(
   rows: CashflowPosition[],
@@ -482,8 +592,15 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
     });
   // Spam airdrops never involve money — hide them unless asked.
   // Anything actually bought or sold — including on days with no USD price.
+  // Anything bought, sold or minted (free mints included — spam airdrops come
+  // from other addresses, not the zero address, so they stay tucked away).
   const traded = rows.filter(
-    (r) => r.buyCount > 0 || r.sellCount > 0 || r.spentUsd > 0 || r.proceedsUsd > 0,
+    (r) =>
+      r.buyCount > 0 ||
+      r.sellCount > 0 ||
+      r.spentUsd > 0 ||
+      r.proceedsUsd > 0 ||
+      r.items.some((i) => i.acquiredVia === 'mint' || i.acquiredVia === 'free_mint'),
   );
   const visible = showAll ? rows : traded;
   const totals = traded.reduce(
@@ -641,6 +758,7 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
                         </div>
                       </>
                     )}
+                    <ContractLink chain={r.chain} contract={r.contract} />
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums text-gray-300">
                     {r.qtyBought ? qty(r.qtyBought) : '—'}

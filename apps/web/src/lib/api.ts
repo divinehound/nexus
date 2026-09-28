@@ -692,27 +692,55 @@ export function getMyHoldingsCollections(
 }
 
 /** Money in/out + PnL across linked wallets; builds in the background, poll until `status === 'ready'`. */
-export function getMyCashflow(token: string, refresh = false) {
-  return apiFetch<CashflowResponse>(`/me/cashflow${refresh ? '?refresh=true' : ''}`, { token });
+/** Query string for the Money dashboard: optional refresh and single-wallet filter. */
+function cashflowQuery(params: { refresh?: boolean; wallet?: string | null }): string {
+  const q = new URLSearchParams();
+  if (params.refresh) q.set('refresh', 'true');
+  if (params.wallet) q.set('wallet', params.wallet);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
+export function getMyCashflow(token: string, refresh = false, wallet?: string | null) {
+  return apiFetch<CashflowResponse>(`/me/cashflow${cashflowQuery({ refresh, wallet })}`, { token });
 }
 
 export function addCashflowLink(
   token: string,
   input: { kind: 'link' | 'unlink'; fromChain: string; fromTxHash: string; toChain: string; toTxHash: string },
+  wallet?: string | null,
 ) {
-  return apiFetch<CashflowResponse>('/me/cashflow/links', { method: 'POST', token, body: JSON.stringify(input) });
+  return apiFetch<CashflowResponse>(`/me/cashflow/links${cashflowQuery({ wallet })}`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify(input),
+  });
 }
 
-export function removeCashflowLink(token: string, id: string) {
-  return apiFetch<CashflowResponse>(`/me/cashflow/links/${encodeURIComponent(id)}`, { method: 'DELETE', token });
+export function removeCashflowLink(token: string, id: string, wallet?: string | null) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/links/${encodeURIComponent(id)}${cashflowQuery({ wallet })}`, {
+    method: 'DELETE',
+    token,
+  });
 }
 
-export function addCashflowAddressTag(token: string, input: { chain: string; address: string; exchange: string }) {
-  return apiFetch<CashflowResponse>('/me/cashflow/address-tags', { method: 'POST', token, body: JSON.stringify(input) });
+export function addCashflowAddressTag(
+  token: string,
+  input: { chain: string; address: string; exchange: string },
+  wallet?: string | null,
+) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/address-tags${cashflowQuery({ wallet })}`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify(input),
+  });
 }
 
-export function removeCashflowAddressTag(token: string, id: string) {
-  return apiFetch<CashflowResponse>(`/me/cashflow/address-tags/${encodeURIComponent(id)}`, { method: 'DELETE', token });
+export function removeCashflowAddressTag(token: string, id: string, wallet?: string | null) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/address-tags/${encodeURIComponent(id)}${cashflowQuery({ wallet })}`, {
+    method: 'DELETE',
+    token,
+  });
 }
 
 export function getMyWallets(token: string) {

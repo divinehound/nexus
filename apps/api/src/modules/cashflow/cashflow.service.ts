@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
@@ -108,7 +108,11 @@ export class CashflowService {
     private readonly priceOracle: PriceOracleService,
   ) {}
 
-  async getReport(userId: string, refresh: boolean): Promise<CashflowResponse> {
+  /**
+   * @param wallet Optional linked address: report only that wallet's activity
+   *   (moves to the user's other wallets still count as own-wallet transfers).
+   */
+  async getReport(userId: string, refresh: boolean, wallet?: string): Promise<CashflowResponse> {
     const linked = await this.db.query.wallets.findMany({ where: eq(wallets.userId, userId) });
     if (linked.length === 0) return { status: 'no_wallets' };
     const signature = linked
@@ -116,9 +120,13 @@ export class CashflowService {
       .sort()
       .join('|');
 
+    if (wallet && !linked.some((w) => sameWallet(w.address, wallet))) {
+      throw new BadRequestException('That wallet is not linked to your account');
+    }
+
     const entry = this.entries.get(userId);
     if (entry?.status === 'computing') return this.toResponse(entry);
-    if (entry && !refresh && entry.walletsSignature === signature) return this.toResponse(entry);
+    if (entry && !refresh && entry.walletsSignature === signature) return this.forWallet(userId, entry, wallet);
 
     const next: Entry = {
       status: 'computing',
@@ -151,17 +159,23 @@ export class CashflowService {
    * links and tags — no chain calls. Falls back to a normal load if nothing has
    * been scanned yet.
    */
-  async rebuild(userId: string): Promise<CashflowResponse> {
+  async rebuild(userId: string, wallet?: string): Promise<CashflowResponse> {
     const entry = this.entries.get(userId);
-    if (!entry?.scan || entry.status === 'computing') return this.getReport(userId, false);
+    if (!entry?.scan || entry.status === 'computing') return this.getReport(userId, false, wallet);
     entry.report = await this.buildFromScan(userId, entry.scan);
     entry.status = 'ready';
-    return this.toResponse(entry);
+    return this.forWallet(userId, entry, wallet);
+  }
+
+  /** The cached all-wallets report, or one rebuilt from the same scan for a single wallet. */
+  private async forWallet(userId: string, entry: Entry, wallet?: string): Promise<CashflowResponse> {
+    if (!wallet || entry.status !== 'ready' || !entry.scan) return this.toResponse(entry);
+    return { status: 'ready', report: await this.buildFromScan(userId, entry.scan, wallet) };
   }
 
   // ── User overrides ──
 
-  async addLink(userId: string, input: TxLinkInput): Promise<CashflowResponse> {
+  async addLink(userId: string, input: TxLinkInput, wallet?: string): Promise<CashflowResponse> {
     const pair = normalizePair(input);
     // Linking and rejecting the same pair are mutually exclusive; the latest word wins.
     await this.db.delete(cashflowTxLinks).where(samePairCondition(userId, pair));
@@ -172,17 +186,17 @@ export class CashflowService {
       .insert(cashflowTxLinks)
       .values({ userId, kind: input.kind, ...pair })
       .onConflictDoNothing();
-    return this.rebuild(userId);
+    return this.rebuild(userId, wallet);
   }
 
-  async removeLink(userId: string, id: string): Promise<CashflowResponse> {
+  async removeLink(userId: string, id: string, wallet?: string): Promise<CashflowResponse> {
     await this.db
       .delete(cashflowTxLinks)
       .where(and(eq(cashflowTxLinks.userId, userId), eq(cashflowTxLinks.id, id)));
-    return this.rebuild(userId);
+    return this.rebuild(userId, wallet);
   }
 
-  async addAddressTag(userId: string, input: AddressTagInput): Promise<CashflowResponse> {
+  async addAddressTag(userId: string, input: AddressTagInput, wallet?: string): Promise<CashflowResponse> {
     const chainFamily = input.chain === 'solana' ? 'solana' : 'evm';
     const address = chainFamily === 'evm' ? input.address.toLowerCase() : input.address;
     await this.db
@@ -196,17 +210,17 @@ export class CashflowService {
         ],
         set: { exchange: input.exchange },
       });
-    return this.rebuild(userId);
+    return this.rebuild(userId, wallet);
   }
 
-  async removeAddressTag(userId: string, id: string): Promise<CashflowResponse> {
+  async removeAddressTag(userId: string, id: string, wallet?: string): Promise<CashflowResponse> {
     await this.db
       .delete(cashflowAddressTags)
       .where(and(eq(cashflowAddressTags.userId, userId), eq(cashflowAddressTags.id, id)));
-    return this.rebuild(userId);
+    return this.rebuild(userId, wallet);
   }
 
-  private async buildFromScan(userId: string, scan: ScanData): Promise<CashflowReport> {
+  private async buildFromScan(userId: string, scan: ScanData, wallet?: string): Promise<CashflowReport> {
     const [linkRows, tagRows] = await Promise.all([
       this.db.select().from(cashflowTxLinks).where(eq(cashflowTxLinks.userId, userId)),
       this.db.select().from(cashflowAddressTags).where(eq(cashflowAddressTags.userId, userId)),
@@ -259,12 +273,14 @@ export class CashflowService {
       );
     }
 
+    const mine = (address: string) => !wallet || sameWallet(address, wallet);
     const report = buildCashflowReport({
-      movements: scan.movements,
-      fees: scan.fees,
+      movements: scan.movements.filter((m) => mine(m.wallet)),
+      fees: scan.fees.filter((f) => mine(f.wallet)),
+      // All linked wallets stay "own", so moves to the others aren't counted as spending.
       wallets: scan.wallets,
       pricer: scan.pricer,
-      coverage: scan.coverage,
+      coverage: scan.coverage.filter((c) => mine(c.address)),
       notes: [...scan.notes],
       now: new Date(),
       explicitLinks,
@@ -276,6 +292,7 @@ export class CashflowService {
         `${report.totals.unpricedMovements} movements had no USD price for their day (neither CoinGecko nor Coinbase had one). They're still counted in ETH/SOL/etc.; only their USD value is left out.`,
       );
     }
+    report.walletFilter = wallet ?? null;
     report.links = links;
     report.addressTags = addressTags;
     report.exchangeNames = EXCHANGE_NAMES;
@@ -648,6 +665,11 @@ export function sharesTxLinkCondition(userId: string, p: TxPairFields): SQL {
       txIs(t.toChain, t.toTxHash, p.toChain, p.toTxHash),
     ),
   )!;
+}
+
+/** EVM addresses compare case-insensitively; Solana addresses are case-sensitive base58. */
+export function sameWallet(a: string, b: string): boolean {
+  return a.startsWith('0x') || b.startsWith('0x') ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 /**
