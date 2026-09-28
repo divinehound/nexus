@@ -26,6 +26,7 @@ import {
   verifyWalletLink,
 } from '@/lib/api';
 import { truncateAddress } from '@/lib/utils';
+import { WatchedWalletsSection } from './watched-wallets';
 
 interface ProfileFormState {
   email: string;
@@ -439,6 +440,8 @@ function MePageContent() {
           Opens in a new window. Click "Refresh" after linking to update your wallet list.
         </p>
       </section>
+
+      <WatchedWalletsSection accessToken={accessToken!} />
 
       {moveConfirmation && (
         <>

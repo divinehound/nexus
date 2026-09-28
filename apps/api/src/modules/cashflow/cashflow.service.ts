@@ -11,6 +11,7 @@ import {
   cashflowWalletChains,
   collections,
   wallets,
+  watchedWallets,
   type Database,
 } from '@nexus/database';
 import type {
@@ -76,7 +77,7 @@ const MAX_DEPOSIT_ADDRESS_CHECKS = 25;
 
 /** Everything fetched from chain/price providers — enough to rebuild the report without rescanning. */
 interface ScanData {
-  wallets: Array<{ chain: string; address: string }>;
+  wallets: Array<{ chain: string; address: string; watchOnly?: boolean }>;
   movements: LedgerMovement[];
   fees: LedgerFee[];
   pricer: UsdPricer;
@@ -264,13 +265,25 @@ export class CashflowService {
     return { status: 'ready', report: await this.buildFromScan(userId, entry.scan, view) };
   }
 
+  /** Verified wallets plus watch-only ones (added without signing) — all count as the user's own. */
   private async linkedWallets(userId: string, view: ReportView) {
-    const linked = await this.db.query.wallets.findMany({ where: eq(wallets.userId, userId) });
+    const [verified, watched] = await Promise.all([
+      this.db.query.wallets.findMany({ where: eq(wallets.userId, userId) }),
+      this.db.query.watchedWallets.findMany({ where: eq(watchedWallets.userId, userId) }),
+    ]);
+    const linked: Array<{ chain: string; address: string; watchOnly?: boolean }> = verified.map((w) => ({
+      chain: w.chain as string,
+      address: w.address,
+    }));
+    for (const w of watched) {
+      if (linked.some((l) => (l.chain === 'solana') === (w.family === 'solana') && sameWallet(l.address, w.address))) continue;
+      linked.push({ chain: w.family === 'solana' ? 'solana' : 'ethereum', address: w.address, watchOnly: true });
+    }
     if (view.wallet && !linked.some((w) => sameWallet(w.address, view.wallet!))) {
       throw new BadRequestException('That wallet is not linked to your account');
     }
     if (view.chain && !ALL_CHAINS.includes(view.chain)) throw new BadRequestException('Unknown chain');
-    return linked.map((w) => ({ chain: w.chain as string, address: w.address }));
+    return linked;
   }
 
   /** Every wallet+chain to scan: each EVM address on its chosen chains (default: all), each Solana address. */
@@ -804,7 +817,12 @@ export class CashflowService {
         try {
           const assets = new Map<string, LedgerAsset>();
           const fresh = isSol
-            ? await new SolanaActivityFetcher(key).fetchTxs(t.address, hashes, assets)
+            ? await new SolanaActivityFetcher(key).fetchTxs(
+                t.address,
+                hashes,
+                assets,
+                nftsReceived(row.data as SavedChainScan, new Set(hashes)),
+              )
             : await new EvmActivityFetcher(key).fetchTxs(chain, t.address, hashes, assets);
           await this.enrichNftNames(assets, alchemyKey);
           const hashSet = new Set(isSol ? hashes : hashes.map((h) => h.toLowerCase()));
@@ -975,6 +993,19 @@ export class CashflowService {
       },
     };
   }
+}
+
+/**
+ * NFTs (by token id) the wallet received anywhere in a saved scan, outside the
+ * given txs — so re-reading a marketplace-settled sale knows the NFT was the
+ * wallet's to sell.
+ */
+export function nftsReceived(saved: SavedChainScan, except: Set<string>): Set<string> {
+  const nft = new Set(saved.assets.filter((a) => a.kind === 'nft').map((a) => a.key));
+  const held = new Set<string>();
+  for (const m of saved.movements)
+    if (m.d === 'in' && m.i && nft.has(m.a) && !except.has(m.h)) held.add(m.i);
+  return held;
 }
 
 export function normalizeTarget(t: ScanTarget): ScanTarget {

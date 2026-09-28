@@ -849,6 +849,37 @@ export function removeWallet(walletId: string, token: string) {
   });
 }
 
+/** A wallet added without verifying it: counted on the Money dashboard, never used to sign in. */
+export interface WatchedWallet {
+  id: string;
+  family: 'evm' | 'solana';
+  address: string;
+  label: string | null;
+  createdAt: string;
+}
+
+export function getWatchedWallets(token: string) {
+  return apiFetch<WatchedWallet[]>('/me/watched-wallets', { token });
+}
+
+export function addWatchedWallet(
+  token: string,
+  input: { family: 'evm' | 'solana'; address: string; label?: string },
+) {
+  return apiFetch<WatchedWallet>('/me/watched-wallets', {
+    method: 'POST',
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+export function removeWatchedWallet(token: string, id: string) {
+  return apiFetch<{ success: boolean }>(`/me/watched-wallets/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    token,
+  });
+}
+
 export function getMyNicknames(token: string) {
   return apiFetch<Record<string, string>>('/me/nicknames', { token });
 }

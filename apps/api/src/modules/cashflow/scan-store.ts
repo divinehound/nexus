@@ -22,7 +22,7 @@ export interface SavedChainScan {
   disabled?: boolean;
 }
 
-interface SavedMovement {
+export interface SavedMovement {
   h: string;
   t: number;
   d: 'in' | 'out';

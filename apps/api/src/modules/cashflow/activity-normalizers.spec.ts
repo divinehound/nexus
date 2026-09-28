@@ -1,4 +1,4 @@
-import type { LedgerAsset } from './cashflow-ledger';
+import type { LedgerAsset, LedgerMovement } from './cashflow-ledger';
 import { normalizeEvmTransfer, type AlchemyTransfer } from './evm-activity.fetcher';
 import { normalizeSolanaTx, type HeliusInstruction, type MintInfo } from './solana-activity.fetcher';
 import { nearestDay } from './cashflow.service';
@@ -358,11 +358,18 @@ describe('bulk txs and Solana classification fallbacks', () => {
 describe('Metaplex Core assets', () => {
   const { MPL_CORE_PROGRAM, coreAssetMoves, firstByte, SolanaActivityFetcher } = jest.requireActual('./solana-activity.fetcher');
   const { buildCashflowReport } = jest.requireActual('./cashflow-ledger');
-  const ME = 'MeWa11et1111111111111111111111111111111111';
-  const CREATOR = 'Creator111111111111111111111111111111111111';
-  const COLLECTION = 'Co11ection111111111111111111111111111111111';
-  const ASSET = 'Asset11111111111111111111111111111111111111';
-  const LAUNCHPAD = 'LaunchPad1111111111111111111111111111111111';
+  const { Keypair, PublicKey } = jest.requireActual('@solana/web3.js');
+  // Real keys: wallets are on the ed25519 curve, escrows (PDAs) are not.
+  const key = () => Keypair.generate().publicKey.toBase58();
+  const ME = key();
+  const CREATOR = key();
+  const BUYER = key();
+  const COLLECTION = key();
+  const ASSET = key();
+  const LAUNCHPAD = key();
+  const MAGIC_EDEN = 'M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K';
+  const ESCROW = PublicKey.findProgramAddressSync([Buffer.from('escrow'), new PublicKey(ASSET).toBuffer()], new PublicKey(MAGIC_EDEN))[0].toBase58();
+  const DELEGATE = PublicKey.findProgramAddressSync([Buffer.from('m2')], new PublicKey(MAGIC_EDEN))[0].toBase58();
   const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
   const b58 = (bytes: number[]) => {
     let n = bytes.reduce((acc, b) => acc * 256n + BigInt(b), 0n);
@@ -444,6 +451,95 @@ describe('Metaplex Core assets', () => {
     expect(coreAssetMoves(tx([transfer(CREATOR, ME)]), ME)).toEqual([
       { asset: ASSET, collection: COLLECTION, direction: 'in', counterparty: CREATOR },
     ]);
+  });
+
+  // TransferV1: asset, collection?, payer, authority?, new_owner, system?, log_wrapper?
+  const coreTransfer = (payer: string, authority: string, to: string) => ({
+    programId: P,
+    accounts: [ASSET, COLLECTION, payer, authority, to, P, P],
+    data: b58([14, 0]),
+  });
+  const saleTx = (signature: string, timestamp: number, instructions: HeliusInstruction[], nativeTransfers: object[] = []) => ({
+    signature,
+    timestamp,
+    fee: 5000,
+    feePayer: BUYER,
+    instructions,
+    nativeTransfers,
+  });
+
+  it('sees a Magic Eden sale signed by the marketplace (not the seller) as the seller\'s sale', () => {
+    const held = new Set<string>();
+    const assets = new Map();
+    const mint = normalizeSolanaTx(ME, tx([createV2([ASSET, COLLECTION, P, ME, P, P, 'sys', P])], {
+      nativeTransfers: [{ fromUserAccount: ME, toUserAccount: CREATOR, amount: 1_000_000_000 }],
+    }), new Map(), assets, held);
+    expect(held.has(ASSET)).toBe(true);
+    // coreSell settled by ME: ME's delegate is the authority, the buyer pays; the seller only gets SOL.
+    const sale = normalizeSolanaTx(
+      ME,
+      saleTx('sigSale', 1_740_100_000, [
+        { programId: MAGIC_EDEN, accounts: [BUYER, ME, ASSET], data: b58([9, 9]), innerInstructions: [coreTransfer(BUYER, DELEGATE, BUYER)] },
+      ], [{ fromUserAccount: BUYER, toUserAccount: ME, amount: 3_000_000_000 }]),
+      new Map(),
+      assets,
+      held,
+    );
+    expect(sale.movements.map((m) => [m.direction, m.asset.kind, m.counterparty])).toEqual([
+      ['in', 'native', BUYER],
+      ['out', 'nft', BUYER],
+    ]);
+    expect(held.has(ASSET)).toBe(false);
+    const report = buildCashflowReport({
+      movements: [...mint.movements, ...sale.movements],
+      fees: [],
+      wallets: [{ chain: 'solana', address: ME }],
+      pricer: { usdPerUnit: () => 100 },
+      coverage: [],
+      notes: [],
+      now: new Date('2025-06-01T00:00:00Z'),
+    });
+    expect(report.activity.map((a: { type: string }) => a.type)).toEqual(['nft_sale', 'nft_mint']);
+    expect(report.totals.realizedPnlUsd).toBe(200); // sold for 3 SOL, minted for 1, at $100
+  });
+
+  it('treats a transfer into a listing escrow as still yours, and the sale out of it as the sale', () => {
+    const held = new Set<string>([ASSET]);
+    const list = coreAssetMoves(tx([coreTransfer(ME, ME, ESCROW)]), ME, held);
+    expect(list).toEqual([{ asset: ASSET, collection: COLLECTION, direction: 'out', counterparty: ME }]);
+    expect(held.has(ASSET)).toBe(true);
+    // Delisting brings it back — still an own move.
+    expect(coreAssetMoves(tx([coreTransfer(ME, ESCROW, ME)]), ME, new Set(held))).toEqual([
+      { asset: ASSET, collection: COLLECTION, direction: 'in', counterparty: ME },
+    ]);
+    // Sold out of escrow to a buyer.
+    expect(coreAssetMoves(tx([coreTransfer(BUYER, ESCROW, BUYER)]), ME, held)).toEqual([
+      { asset: ASSET, collection: COLLECTION, direction: 'out', counterparty: BUYER },
+    ]);
+  });
+
+  it("doesn't count someone else's Core sale in a tx you only earned royalties from", () => {
+    expect(coreAssetMoves(tx([coreTransfer(BUYER, DELEGATE, BUYER)]), ME, new Set())).toEqual([]);
+  });
+
+  it('processes Helius pages oldest first so the mint is known before the sale', async () => {
+    jest.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      if (String(url).includes('/v0/transactions'))
+        return new Response(
+          JSON.stringify([
+            saleTx('sigSale', 1_740_100_000, [coreTransfer(BUYER, DELEGATE, BUYER)], [{ fromUserAccount: BUYER, toUserAccount: ME, amount: 2e9 }]),
+            tx([createV2([ASSET, COLLECTION, P, ME, P, P, 'sys', P])]),
+          ]),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ result: [] }), { status: 200 });
+    });
+    const r = await new SolanaActivityFetcher('key').fetchTxs(ME, ['sigSale', 'sigCore'], new Map());
+    expect(r.movements.filter((m: LedgerMovement) => m.asset.kind === 'nft').map((m: LedgerMovement) => [m.txHash, m.direction])).toEqual([
+      ['sigCore', 'in'],
+      ['sigSale', 'out'],
+    ]);
+    jest.restoreAllMocks();
   });
 
   it('asks DAS about Core assets so they get their collection name', async () => {

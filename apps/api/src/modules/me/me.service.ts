@@ -22,20 +22,40 @@ import {
   walletMoveConfirmations,
   walletOwnershipMoves,
   walletNicknames,
+  watchedWallets,
 } from '@nexus/database';
+import { ConfigService } from '@nestjs/config';
+import { CHAIN_META } from '@nexus/types';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { randomBytes } from 'crypto';
 import { createPublicClient, http, isAddress } from 'viem';
-import { mainnet } from 'viem/chains';
+import { abstract, apeChain, base, mainnet, polygon } from 'viem/chains';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { HoldingsService } from '../holdings/holdings.service';
+import { familyAddress, releaseWatchedWallet, walletFamily } from '../../common/watched-wallets';
+
+/**
+ * Chains a linking signature is checked on. A plain (EOA) signature is valid
+ * on the first; smart-contract wallets (Abstract Global Wallet, Safe, Coinbase
+ * Smart Wallet) only exist on some chains, so ERC-1271/6492 checks need the
+ * chain the wallet lives on.
+ */
+const SIGNATURE_CHAINS = [
+  { chain: mainnet, alchemy: CHAIN_META.ethereum?.alchemySubdomain },
+  { chain: abstract, alchemy: CHAIN_META.abstract?.alchemySubdomain },
+  { chain: base, alchemy: CHAIN_META.base?.alchemySubdomain },
+  { chain: polygon, alchemy: CHAIN_META.polygon?.alchemySubdomain },
+  { chain: apeChain, alchemy: CHAIN_META.apechain?.alchemySubdomain },
+];
+const MAX_WATCHED_WALLETS = 100;
 
 @Injectable()
 export class MeService {
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: Database,
     private readonly holdingsService: HoldingsService,
+    private readonly config: ConfigService,
   ) {}
 
   private formatWalletMessage(params: {
@@ -103,8 +123,22 @@ export class MeService {
   }
 
   private async verifyEvmSignature(address: string, message: string, signature: string) {
-    const client = createPublicClient({ chain: mainnet, transport: http() });
-    return client.verifyMessage({ address: address as `0x${string}`, message, signature: signature as `0x${string}` });
+    const apiKey = this.config.get<string>('alchemy.apiKey');
+    for (const { chain, alchemy } of SIGNATURE_CHAINS) {
+      const transport = alchemy && apiKey ? http(`https://${alchemy}.g.alchemy.com/v2/${apiKey}`) : http();
+      const client = createPublicClient({ chain, transport });
+      try {
+        const valid = await client.verifyMessage({
+          address: address as `0x${string}`,
+          message,
+          signature: signature as `0x${string}`,
+        });
+        if (valid) return true;
+      } catch {
+        // RPC trouble on one chain shouldn't stop the others being tried.
+      }
+    }
+    return false;
   }
 
   private verifySolanaSignature(address: string, message: string, signature: string): boolean {
@@ -275,6 +309,7 @@ export class MeService {
       if (ownedWallets.length === 0) {
         await this.db.update(users).set({ primaryWalletId: linked.id }).where(eq(users.id, userId));
       }
+      await releaseWatchedWallet(this.db, chain, address);
 
       void this.holdingsService.queueWalletIndexing(userId, linked.id).catch(() => {
         // best-effort fire-and-forget
@@ -284,6 +319,7 @@ export class MeService {
     }
 
     if (existingWallet.userId === userId) {
+      await releaseWatchedWallet(this.db, chain, address);
       void this.holdingsService.queueWalletIndexing(userId, existingWallet.id).catch(() => {
         // best-effort fire-and-forget
       });
@@ -416,6 +452,7 @@ export class MeService {
       return updatedWallet;
     });
 
+    await releaseWatchedWallet(this.db, chain, address);
     void this.holdingsService.queueWalletIndexing(userId, movedWallet.id).catch(() => {
       // best-effort fire-and-forget
     });
@@ -499,6 +536,73 @@ export class MeService {
       }
     });
 
+    return { success: true };
+  }
+
+  // ── Watch-only wallets ─────────────────────────────────────────────
+
+  async listWatchedWallets(userId: string) {
+    return this.db.query.watchedWallets.findMany({
+      where: eq(watchedWallets.userId, userId),
+      orderBy: [watchedWallets.createdAt],
+    });
+  }
+
+  /**
+   * Add an address without proving ownership. Only for the Money dashboard's
+   * history — it never signs anyone in. An address someone has verified
+   * can't be watched: it has to be verified (and moved) like any wallet.
+   */
+  async addWatchedWallet(userId: string, body: { family?: string; address?: string; label?: string | null }) {
+    const family = body.family === 'solana' ? 'solana' : body.family === 'evm' ? 'evm' : null;
+    if (!family) {
+      throw new BadRequestException({ error: 'VALIDATION_ERROR', message: "family must be 'evm' or 'solana'" });
+    }
+    const chain = family === 'solana' ? 'solana' : 'ethereum';
+    const address = familyAddress(chain, this.normalizeAndValidateAddress(chain, body.address ?? ''));
+    const label = body.label?.trim().slice(0, 100) || null;
+
+    const verified = await this.db.query.wallets.findMany({ where: eq(wallets.address, address) });
+    const owner = verified.find((w) => walletFamily(w.chain) === family && w.userId);
+    if (owner?.userId === userId) {
+      throw new ConflictException({
+        error: 'WALLET_ALREADY_VERIFIED',
+        message: 'This wallet is already linked (verified) on your account.',
+      });
+    }
+    if (owner) {
+      throw new ConflictException({
+        error: 'WALLET_LINKED_ELSEWHERE',
+        message:
+          'This wallet is verified on another account. To add it here, link it by signing with it — that moves it to your account.',
+      });
+    }
+
+    const count = await this.db.query.watchedWallets.findMany({ where: eq(watchedWallets.userId, userId) });
+    if (count.length >= MAX_WATCHED_WALLETS && !count.some((w) => w.family === family && w.address === address)) {
+      throw new BadRequestException({
+        error: 'TOO_MANY_WATCHED_WALLETS',
+        message: `You can watch up to ${MAX_WATCHED_WALLETS} wallets.`,
+      });
+    }
+
+    const [row] = await this.db
+      .insert(watchedWallets)
+      .values({ userId, family, address, label })
+      .onConflictDoUpdate({
+        target: [watchedWallets.userId, watchedWallets.family, watchedWallets.address],
+        set: { label },
+      })
+      .returning();
+    return row;
+  }
+
+  async removeWatchedWallet(userId: string, id: string) {
+    const deleted = await this.db
+      .delete(watchedWallets)
+      .where(and(eq(watchedWallets.userId, userId), eq(watchedWallets.id, id)))
+      .returning();
+    if (deleted.length === 0) throw new NotFoundException('Watched wallet not found');
     return { success: true };
   }
 

@@ -91,7 +91,7 @@ export interface UsdPricer {
 export interface BuildReportInput {
   movements: LedgerMovement[];
   fees: LedgerFee[];
-  wallets: Array<{ chain: string; address: string }>;
+  wallets: Array<{ chain: string; address: string; watchOnly?: boolean }>;
   pricer: UsdPricer;
   coverage: CashflowWalletCoverage[];
   notes: string[];
