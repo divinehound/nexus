@@ -34,6 +34,8 @@ export interface SavedMovement {
   p: string;
   inf?: 1;
   ev?: 1;
+  /** A swap's value, not the wallet's money (LedgerMovement.valuation). */
+  val?: 1;
 }
 
 interface SavedFee {
@@ -64,6 +66,7 @@ export function toSaved(result: ChainFetchResult): SavedChainScan {
       p: m.counterparty,
       ...(m.inferred ? { inf: 1 as const } : {}),
       ...(m.fromEvent ? { ev: 1 as const } : {}),
+      ...(m.valuation ? { val: 1 as const } : {}),
     })),
     fees: result.fees.map((f) => ({
       h: f.txHash,
@@ -133,6 +136,7 @@ export function fromSaved(
       counterparty: m.p,
       ...(m.inf ? { inferred: true } : {}),
       ...(m.ev ? { fromEvent: true } : {}),
+      ...(m.val ? { valuation: true } : {}),
     });
   }
   const fees: LedgerFee[] = saved.fees.map((f) => ({

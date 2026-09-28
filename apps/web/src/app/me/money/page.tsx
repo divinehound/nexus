@@ -314,6 +314,7 @@ const STAT_LABELS: Record<string, string> = {
   nftCollections: 'NFT collections',
   nftsFromEvents: 'NFTs from sale/mint events (compressed/Core)',
   coreNfts: 'Metaplex Core NFTs (mints, transfers, burns)',
+  swapsValued: 'token swaps valued by their SOL/stablecoin route',
   tokenLegs: 'token moves',
   nativeLegs: 'coin transfers',
   escrowPayments: 'payments from bid escrow',
@@ -759,7 +760,9 @@ function PositionsTable({
       r.sellCount > 0 ||
       r.spentUsd > 0 ||
       r.proceedsUsd > 0 ||
-      r.items.some((i) => i.acquiredVia === 'mint' || i.acquiredVia === 'free_mint'),
+      r.items.some((i) => i.acquiredVia === 'mint' || i.acquiredVia === 'free_mint') ||
+      // Tokens only ever swapped for other tokens are trades too.
+      r.trades.some((t) => t.kind === 'swap_in' || t.kind === 'swap_out'),
   );
   const visible = showAll ? rows : traded;
   const totals = traded.reduce(

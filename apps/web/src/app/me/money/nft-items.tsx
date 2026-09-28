@@ -329,15 +329,6 @@ export function NftItemsTable({
                           <span className="text-gray-500"> · {shortDate(i.acquiredAt)}</span>
                         )}
                       </TxLink>
-                      {unpaid && (
-                        <button
-                          type="button"
-                          onClick={() => pick(i.acquireTxHash!, 'received_asset', i.acquiredAt)}
-                          className="block text-[11px] text-purple-300 hover:text-purple-200"
-                        >
-                          {linking?.key === `${rowKey}:received_asset` ? 'Cancel' : 'Link payment…'}
-                        </button>
-                      )}
                     </td>
                     <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
                       {i.acquiredVia === 'unknown' ? (
@@ -345,7 +336,19 @@ export function NftItemsTable({
                       ) : i.acquiredVia === 'free_mint' || i.acquiredVia === 'received' ? (
                         // Nothing paid — but minting still cost gas, so show it.
                         <span className="text-gray-500">
-                          free
+                          {unpaid ? (
+                            <button
+                              type="button"
+                              onClick={() => pick(i.acquireTxHash!, 'received_asset', i.acquiredAt)}
+                              aria-expanded={linking?.key === `${rowKey}:received_asset`}
+                              title="Paid for this separately — an OTC deal or a cross-chain mint? Click to link the payment."
+                              className="underline decoration-dotted underline-offset-2 hover:text-purple-300"
+                            >
+                              free
+                            </button>
+                          ) : (
+                            'free'
+                          )}
                           {i.buyGasUsd > 0 && (
                             <div className="text-[11px]">gas {usd(i.buyGasUsd)}</div>
                           )}
@@ -363,20 +366,21 @@ export function NftItemsTable({
                       ) : (
                         <span className="text-gray-500">Still held</span>
                       )}
-                      {unsold && (
+                    </td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
+                      {unsold ? (
                         <button
                           type="button"
                           onClick={() => pick(i.disposeTxHash!, 'sent_asset', i.disposedAt)}
-                          className="block text-[11px] text-purple-300 hover:text-purple-200"
+                          aria-expanded={linking?.key === `${rowKey}:sent_asset`}
+                          title="Sold this in an OTC deal? Click to link the payment you received."
+                          className="text-gray-500 underline decoration-dotted underline-offset-2 hover:text-purple-300"
                         >
-                          {linking?.key === `${rowKey}:sent_asset`
-                            ? 'Cancel'
-                            : 'Link payment received…'}
+                          nothing
                         </button>
+                      ) : (
+                        <Dual usd={i.proceedsUsd} native={i.proceedsNative} symbol={sym} />
                       )}
-                    </td>
-                    <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
-                      <Dual usd={i.proceedsUsd} native={i.proceedsNative} symbol={sym} />
                     </td>
                     <td className="py-1.5 pr-3 text-right tabular-nums">
                       <Dual

@@ -72,6 +72,12 @@ export interface LedgerMovement {
   fromEvent?: boolean;
   /** Solana: a Metaplex Core asset read from the Core program's instructions. */
   fromCore?: boolean;
+  /**
+   * Not a move of the wallet's money: what a token-for-token swap was worth,
+   * read from the money (SOL/stablecoin) that passed between the pools routing
+   * it. Values the swap; never counted as money in or out.
+   */
+  valuation?: boolean;
 }
 
 export interface LedgerFee {
@@ -795,6 +801,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     const legUsd = new Map<LedgerMovement, number>();
     let counterparty: string | null = null;
     let exchange: string | null = null;
+    let labelNote = '';
 
     if (unIn.length > 0 && unOut.length === 0) {
       // ── Acquisition: purchase, mint, or free receive ──
@@ -988,6 +995,146 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           txOut += moneyOut - moneyIn;
         }
       }
+    } else if (
+      unIn.length > 0 &&
+      unOut.length > 0 &&
+      (a.swapValueUsd !== null || a.swapValueNative !== null)
+    ) {
+      // ── Token-for-token swap with a known value (the SOL/stablecoin that
+      // passed between the pools routing it): a sale of what went out and a
+      // purchase of what came in, both at that value — so the tokens given up
+      // realize their P/L here instead of passing their cost basis along. ──
+      const saleRate = nativeRate(g.chain, at);
+      const valueUsd = a.swapValueUsd;
+      const valueNative =
+        a.swapValueNative ?? (valueUsd !== null && saleRate ? valueUsd / saleRate : null);
+      // Any money the wallet itself paid or got here (e.g. rent for a new token
+      // account) rides on the purchase or the sale.
+      const netMoney = moneyOut - moneyIn;
+      const netMoneyNative =
+        moneyOutNative !== null && moneyInNative !== null ? moneyOutNative - moneyInNative : 0;
+      const usdKnown = valueUsd !== null && moneyUsdKnown;
+      const sellUsd = usdKnown ? valueUsd! + Math.max(0, -netMoney) : null;
+      const sellNative = valueNative !== null ? valueNative + Math.max(0, -netMoneyNative) : null;
+      const buyUsd = usdKnown ? valueUsd! + Math.max(0, netMoney) : null;
+      const buyNative = valueNative !== null ? valueNative + Math.max(0, netMoneyNative) : null;
+      if (netMoney > 0) {
+        book(at, 'out', 'token_purchase', netMoney);
+        txOut += netMoney;
+      } else if (netMoney < 0) {
+        book(at, 'in', 'token_sale', -netMoney);
+        txIn += -netMoney;
+      }
+      // One leg per token: a route often takes a small platform fee in the same
+      // token, and the value is split per token, not per leg.
+      const merge = (legs: LedgerMovement[]) => {
+        const byKey = new Map<string, LedgerMovement>();
+        for (const m of legs) {
+          const k = `${m.asset.key}:${m.tokenId ?? ''}`;
+          const e = byKey.get(k);
+          byKey.set(k, e ? { ...e, amount: e.amount + m.amount } : m);
+        }
+        return [...byKey.values()];
+      };
+      /** Show a merged leg's value on the original legs it came from, by amount. */
+      const spreadLegUsd = (originals: LedgerMovement[], merged: LedgerMovement, value: number) => {
+        for (const o of originals)
+          if (o.asset.key === merged.asset.key && o.tokenId === merged.tokenId)
+            legUsd.set(o, (value * o.amount) / merged.amount);
+      };
+      const gone = merge(unOut);
+      const got = merge(unIn);
+      const outUsd = sellUsd !== null ? sellUsd / gone.length : null;
+      const outNative = sellNative !== null ? sellNative / gone.length : null;
+      const gasShare = feeUsd / gone.length;
+      const gasShareNative = feeNative / gone.length;
+      realized = 0;
+      let realizedAfterGas = 0;
+      for (const m of gone) {
+        const p = positionFor(m.asset, at);
+        const d = p.dispose(m.amount, m.tokenId);
+        const usdOk = outUsd !== null && d.usdMissing === 0;
+        const pnlNative = outNative !== null ? outNative - d.basisNative : null;
+        if (outUsd !== null) spreadLegUsd(unOut, m, outUsd);
+        for (const t of p.closeTrips(m.tokenId, m.amount, at, 'swap', g.txHash)) {
+          const f = t.qty / m.amount;
+          t.proceedsUsd = outUsd !== null ? outUsd * f : null;
+          t.proceedsNative = outNative !== null ? outNative * f : null;
+          t.sellGasUsd = gasShare * f;
+          t.sellGasNative = gasShareNative * f;
+        }
+        bookSplit(p, usdOk ? outUsd! - d.basis : null, pnlNative, saleRate);
+        p.trade({
+          txHash: g.txHash,
+          at: at.toISOString(),
+          kind: 'swap_out',
+          qty: m.amount,
+          usd: outUsd,
+          native: outNative,
+          costBasisUsd: d.usdMissing > 0 ? null : d.basis,
+          pnlUsd: usdOk ? outUsd! - d.basis : null,
+          pnlNative,
+          gasUsd: gasShare,
+        });
+        p.sellCount++;
+        p.qtySold += m.amount;
+        p.qtySoldWithoutBasis += d.missing;
+        p.gasUsd += gasShare;
+        if (outUsd !== null) p.proceedsUsd += outUsd;
+        if (outNative !== null) {
+          p.proceedsNative += outNative;
+          p.realizedPnlAfterGasNative += outNative - d.basisNative - d.gasNative - gasShareNative;
+        }
+        if (usdOk) {
+          p.sellCountUsd++;
+          p.realizedPnlUsd += outUsd! - d.basis;
+          p.realizedPnlAfterGasUsd += outUsd! - d.basis - d.gas - gasShare;
+          realized += outUsd! - d.basis;
+          realizedAfterGas += outUsd! - d.basis - d.gas - gasShare;
+        } else {
+          p.usdPriceMissing++;
+        }
+      }
+      bookRealized(at, realized, realizedAfterGas);
+      if (valueNative !== null)
+        labelNote = ` · worth ${Number(valueNative.toPrecision(4))} ${nativeSymbolFor(g.chain)}`;
+      const inUsd = buyUsd !== null ? buyUsd / got.length : null;
+      const inNative = buyNative !== null ? buyNative / got.length : null;
+      for (const m of got) {
+        const p = positionFor(m.asset, at);
+        p.acquire(m.amount, inUsd ?? 0, m.tokenId, 0, inNative ?? 0, 0, inUsd === null);
+        p.openTrip(
+          m.tokenId,
+          m.amount,
+          at,
+          'swap',
+          g.txHash,
+          inUsd ?? 0,
+          inNative ?? 0,
+          0,
+          0,
+          inUsd === null,
+        );
+        p.trade({
+          txHash: g.txHash,
+          at: at.toISOString(),
+          kind: 'swap_in',
+          qty: m.amount,
+          usd: inUsd,
+          native: inNative,
+          costBasisUsd: null,
+          pnlUsd: null,
+          pnlNative: null,
+          gasUsd: 0,
+        });
+        p.buyCount++;
+        p.qtyBought += m.amount;
+        if (inUsd !== null) p.spentUsd += inUsd;
+        else p.usdPriceMissing++;
+        if (inNative !== null) p.spentNative += inNative;
+        if (inUsd !== null) spreadLegUsd(unIn, m, inUsd);
+      }
+      type = 'swap';
     } else if (unIn.length > 0 && unOut.length > 0) {
       // ── Asset-for-asset swap: basis carries over, plus/minus any money leg ──
       let carried = 0;
@@ -1122,7 +1269,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       timestamp: at.toISOString(),
       wallet: g.wallet,
       type,
-      label: describe(type, unIn, unOut, pricedIn, pricedOut, exchange),
+      label: describe(type, unIn, unOut, pricedIn, pricedOut, exchange) + labelNote,
       inUsd: txIn,
       outUsd: txOut,
       feeUsd,
@@ -1294,6 +1441,9 @@ interface TxAnalysis {
   moneyOutNative: number | null;
   /** False when a money leg had no USD price for its day. */
   moneyUsdKnown: boolean;
+  /** What a token-for-token swap was worth (see LedgerMovement.valuation); null if not known. */
+  swapValueUsd: number | null;
+  swapValueNative: number | null;
 }
 
 function analyze(
@@ -1320,7 +1470,12 @@ function analyze(
   const ownIn: LedgerMovement[] = [];
   let ownMoveUsd = 0;
   let hadOwnMove = false;
+  const valuations: PricedLeg[] = [];
   for (const m of g.movements) {
+    if (m.valuation) {
+      valuations.push(leg(m, priceLegQuiet(pricer, m)));
+      continue;
+    }
     if (isOwn(m.chain, m.counterparty)) {
       hadOwnMove = true;
       if (m.direction === 'out') {
@@ -1389,6 +1544,9 @@ function analyze(
     moneyInNative: sumNative(pricedIn),
     moneyOutNative: sumNative(pricedOut),
     moneyUsdKnown: [...pricedIn, ...pricedOut].every((l) => l.usd !== null),
+    swapValueUsd:
+      valuations.length > 0 && valuations.every((l) => l.usd !== null) ? sumUsd(valuations) : null,
+    swapValueNative: valuations.length > 0 ? sumNative(valuations) : null,
   };
 }
 

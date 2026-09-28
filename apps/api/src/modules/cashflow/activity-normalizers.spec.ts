@@ -557,3 +557,98 @@ describe('Metaplex Core assets', () => {
     jest.restoreAllMocks();
   });
 });
+
+describe('token-for-token swaps on Solana (Jupiter routes)', () => {
+  const { buildCashflowReport } = jest.requireActual('./cashflow-ledger');
+  const ME = '8fMKrjeijyqQZGSerwYiARA7GfkJYsv1PbnyQZr9347E';
+  const JUP = 'JupAuthority1611111111111111111111111111111';
+  const RAY_V4 = 'RaydiumV4Poo11111111111111111111111111111111';
+  const RAY_CPMM = 'RaydiumCpmm1111111111111111111111111111111111';
+  const POX = 'PoxMint111111111111111111111111111111111111';
+  const DEADS = 'DeadsMint11111111111111111111111111111111111';
+  const WSOL = 'So11111111111111111111111111111111111111112';
+  // Swap 66,290.99 POX → 305,449 DEADS via POX→WSOL (Raydium V4) → DEADS (Raydium CPMM).
+  const swapTx = {
+    signature: '3Dxu6paoo4',
+    timestamp: 1_760_137_033,
+    fee: 5000,
+    feePayer: ME,
+    type: 'SWAP',
+    nativeTransfers: [{ fromUserAccount: ME, toUserAccount: 'NewDeadsAta', amount: 2_039_280 }], // token account rent
+    tokenTransfers: [
+      { fromUserAccount: ME, toUserAccount: JUP, mint: POX, tokenAmount: 66224.703861782 },
+      { fromUserAccount: ME, toUserAccount: JUP, mint: POX, tokenAmount: 66.290994856 }, // platform fee
+      { fromUserAccount: JUP, toUserAccount: RAY_V4, mint: POX, tokenAmount: 66224.703861782 },
+      { fromUserAccount: RAY_V4, toUserAccount: JUP, mint: WSOL, tokenAmount: 1.066355423 },
+      { fromUserAccount: JUP, toUserAccount: RAY_CPMM, mint: WSOL, tokenAmount: 1.066355423 },
+      { fromUserAccount: RAY_CPMM, toUserAccount: ME, mint: DEADS, tokenAmount: 305449.285605179 },
+    ],
+  };
+  const info = (name: string): MintInfo => ({ isNft: false, name, symbol: name, collection: null, collectionName: null });
+  const mintInfo = new Map([
+    [POX, info('POX')],
+    [DEADS, info('DEADS')],
+  ]);
+
+  it('values the swap by the SOL that passed between the pools', () => {
+    const r = normalizeSolanaTx(ME, swapTx, mintInfo, new Map());
+    const value = r.movements.find((m) => m.valuation)!;
+    expect(value.amount).toBeCloseTo(1.066355423);
+    expect(value.asset.price).toEqual({ kind: 'native', symbol: 'SOL' });
+    // The wallet's own legs are unchanged: POX out (twice), DEADS in, rent out.
+    expect(r.movements.filter((m) => !m.valuation).map((m) => [m.direction, m.asset.symbol])).toEqual([
+      ['out', 'SOL'],
+      ['out', 'POX'],
+      ['out', 'POX'],
+      ['in', 'DEADS'],
+    ]);
+  });
+
+  it('books it as a sale of POX and a purchase of DEADS at that value, without counting it as money in/out', () => {
+    const assets = new Map();
+    // Earlier: bought the POX for 0.5 SOL.
+    const buy = normalizeSolanaTx(
+      ME,
+      {
+        signature: 'buyPox',
+        timestamp: 1_750_000_000,
+        nativeTransfers: [{ fromUserAccount: ME, toUserAccount: RAY_V4, amount: 500_000_000 }],
+        tokenTransfers: [{ fromUserAccount: RAY_V4, toUserAccount: ME, mint: POX, tokenAmount: 66290.994856638 }],
+      },
+      mintInfo,
+      assets,
+    );
+    const swap = normalizeSolanaTx(ME, swapTx, mintInfo, assets);
+    const report = buildCashflowReport({
+      movements: [...buy.movements, ...swap.movements],
+      fees: [],
+      wallets: [{ chain: 'solana', address: ME }],
+      pricer: { usdPerUnit: () => 100 },
+      coverage: [],
+      notes: [],
+      now: new Date('2026-01-01T00:00:00Z'),
+    });
+    const swapRow = report.activity.find((a: { txHash: string }) => a.txHash === '3Dxu6paoo4');
+    expect(swapRow.type).toBe('swap');
+    expect(swapRow.label).toMatch(/· worth 1.066 SOL$/);
+    const pox = report.tokens.find((t: { symbol: string }) => t.symbol === 'POX');
+    const deads = report.tokens.find((t: { symbol: string }) => t.symbol === 'DEADS');
+    // Sold for 1.066 SOL, bought for 0.5 → +0.566 SOL ($56.6 at $100).
+    expect(pox.realizedPnlNative).toBeCloseTo(0.566355423);
+    expect(pox.realizedPnlUsd).toBeCloseTo(56.6355423);
+    expect(pox.trades[0]).toMatchObject({ kind: 'swap_out', pnlUsd: expect.closeTo(56.6355423) });
+    // DEADS cost the swap's value plus the token-account rent the wallet paid.
+    expect(deads.spentNative).toBeCloseTo(1.066355423 + 0.00203928);
+    expect(deads.buyCount).toBe(1);
+    // Money in/out: only the 0.5 SOL buy and the rent — the 1.066 SOL never touched the wallet.
+    expect(report.totals.outUsd).toBeCloseTo(50 + 0.203928);
+    expect(report.totals.inUsd).toBe(0);
+  });
+
+  it("doesn't value NFT trades or single-sided moves", () => {
+    const { swapValuation } = jest.requireActual('./solana-activity.fetcher');
+    const oneSided = normalizeSolanaTx(ME, { ...swapTx, tokenTransfers: swapTx.tokenTransfers.slice(0, 5) }, mintInfo, new Map());
+    expect(oneSided.movements.some((m) => m.valuation)).toBe(false);
+    expect(swapValuation(ME, swapTx, [], new Map())).toBeNull();
+  });
+});
