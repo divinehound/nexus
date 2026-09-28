@@ -111,6 +111,10 @@ export interface CashflowPosition {
   openCostBasisUsd: number;
   /** Units sold whose purchase was not seen (airdrop, gift, pre-history) — basis taken as $0. */
   qtySoldWithoutBasis: number;
+  /** Buys/sales that moved money on a day with no USD price: counted in the coin, left out of USD totals. */
+  usdPriceMissing: number;
+  /** Sales with a known USD result; when 0 but sellCount > 0, USD P/L is unknown rather than zero. */
+  sellCountUsd: number;
   firstAt: string;
   lastAt: string;
   /** NFTs only: one row per token held — or per round trip, if bought and sold more than once. Newest first. */
@@ -128,7 +132,8 @@ export interface CashflowNftItem {
   acquiredAt: string | null;
   acquiredVia: CashflowNftAcquiredVia;
   acquireTxHash: string | null;
-  costUsd: number;
+  /** null when the acquisition day has no USD price (costNative is still exact for coin payments). */
+  costUsd: number | null;
   costNative: number;
   buyGasUsd: number;
   buyGasNative: number;
@@ -146,6 +151,8 @@ export interface CashflowNftItem {
   realizedPnlAfterGasUsd: number | null;
   realizedPnlNative: number | null;
   realizedPnlAfterGasNative: number | null;
+  /** The buy or the sale had no USD price for its day, so USD figures are missing (coin figures aren't). */
+  usdPriceMissing: boolean;
   holdSeconds: number | null;
 }
 
