@@ -6,7 +6,13 @@ import { shortAddress } from './evm-activity.fetcher';
 import { chunk, fetchJsonWithRetry, sleep } from './http';
 
 const LAMPORTS_PER_SOL = 1e9;
-const MAX_PAGES = 100; // × 100 transactions
+const MAX_PAGES = 300; // × 100 transactions — Solana wallets collect a lot of spam
+/** Helius NFT event types that move an NFT (bids/listings only move SOL or change state). */
+const NFT_MOVE_EVENTS = new Set(['NFT_SALE', 'NFT_MINT', 'COMPRESSED_NFT_MINT', 'COMPRESSED_NFT_TRANSFER', 'TRANSFER']);
+/** Event types that come with a price the buyer paid. */
+const PRICED_NFT_EVENTS = new Set(['NFT_SALE', 'NFT_MINT', 'COMPRESSED_NFT_MINT']);
+/** Placing or cancelling a marketplace bid parks SOL in (or returns it from) the user's own bid escrow. */
+const BID_ESCROW_EVENT = /^NFT_(GLOBAL_)?BID(_CANCELLED)?$/;
 const NFT_STANDARDS = new Set(['NonFungible', 'ProgrammableNonFungible', 'NonFungibleEdition']);
 const FUNGIBLE_INTERFACES = new Set(['FungibleToken', 'FungibleAsset']);
 
@@ -24,6 +30,21 @@ export interface HeliusEnhancedTx {
     mint?: string;
     tokenStandard?: string;
   }>;
+  /** Helius classification, e.g. NFT_SALE, NFT_BID, SWAP. */
+  type?: string;
+  source?: string;
+  events?: {
+    /** Marketplace/mint events, including compressed NFTs and assets that never appear in tokenTransfers. */
+    nft?: {
+      type?: string;
+      /** Price for the whole event, in lamports. */
+      amount?: number;
+      buyer?: string;
+      seller?: string;
+      source?: string;
+      nfts?: Array<{ mint?: string; tokenStandard?: string }>;
+    };
+  };
 }
 
 export interface MintInfo {
@@ -37,6 +58,12 @@ export interface MintInfo {
 }
 
 export const SOL_ASSET_KEY = 'solana:native';
+
+/** Pull the signature Helius suggests resuming from out of an error message, if any. */
+export function heliusResumeSignature(message: string): string | null {
+  const m = /before(?:-signature)?`?\s*(?:parameter\s*)?(?:set\s*to|=)\s*`?([1-9A-HJ-NP-Za-km-z]{64,90})/i.exec(message);
+  return m ? m[1] : null;
+}
 
 function solAsset(assets: Map<string, LedgerAsset>): LedgerAsset {
   let a = assets.get(SOL_ASSET_KEY);
@@ -88,17 +115,37 @@ export function normalizeSolanaTx(
 
   const movements: LedgerMovement[] = [];
   const base = { chain: 'solana', txHash: tx.signature, timestamp, wallet };
+  const nftEvent = tx.events?.nft;
+  const eventType = nftEvent?.type ?? tx.type ?? '';
+  // SOL moving into or out of the user's own marketplace bid escrow is their
+  // money changing pockets, not spending — record it as an own-wallet move
+  // (the filled bid is charged when the NFT arrives, below).
+  const escrowMove = BID_ESCROW_EVENT.test(eventType);
+  let nativeOut = 0;
+  let nativeIn = 0;
   for (const n of tx.nativeTransfers ?? []) {
     const from = n.fromUserAccount ?? '';
     const to = n.toUserAccount ?? '';
     if ((from === wallet) === (to === wallet) || !n.amount) continue;
     const direction = from === wallet ? 'out' : 'in';
-    movements.push({ ...base, direction, asset: solAsset(assets), tokenId: null, amount: n.amount / LAMPORTS_PER_SOL, counterparty: direction === 'out' ? to : from });
+    const amount = n.amount / LAMPORTS_PER_SOL;
+    if (direction === 'out') nativeOut += amount;
+    else nativeIn += amount;
+    movements.push({
+      ...base,
+      direction,
+      asset: solAsset(assets),
+      tokenId: null,
+      amount,
+      counterparty: escrowMove ? wallet : direction === 'out' ? to : from,
+    });
   }
+  const tokenMints = new Set<string>();
   for (const t of tx.tokenTransfers ?? []) {
     const from = t.fromUserAccount ?? '';
     const to = t.toUserAccount ?? '';
     if ((from === wallet) === (to === wallet) || !t.mint || !t.tokenAmount) continue;
+    tokenMints.add(t.mint);
     const direction = from === wallet ? 'out' : 'in';
     const asset = solanaTokenAsset(t.mint, t.tokenStandard, mintInfo.get(t.mint), assets);
     movements.push({
@@ -109,6 +156,50 @@ export function normalizeSolanaTx(
       amount: t.tokenAmount,
       counterparty: direction === 'out' ? to : from,
     });
+  }
+
+  // Helius' NFT event covers what tokenTransfers can miss: compressed NFTs and
+  // Metaplex Core assets (no SPL token moves), and the price of a purchase
+  // paid from a bid escrow rather than the wallet itself.
+  if (nftEvent && NFT_MOVE_EVENTS.has(eventType) && nftEvent.nfts?.length) {
+    const isBuyer = nftEvent.buyer === wallet;
+    const isSeller = nftEvent.seller === wallet;
+    if (isBuyer !== isSeller) {
+      const direction = isBuyer ? 'in' : 'out';
+      const counterparty = (isBuyer ? nftEvent.seller : nftEvent.buyer) ?? '';
+      for (const nft of nftEvent.nfts) {
+        if (!nft.mint || tokenMints.has(nft.mint)) continue;
+        tokenMints.add(nft.mint);
+        const asset = solanaTokenAsset(nft.mint, nft.tokenStandard ?? 'NonFungible', mintInfo.get(nft.mint), assets);
+        movements.push({ ...base, direction, asset, tokenId: asset.kind === 'nft' ? nft.mint : null, amount: 1, counterparty });
+      }
+      const price = (nftEvent.amount ?? 0) / LAMPORTS_PER_SOL;
+      if (PRICED_NFT_EVENTS.has(eventType) && price > 0) {
+        if (isBuyer && nativeOut < price * 0.9) {
+          // Paid (mostly) from somewhere other than the wallet — a bid escrow.
+          movements.push({
+            ...base,
+            direction: 'out',
+            asset: solAsset(assets),
+            tokenId: null,
+            amount: price - nativeOut,
+            counterparty: counterparty || 'contract',
+            inferred: true,
+          });
+        } else if (isSeller && nativeIn === 0) {
+          // Proceeds went somewhere else first; the event price is the best we have.
+          movements.push({
+            ...base,
+            direction: 'in',
+            asset: solAsset(assets),
+            tokenId: null,
+            amount: price,
+            counterparty: counterparty || 'contract',
+            inferred: true,
+          });
+        }
+      }
+    }
   }
   return { movements, fee };
 }
@@ -121,25 +212,54 @@ export class SolanaActivityFetcher {
 
   async fetch(address: string, assets: Map<string, LedgerAsset>): Promise<ChainFetchResult> {
     const txs: HeliusEnhancedTx[] = [];
+    const seen = new Set<string>();
+    const notes: string[] = [];
     let before: string | undefined;
     let truncated = true;
     for (let page = 0; page < MAX_PAGES; page++) {
       const url = new URL(`https://api.helius.xyz/v0/addresses/${address}/transactions`);
       url.searchParams.set('api-key', this.apiKey);
       url.searchParams.set('limit', '100');
-      if (before) url.searchParams.set('before', before);
-      const batch = await fetchJsonWithRetry<HeliusEnhancedTx[]>(url.toString(), { headers: { accept: 'application/json' } }, 'Helius address transactions');
+      // Helius' pagination cursor is `before-signature` (a plain `before` is ignored,
+      // which silently returns the newest page over and over).
+      if (before) url.searchParams.set('before-signature', before);
+      let batch: HeliusEnhancedTx[];
+      try {
+        batch = await fetchJsonWithRetry<HeliusEnhancedTx[]>(url.toString(), { headers: { accept: 'application/json' } }, 'Helius address transactions');
+      } catch (err) {
+        // Helius can answer "no events in the search window — continue with before-signature=<sig>".
+        const resume = heliusResumeSignature((err as Error).message);
+        if (resume && resume !== before) {
+          before = resume;
+          continue;
+        }
+        throw err;
+      }
       if (!Array.isArray(batch) || batch.length === 0) {
         truncated = false;
         break;
       }
-      txs.push(...batch);
+      const fresh = batch.filter((tx) => tx.signature && !seen.has(tx.signature));
+      if (fresh.length === 0) {
+        // The cursor didn't move — stop rather than re-read the same page.
+        this.logger.warn(`Helius pagination stalled for ${address} at ${before}`);
+        notes.push(`Solana ${shortAddress(address)}: history paging stopped early; older activity may be missing.`);
+        break;
+      }
+      for (const tx of fresh) seen.add(tx.signature);
+      txs.push(...fresh);
       before = batch[batch.length - 1].signature;
       await sleep(150);
     }
+    if (truncated) {
+      notes.push(`Solana ${shortAddress(address)}: only the newest ${txs.length.toLocaleString()} transactions were scanned.`);
+    }
 
     const mints = new Set<string>();
-    for (const tx of txs) for (const t of tx.tokenTransfers ?? []) if (t.mint && !knownAsset('solana', t.mint)) mints.add(t.mint);
+    for (const tx of txs) {
+      for (const t of tx.tokenTransfers ?? []) if (t.mint && !knownAsset('solana', t.mint)) mints.add(t.mint);
+      for (const n of tx.events?.nft?.nfts ?? []) if (n.mint) mints.add(n.mint);
+    }
     const mintInfo = await this.fetchMintInfo([...mints]);
 
     const movements: LedgerMovement[] = [];
@@ -149,7 +269,7 @@ export class SolanaActivityFetcher {
       movements.push(...r.movements);
       if (r.fee) fees.push(r.fee);
     }
-    return { movements, fees, transfers: txs.length, truncated, notes: [] };
+    return { movements, fees, transfers: txs.length, truncated, notes };
   }
 
   /** DAS getAssetBatch: token vs NFT, names, and verified collection for grouping. */

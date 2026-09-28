@@ -242,6 +242,27 @@ function WalletFilter({
   );
 }
 
+/** How much of the filtered wallet's history was read, per chain — to tell "missing" from "not scanned". */
+function ScanCoverage({ report }: { report: CashflowReport }) {
+  const rows = report.coverage.filter((c) => c.transfers > 0 || c.truncated || c.error);
+  if (rows.length === 0) return null;
+  return (
+    <p className="-mt-3 text-xs text-gray-500">
+      Scanned:{' '}
+      {rows.map((c, i) => (
+        <span key={`${c.chain}:${c.address}`}>
+          {i > 0 && ' · '}
+          {CHAIN_LABELS[c.chain] ?? c.chain} {c.transfers.toLocaleString()} records
+          {c.truncated && (
+            <span className="text-yellow-500"> (limit reached — oldest not scanned)</span>
+          )}
+          {c.error && <span className="text-red-400"> (failed: {c.error.slice(0, 80)})</span>}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function Dashboard({
   report,
   wallet,
@@ -337,6 +358,7 @@ function Dashboard({
           </span>
         </div>
       </div>
+      {report.walletFilter && <ScanCoverage report={report} />}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <Stat label="Money in" value={usd(totals.inUsd)} swatch={IN_COLOR} />
