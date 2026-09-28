@@ -312,6 +312,7 @@ const STAT_LABELS: Record<string, string> = {
   nftLegs: 'NFT moves',
   nftCollections: 'NFT collections',
   nftsFromEvents: 'NFTs from sale/mint events (compressed/Core)',
+  coreNfts: 'Metaplex Core NFTs (mints, transfers, burns)',
   tokenLegs: 'token moves',
   nativeLegs: 'coin transfers',
   escrowPayments: 'payments from bid escrow',
