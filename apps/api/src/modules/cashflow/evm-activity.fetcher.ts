@@ -18,6 +18,7 @@ const ALCHEMY_NETWORK: Record<string, string> = {
   zora: 'zora-mainnet',
   blast: 'blast-mainnet',
   linea: 'linea-mainnet',
+  robinhood: 'robinhood-mainnet',
 };
 
 export const EVM_NATIVE: Record<string, { symbol: string; name: string }> = {
@@ -31,6 +32,7 @@ export const EVM_NATIVE: Record<string, { symbol: string; name: string }> = {
   zora: { symbol: 'ETH', name: 'Ether' },
   blast: { symbol: 'ETH', name: 'Ether' },
   linea: { symbol: 'ETH', name: 'Ether' },
+  robinhood: { symbol: 'ETH', name: 'Ether' },
 };
 
 export const EVM_CHAINS = Object.keys(ALCHEMY_NETWORK);

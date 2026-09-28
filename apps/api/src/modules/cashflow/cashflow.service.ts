@@ -56,6 +56,7 @@ const CHAIN_NAMES: Record<string, string> = {
   zora: 'Zora',
   blast: 'Blast',
   linea: 'Linea',
+  robinhood: 'Robinhood Chain',
   solana: 'Solana',
 };
 

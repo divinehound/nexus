@@ -208,3 +208,14 @@ describe('wallet filter', () => {
     expect(sameWallet('SoLabc', 'solabc')).toBe(false);
   });
 });
+
+describe('Robinhood Chain', () => {
+  const { EVM_CHAINS, evmAssetFor } = jest.requireActual('./evm-activity.fetcher');
+  const { RELAY_CHAIN_IDS } = jest.requireActual('./relay-links.fetcher');
+
+  it('is scanned as an ETH-gas EVM chain and maps from its chain id', () => {
+    expect(EVM_CHAINS).toContain('robinhood');
+    expect(evmAssetFor('robinhood', { category: 'external' }, new Map()).price).toEqual({ kind: 'native', symbol: 'ETH' });
+    expect(RELAY_CHAIN_IDS[4663]).toBe('robinhood');
+  });
+});
