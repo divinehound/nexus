@@ -4,7 +4,11 @@ import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
   cashflowAddressTags,
+  cashflowFlags,
+  cashflowScanState,
+  cashflowScans,
   cashflowTxLinks,
+  cashflowWalletChains,
   collections,
   wallets,
   type Database,
@@ -15,6 +19,7 @@ import type {
   CashflowReport,
   CashflowResponse,
   CashflowTxLink,
+  CashflowWalletChains,
   CashflowWalletCoverage,
 } from '@nexus/types';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
@@ -33,12 +38,26 @@ import {
   EVM_CHAINS,
   EvmActivityFetcher,
   shortAddress,
-  type ChainFetchResult,
 } from './evm-activity.fetcher';
 import { EVM_EXCHANGE_WALLETS, EXCHANGE_NAMES } from './exchange-wallets';
 import { RelayLinksFetcher } from './relay-links.fetcher';
 import { SolanaActivityFetcher } from './solana-activity.fetcher';
 import type { PriceRef } from './base-assets';
+import { failedScan, fromSaved, replaceTxs, toSaved, type SavedChainScan } from './scan-store';
+
+const CHAIN_NAMES: Record<string, string> = {
+  ethereum: 'Ethereum',
+  base: 'Base',
+  polygon: 'Polygon',
+  abstract: 'Abstract',
+  apechain: 'ApeChain',
+  arbitrum: 'Arbitrum',
+  optimism: 'Optimism',
+  zora: 'Zora',
+  blast: 'Blast',
+  linea: 'Linea',
+  solana: 'Solana',
+};
 
 /** Chain whose native coin (per PriceOracleService) prices each money symbol. */
 const PRICED_SYMBOLS: Record<string, string> = {
@@ -65,6 +84,7 @@ interface ScanData {
   relayLinks: ExplicitLink[];
   /** Exchange deposit addresses spotted by where they sweep funds, keyed by addressIdentity. */
   detectedExchanges: Map<string, string>;
+  walletChains: CashflowWalletChains[];
 }
 
 interface Entry {
@@ -73,8 +93,24 @@ interface Entry {
   progress: string;
   report: CashflowReport | null;
   error: string | null;
-  walletsSignature: string;
+  /** The wallet+chain targets the scan covers (see targetSignature). */
+  signature: string;
+  /** cashflow_scan_state.data_version (ms) the scan was loaded at; a newer one means another instance changed the data. */
+  dataVersion: number;
   scan: ScanData | null;
+}
+
+/** One wallet on one chain — the unit that is scanned, saved and refreshed. */
+export interface ScanTarget {
+  chain: string;
+  /** EVM addresses lowercased; Solana as-is. */
+  address: string;
+}
+
+/** Narrows the report to one wallet and/or one chain. */
+export interface ReportView {
+  wallet?: string;
+  chain?: string;
 }
 
 export interface TxLinkInput {
@@ -91,11 +127,30 @@ export interface AddressTagInput {
   exchange: string;
 }
 
+export interface FlagInput {
+  chain: string;
+  txHash: string;
+  note?: string;
+}
+
+export const ALL_CHAINS = [...EVM_CHAINS, 'solana'];
+/** A scan whose instance hasn't checked in for this long is treated as abandoned (e.g. a deploy restarted it). */
+const HEARTBEAT_STALE_MS = 90_000;
+const HEARTBEAT_EVERY_MS = 20_000;
+
+export function targetKey(t: ScanTarget): string {
+  return `${t.chain}:${t.address}`;
+}
+
+export function targetSignature(targets: ScanTarget[]): string {
+  return targets.map(targetKey).sort().join('|');
+}
+
 /**
- * Builds the per-user cash-flow report on demand. Scanning full wallet history
- * can take minutes for active wallets, so the work runs in the background and
- * the endpoint is polled; finished reports are kept in memory until the user
- * refreshes or links/unlinks a wallet.
+ * Builds the per-user cash-flow report. Scans are saved per wallet+chain, so
+ * loading the page rebuilds the report from saved data and only scans
+ * wallets/chains that have never been scanned. Scanning full history can take
+ * minutes, so it runs in the background and the endpoint is polled.
  */
 @Injectable()
 export class CashflowService {
@@ -109,73 +164,293 @@ export class CashflowService {
   ) {}
 
   /**
-   * @param wallet Optional linked address: report only that wallet's activity
-   *   (moves to the user's other wallets still count as own-wallet transfers).
+   * @param refresh Rescan every wallet and chain.
+   * @param view Optional linked address and/or chain to report on alone (moves
+   *   to the user's other wallets still count as own-wallet transfers).
    */
-  async getReport(userId: string, refresh: boolean, wallet?: string): Promise<CashflowResponse> {
-    const linked = await this.db.query.wallets.findMany({ where: eq(wallets.userId, userId) });
+  async getReport(userId: string, refresh: boolean, v: ReportView = {}): Promise<CashflowResponse> {
+    const linked = await this.linkedWallets(userId, v);
     if (linked.length === 0) return { status: 'no_wallets' };
-    const signature = linked
-      .map((w) => `${w.chain}:${w.address}`)
-      .sort()
-      .join('|');
-
-    if (wallet && !linked.some((w) => sameWallet(w.address, wallet))) {
-      throw new BadRequestException('That wallet is not linked to your account');
-    }
+    if (refresh) return this.refresh(userId, undefined, v);
 
     const entry = this.entries.get(userId);
     if (entry?.status === 'computing') return this.toResponse(entry);
-    if (entry && !refresh && entry.walletsSignature === signature) return this.forWallet(userId, entry, wallet);
+    const state = await this.readState(userId);
+    if (state && remoteScanActive(state)) return remoteComputing(state, entry);
 
-    const next: Entry = {
-      status: 'computing',
-      startedAt: new Date(),
-      progress: 'Starting…',
-      report: entry?.report ?? null,
-      error: null,
-      walletsSignature: signature,
-      scan: null,
-    };
-    this.remember(userId, next);
-    const targets = linked.map((w) => ({ chain: w.chain as string, address: w.address }));
-    this.scan(targets, next)
-      .then(async (scan) => {
-        next.scan = scan;
-        next.progress = 'Crunching numbers…';
-        next.report = await this.buildFromScan(userId, scan);
-        next.status = 'ready';
-      })
-      .catch((err: Error) => {
-        this.logger.error(`Cash-flow report failed for user ${userId}: ${err.message}`, err.stack);
-        next.status = 'failed';
-        next.error = err.message;
-      });
-    return this.toResponse(next);
+    const { targets, walletChains } = await this.targetsFor(userId, linked);
+    const signature = targetSignature(targets);
+    const version = state?.dataVersion.getTime() ?? 0;
+    if (entry && entry.signature === signature && entry.dataVersion === version) {
+      if (entry.status === 'ready') return this.forView(userId, entry, v);
+      if (entry.status === 'failed') return this.toResponse(entry);
+    }
+
+    return this.startJob(userId, signature, entry, v, async (job) => {
+      const saved = await this.savedTargets(userId);
+      const missing = targets.filter((t) => !saved.has(targetKey(t)));
+      if (missing.length > 0) await this.scanTargets(missing, userId, job);
+      return { scan: await this.load(userId, linked, targets, walletChains, job, missing), changed: missing.length > 0 };
+    });
+  }
+
+  /**
+   * Rescan some wallets/chains (all when `only` is omitted) and keep the rest
+   * of the saved data as it is.
+   */
+  async refresh(userId: string, only: ScanTarget[] | undefined, view: ReportView = {}): Promise<CashflowResponse> {
+    const linked = await this.linkedWallets(userId, view);
+    if (linked.length === 0) return { status: 'no_wallets' };
+    const entry = this.entries.get(userId);
+    if (entry?.status === 'computing') return this.toResponse(entry);
+    const state = await this.readState(userId);
+    if (state && remoteScanActive(state)) return remoteComputing(state, entry);
+
+    const { targets, walletChains } = await this.targetsFor(userId, linked);
+    const wanted = only ? new Set(only.map((t) => targetKey(normalizeTarget(t)))) : null;
+    const selected = wanted ? targets.filter((t) => wanted.has(targetKey(t))) : targets;
+    if (selected.length === 0) throw new BadRequestException('None of those wallets/chains are scanned for your account');
+
+    return this.startJob(userId, targetSignature(targets), entry, view, async (job) => {
+      await this.scanTargets(selected, userId, job);
+      // Chains never scanned before come along too, so the report is complete.
+      const saved = await this.savedTargets(userId);
+      const missing = targets.filter((t) => !saved.has(targetKey(t)));
+      if (missing.length > 0) await this.scanTargets(missing, userId, job);
+      return { scan: await this.load(userId, linked, targets, walletChains, job, [...selected, ...missing]), changed: true };
+    });
+  }
+
+  /**
+   * Re-read just the flagged transactions from the chain and swap them into the
+   * saved scans — for checking a fix without rescanning whole wallets.
+   */
+  async reimportFlags(userId: string, view: ReportView = {}): Promise<CashflowResponse> {
+    const linked = await this.linkedWallets(userId, view);
+    if (linked.length === 0) return { status: 'no_wallets' };
+    const entry = this.entries.get(userId);
+    if (entry?.status === 'computing') return this.toResponse(entry);
+    const state = await this.readState(userId);
+    if (state && remoteScanActive(state)) return remoteComputing(state, entry);
+    const flags = await this.db.select().from(cashflowFlags).where(eq(cashflowFlags.userId, userId));
+    if (flags.length === 0) throw new BadRequestException('Nothing is flagged');
+
+    const { targets, walletChains } = await this.targetsFor(userId, linked);
+    return this.startJob(userId, targetSignature(targets), entry, view, async (job) => {
+      const failures = await this.reimport(userId, flags, targets, job);
+      const scan = await this.load(userId, linked, targets, walletChains, job, []);
+      scan.notes.push(...failures);
+      return { scan, changed: true };
+    });
   }
 
   /**
    * Re-run the (fast, pure) ledger over the last scan with the user's current
-   * links and tags — no chain calls. Falls back to a normal load if nothing has
-   * been scanned yet.
+   * links, tags and flags — no chain calls. Falls back to a normal load if
+   * nothing has been loaded yet.
    */
-  async rebuild(userId: string, wallet?: string): Promise<CashflowResponse> {
+  async rebuild(userId: string, v: ReportView = {}): Promise<CashflowResponse> {
     const entry = this.entries.get(userId);
-    if (!entry?.scan || entry.status === 'computing') return this.getReport(userId, false, wallet);
+    if (!entry?.scan || entry.status === 'computing') return this.getReport(userId, false, v);
     entry.report = await this.buildFromScan(userId, entry.scan);
     entry.status = 'ready';
-    return this.forWallet(userId, entry, wallet);
+    return this.forView(userId, entry, v);
   }
 
-  /** The cached all-wallets report, or one rebuilt from the same scan for a single wallet. */
-  private async forWallet(userId: string, entry: Entry, wallet?: string): Promise<CashflowResponse> {
-    if (!wallet || entry.status !== 'ready' || !entry.scan) return this.toResponse(entry);
-    return { status: 'ready', report: await this.buildFromScan(userId, entry.scan, wallet) };
+  /** The cached all-wallets report, or one rebuilt from the same scan for a wallet/chain view. */
+  private async forView(userId: string, entry: Entry, view: ReportView): Promise<CashflowResponse> {
+    if ((!view.wallet && !view.chain) || entry.status !== 'ready' || !entry.scan) return this.toResponse(entry);
+    return { status: 'ready', report: await this.buildFromScan(userId, entry.scan, view) };
+  }
+
+  private async linkedWallets(userId: string, view: ReportView) {
+    const linked = await this.db.query.wallets.findMany({ where: eq(wallets.userId, userId) });
+    if (view.wallet && !linked.some((w) => sameWallet(w.address, view.wallet!))) {
+      throw new BadRequestException('That wallet is not linked to your account');
+    }
+    if (view.chain && !ALL_CHAINS.includes(view.chain)) throw new BadRequestException('Unknown chain');
+    return linked.map((w) => ({ chain: w.chain as string, address: w.address }));
+  }
+
+  /** Every wallet+chain to scan: each EVM address on its chosen chains (default: all), each Solana address. */
+  private async targetsFor(
+    userId: string,
+    linked: Array<{ chain: string; address: string }>,
+  ): Promise<{ targets: ScanTarget[]; walletChains: CashflowWalletChains[] }> {
+    const settings = await this.db
+      .select()
+      .from(cashflowWalletChains)
+      .where(eq(cashflowWalletChains.userId, userId));
+    const chosen = new Map(settings.map((r) => [r.address.toLowerCase(), r.chains]));
+    const targets: ScanTarget[] = [];
+    const walletChains: CashflowWalletChains[] = [];
+    const seen = new Set<string>();
+    for (const w of linked) {
+      const t = normalizeTarget(w);
+      if (seen.has(t.address)) continue;
+      seen.add(t.address);
+      if (w.chain === 'solana') {
+        targets.push(t);
+        walletChains.push({ address: t.address, family: 'solana', chains: ['solana'], custom: false });
+        continue;
+      }
+      const custom = chosen.get(t.address)?.filter((c) => EVM_CHAINS.includes(c));
+      const chains = custom && custom.length > 0 ? custom : EVM_CHAINS;
+      for (const chain of chains) targets.push({ chain, address: t.address });
+      walletChains.push({ address: t.address, family: 'evm', chains, custom: !!custom?.length });
+    }
+    return { targets, walletChains };
+  }
+
+  /**
+   * Run `work` in the background as the user's current job, sharing its
+   * progress through cashflow_scan_state so other API instances report it too.
+   */
+  private startJob(
+    userId: string,
+    signature: string,
+    previous: Entry | undefined,
+    view: ReportView,
+    work: (job: Entry) => Promise<{ scan: ScanData; changed: boolean }>,
+  ): Promise<CashflowResponse> {
+    const next: Entry = {
+      status: 'computing',
+      startedAt: new Date(),
+      progress: 'Loading saved scans…',
+      report: previous?.report ?? null,
+      error: null,
+      signature,
+      dataVersion: previous?.dataVersion ?? 0,
+      scan: null,
+    };
+    this.remember(userId, next);
+    const beat = () =>
+      this.writeState(userId, { status: 'scanning', progress: next.progress, heartbeatAt: new Date() }).catch(
+        (err: Error) => this.logger.debug(`Scan heartbeat failed: ${err.message}`),
+      );
+    const heartbeat = setInterval(() => void beat(), HEARTBEAT_EVERY_MS);
+    void this.writeState(userId, {
+      status: 'scanning',
+      progress: next.progress,
+      error: null,
+      startedAt: next.startedAt,
+      heartbeatAt: next.startedAt,
+    })
+      .then(() => work(next))
+      .then(async ({ scan, changed }) => {
+        next.scan = scan;
+        next.progress = 'Crunching numbers…';
+        next.report = await this.buildFromScan(userId, scan);
+        const version = changed ? new Date() : ((await this.readState(userId))?.dataVersion ?? new Date(0));
+        await this.writeState(userId, { status: 'idle', progress: null, ...(changed ? { dataVersion: version } : {}) });
+        next.dataVersion = version.getTime();
+        next.status = 'ready';
+      })
+      .catch(async (err: Error) => {
+        this.logger.error(`Cash-flow report failed for user ${userId}: ${err.message}`, err.stack);
+        next.status = 'failed';
+        next.error = err.message;
+        await this.writeState(userId, { status: 'failed', error: err.message.slice(0, 1000) }).catch(() => undefined);
+      })
+      .finally(() => clearInterval(heartbeat));
+    return Promise.resolve(this.toResponse(next));
+  }
+
+  private async readState(userId: string) {
+    const [row] = await this.db.select().from(cashflowScanState).where(eq(cashflowScanState.userId, userId));
+    return row ?? null;
+  }
+
+  private async writeState(userId: string, fields: Partial<typeof cashflowScanState.$inferInsert>) {
+    await this.db
+      .insert(cashflowScanState)
+      .values({ userId, status: 'idle', ...fields })
+      .onConflictDoUpdate({ target: cashflowScanState.userId, set: fields });
+  }
+
+  private async savedTargets(userId: string): Promise<Set<string>> {
+    const rows = await this.db
+      .select({ chain: cashflowScans.chain, address: cashflowScans.address })
+      .from(cashflowScans)
+      .where(and(eq(cashflowScans.userId, userId), eq(cashflowScans.kind, 'activity')));
+    return new Set(rows.map((r) => targetKey(r)));
+  }
+
+  private async saveRow(userId: string, kind: string, chain: string, address: string, data: unknown) {
+    await this.db
+      .insert(cashflowScans)
+      .values({ userId, kind, chain, address, data, scannedAt: new Date() })
+      .onConflictDoUpdate({
+        target: [cashflowScans.userId, cashflowScans.kind, cashflowScans.chain, cashflowScans.address],
+        set: { data, scannedAt: new Date() },
+      });
   }
 
   // ── User overrides ──
 
-  async addLink(userId: string, input: TxLinkInput, wallet?: string): Promise<CashflowResponse> {
+  /** Choose which EVM chains are scanned for one of the user's EVM addresses. */
+  async setWalletChains(userId: string, address: string, chains: string[], view: ReportView = {}): Promise<CashflowResponse> {
+    const linked = await this.linkedWallets(userId, view);
+    const target = linked.find((w) => w.chain !== 'solana' && sameWallet(w.address, address));
+    if (!target) throw new BadRequestException('That EVM wallet is not linked to your account');
+    const entry = this.entries.get(userId);
+    const state = await this.readState(userId);
+    if (entry?.status === 'computing' || (state && remoteScanActive(state)))
+      throw new BadRequestException('A scan is running — change chains once it finishes');
+
+    const addr = address.toLowerCase();
+    const picked = EVM_CHAINS.filter((c) => chains.includes(c));
+    if (picked.length === 0) throw new BadRequestException('Pick at least one chain');
+    if (picked.length === EVM_CHAINS.length) {
+      await this.db
+        .delete(cashflowWalletChains)
+        .where(and(eq(cashflowWalletChains.userId, userId), eq(cashflowWalletChains.address, addr)));
+    } else {
+      await this.db
+        .insert(cashflowWalletChains)
+        .values({ userId, address: addr, chains: picked })
+        .onConflictDoUpdate({
+          target: [cashflowWalletChains.userId, cashflowWalletChains.address],
+          set: { chains: picked },
+        });
+    }
+    // Drop saved scans of chains no longer wanted; newly picked ones get scanned on the next load.
+    const dropped = EVM_CHAINS.filter((c) => !picked.includes(c));
+    if (dropped.length > 0) {
+      await this.db
+        .delete(cashflowScans)
+        .where(
+          and(
+            eq(cashflowScans.userId, userId),
+            eq(cashflowScans.kind, 'activity'),
+            eq(cashflowScans.address, addr),
+            inArray(cashflowScans.chain, dropped),
+          ),
+        );
+    }
+    await this.writeState(userId, { dataVersion: new Date() });
+    return this.getReport(userId, false, view);
+  }
+
+  async addFlag(userId: string, input: FlagInput, view: ReportView = {}): Promise<CashflowResponse> {
+    const txHash = input.chain === 'solana' ? input.txHash : input.txHash.toLowerCase();
+    const note = input.note?.trim() || null;
+    await this.db
+      .insert(cashflowFlags)
+      .values({ userId, chain: input.chain, txHash, note })
+      .onConflictDoUpdate({
+        target: [cashflowFlags.userId, cashflowFlags.chain, cashflowFlags.txHash],
+        set: { note },
+      });
+    return this.rebuild(userId, view);
+  }
+
+  async removeFlag(userId: string, id: string, view: ReportView = {}): Promise<CashflowResponse> {
+    await this.db.delete(cashflowFlags).where(and(eq(cashflowFlags.userId, userId), eq(cashflowFlags.id, id)));
+    return this.rebuild(userId, view);
+  }
+
+  async addLink(userId: string, input: TxLinkInput, view: ReportView = {}): Promise<CashflowResponse> {
     const pair = normalizePair(input);
     // Linking and rejecting the same pair are mutually exclusive; the latest word wins.
     await this.db.delete(cashflowTxLinks).where(samePairCondition(userId, pair));
@@ -186,17 +461,17 @@ export class CashflowService {
       .insert(cashflowTxLinks)
       .values({ userId, kind: input.kind, ...pair })
       .onConflictDoNothing();
-    return this.rebuild(userId, wallet);
+    return this.rebuild(userId, view);
   }
 
-  async removeLink(userId: string, id: string, wallet?: string): Promise<CashflowResponse> {
+  async removeLink(userId: string, id: string, view: ReportView = {}): Promise<CashflowResponse> {
     await this.db
       .delete(cashflowTxLinks)
       .where(and(eq(cashflowTxLinks.userId, userId), eq(cashflowTxLinks.id, id)));
-    return this.rebuild(userId, wallet);
+    return this.rebuild(userId, view);
   }
 
-  async addAddressTag(userId: string, input: AddressTagInput, wallet?: string): Promise<CashflowResponse> {
+  async addAddressTag(userId: string, input: AddressTagInput, view: ReportView = {}): Promise<CashflowResponse> {
     const chainFamily = input.chain === 'solana' ? 'solana' : 'evm';
     const address = chainFamily === 'evm' ? input.address.toLowerCase() : input.address;
     await this.db
@@ -210,20 +485,22 @@ export class CashflowService {
         ],
         set: { exchange: input.exchange },
       });
-    return this.rebuild(userId, wallet);
+    return this.rebuild(userId, view);
   }
 
-  async removeAddressTag(userId: string, id: string, wallet?: string): Promise<CashflowResponse> {
+  async removeAddressTag(userId: string, id: string, view: ReportView = {}): Promise<CashflowResponse> {
     await this.db
       .delete(cashflowAddressTags)
       .where(and(eq(cashflowAddressTags.userId, userId), eq(cashflowAddressTags.id, id)));
-    return this.rebuild(userId, wallet);
+    return this.rebuild(userId, view);
   }
 
-  private async buildFromScan(userId: string, scan: ScanData, wallet?: string): Promise<CashflowReport> {
-    const [linkRows, tagRows] = await Promise.all([
+  private async buildFromScan(userId: string, scan: ScanData, view: ReportView = {}): Promise<CashflowReport> {
+    const { wallet, chain } = view;
+    const [linkRows, tagRows, flagRows] = await Promise.all([
       this.db.select().from(cashflowTxLinks).where(eq(cashflowTxLinks.userId, userId)),
       this.db.select().from(cashflowAddressTags).where(eq(cashflowAddressTags.userId, userId)),
+      this.db.select().from(cashflowFlags).where(eq(cashflowFlags.userId, userId)),
     ]);
     const links: CashflowTxLink[] = linkRows.map((r) => ({
       id: r.id,
@@ -280,12 +557,13 @@ export class CashflowService {
       // All linked wallets stay "own", so moves to the others aren't counted as spending.
       wallets: scan.wallets,
       pricer: scan.pricer,
-      coverage: scan.coverage.filter((c) => mine(c.address)),
+      coverage: scan.coverage.filter((c) => mine(c.address) && (!chain || c.chain === chain)),
       notes: [...scan.notes],
       now: new Date(),
       explicitLinks,
       rejectedLinks: rejected,
       exchangeAddresses,
+      chainScope: chain ? (c) => c === chain : undefined,
     });
     if (report.totals.unpricedMovements > 0) {
       report.notes.push(
@@ -293,6 +571,18 @@ export class CashflowService {
       );
     }
     report.walletFilter = wallet ?? null;
+    report.chainFilter = chain ?? null;
+    report.walletChains = scan.walletChains;
+    report.availableChains = EVM_CHAINS;
+    report.scans = scan.coverage;
+    report.flags = flagRows.map((r) => ({
+      id: r.id,
+      chain: r.chain,
+      txHash: r.txHash,
+      note: r.note,
+      createdAt: r.createdAt.toISOString(),
+      reimportedAt: r.reimportedAt?.toISOString() ?? null,
+    }));
     report.links = links;
     report.addressTags = addressTags;
     report.exchangeNames = EXCHANGE_NAMES;
@@ -321,122 +611,149 @@ export class CashflowService {
     }
   }
 
-  private async scan(
+  private apiKeys() {
+    return {
+      alchemyKey: this.config.get<string>('alchemy.apiKey') || undefined,
+      heliusKey:
+        this.config.get<string>('helius.apiKey') || this.config.get<string>('HELIUS_API_KEY') || undefined,
+      relayKey: this.config.get<string>('relay.apiKey') || undefined,
+    };
+  }
+
+  /**
+   * Scan each target and save it as soon as it's done, so a scan cut short
+   * (e.g. by a deploy) keeps what it finished. Relay records for the scanned
+   * addresses are refreshed too.
+   */
+  private async scanTargets(targets: ScanTarget[], userId: string, job: Entry): Promise<void> {
+    const { alchemyKey, heliusKey, relayKey } = this.apiKeys();
+    const evm = alchemyKey ? new EvmActivityFetcher(alchemyKey) : null;
+    const sol = heliusKey ? new SolanaActivityFetcher(heliusKey) : null;
+    for (const [i, t] of targets.entries()) {
+      const isSol = t.chain === 'solana';
+      if (isSol ? !sol : !evm) continue; // the missing key is noted when the report loads
+      job.progress = `Scanning ${CHAIN_NAMES[t.chain] ?? t.chain} ${shortAddress(t.address)} (${i + 1}/${targets.length})`;
+      const assets = new Map<string, LedgerAsset>();
+      let saved: SavedChainScan;
+      try {
+        const r = isSol ? await sol!.fetch(t.address, assets) : await evm!.fetch(t.chain, t.address, assets);
+        await this.enrichNftNames(assets, alchemyKey);
+        saved = toSaved(r);
+      } catch (err) {
+        const message = (err as Error).message;
+        // Networks have to be enabled per Alchemy app; one that isn't is a config gap, not a failure.
+        const disabled = !isSol && /HTTP 403|not enabled|unsupported network/i.test(message);
+        if (!disabled) this.logger.warn(`Cash-flow scan failed for ${t.chain} ${t.address}: ${message}`);
+        saved = failedScan(message, disabled);
+      }
+      await this.saveRow(userId, 'activity', t.chain, t.address, saved);
+    }
+
+    if (relayKey) {
+      const relay = new RelayLinksFetcher(relayKey);
+      for (const address of new Set(targets.map((t) => t.address))) {
+        job.progress = `Checking bridge records for ${shortAddress(address)}…`;
+        try {
+          await this.saveRow(userId, 'relay', '', address, { links: await relay.fetchLinks(address) });
+        } catch (err) {
+          // Keep the last good records; the note below says they may be stale.
+          this.logger.warn(`Relay history lookup failed for ${address}: ${(err as Error).message}`);
+          await this.saveRow(userId, 'relay_error', '', address, { message: (err as Error).message });
+        }
+      }
+    }
+  }
+
+  /**
+   * Assemble the report inputs from saved scans. When `rescanned` touched EVM
+   * wallets, exchange deposit-address detection is re-run over the result.
+   */
+  private async load(
+    userId: string,
     linked: Array<{ chain: string; address: string }>,
-    entry: Entry,
+    targets: ScanTarget[],
+    walletChains: CashflowWalletChains[],
+    job: Entry,
+    rescanned: ScanTarget[],
   ): Promise<ScanData> {
-    const alchemyKey = this.config.get<string>('alchemy.apiKey');
-    const heliusKey =
-      this.config.get<string>('helius.apiKey') || this.config.get<string>('HELIUS_API_KEY');
-    const notes: string[] = [];
-
-    // An EVM address is the same wallet on every EVM chain — scan them all.
-    const evmAddresses = [
-      ...new Set(linked.filter((w) => w.chain !== 'solana').map((w) => w.address.toLowerCase())),
-    ];
-    const solAddresses = [
-      ...new Set(linked.filter((w) => w.chain === 'solana').map((w) => w.address)),
-    ];
-    const jobs: Array<{
-      chain: string;
-      address: string;
-      run: (assets: Map<string, LedgerAsset>) => Promise<ChainFetchResult>;
-    }> = [];
-    if (evmAddresses.length > 0 && !alchemyKey)
-      notes.push('EVM wallets were skipped: ALCHEMY_API_KEY is not configured.');
-    if (solAddresses.length > 0 && !heliusKey)
-      notes.push('Solana wallets were skipped: HELIUS_API_KEY is not configured.');
-    if (alchemyKey) {
-      const evm = new EvmActivityFetcher(alchemyKey);
-      for (const address of evmAddresses)
-        for (const chain of EVM_CHAINS)
-          jobs.push({ chain, address, run: (a) => evm.fetch(chain, address, a) });
-    }
-    if (heliusKey) {
-      const sol = new SolanaActivityFetcher(heliusKey);
-      for (const address of solAddresses)
-        jobs.push({ chain: 'solana', address, run: (a) => sol.fetch(address, a) });
-    }
-
+    job.progress = 'Loading saved scans…';
+    const { alchemyKey, heliusKey, relayKey } = this.apiKeys();
+    const rows = await this.db.select().from(cashflowScans).where(eq(cashflowScans.userId, userId));
+    const wanted = new Set(targets.map(targetKey));
+    const addresses = new Set(targets.map((t) => t.address));
     const assets = new Map<string, LedgerAsset>();
     const movements: LedgerMovement[] = [];
     const fees: LedgerFee[] = [];
     const coverage: CashflowWalletCoverage[] = [];
-    const disabledNetworks = new Set<string>();
-    for (const [i, job] of jobs.entries()) {
-      entry.progress = `Scanning ${job.chain} ${shortAddress(job.address)} (${i + 1}/${jobs.length})`;
-      try {
-        const r = await job.run(assets);
+    const notes: string[] = [];
+    const relayLinks: ExplicitLink[] = [];
+    const relayFailed: string[] = [];
+    let detectedExchanges = new Map<string, string>();
+    // Oldest first, so a newer scan's asset names win.
+    for (const row of [...rows].sort((a, b) => a.scannedAt.getTime() - b.scannedAt.getTime())) {
+      if (row.kind === 'activity' && wanted.has(targetKey(row))) {
+        const r = fromSaved(row.data as SavedChainScan, row.chain, row.address, row.scannedAt, assets);
         movements.push(...r.movements);
         fees.push(...r.fees);
+        coverage.push(r.coverage);
         notes.push(...r.notes);
-        coverage.push({
-          chain: job.chain,
-          address: job.address,
-          transfers: r.transfers,
-          truncated: r.truncated,
-          error: null,
-        });
-      } catch (err) {
-        const message = (err as Error).message;
-        if (job.chain !== 'solana' && /HTTP 403|not enabled|unsupported network/i.test(message)) {
-          // Networks have to be enabled per Alchemy app; one that isn't is a config gap, not a failure.
-          disabledNetworks.add(job.chain);
-          continue;
-        }
-        this.logger.warn(`Cash-flow scan failed for ${job.chain} ${job.address}: ${message}`);
-        coverage.push({
-          chain: job.chain,
-          address: job.address,
-          transfers: 0,
-          truncated: false,
-          error: message,
-        });
+      } else if (row.kind === 'relay' && addresses.has(row.address)) {
+        relayLinks.push(...((row.data as { links?: ExplicitLink[] }).links ?? []));
+      } else if (row.kind === 'relay_error' && addresses.has(row.address)) {
+        const ok = rows.find((r) => r.kind === 'relay' && r.address === row.address);
+        if (!ok || ok.scannedAt < row.scannedAt) relayFailed.push(row.address);
+      } else if (row.kind === 'deposits') {
+        detectedExchanges = new Map((row.data as { detected?: Array<[string, string]> }).detected ?? []);
       }
     }
 
-    if (disabledNetworks.size > 0) {
+    const hasEvm = targets.some((t) => t.chain !== 'solana');
+    const hasSol = targets.some((t) => t.chain === 'solana');
+    if (hasEvm && !alchemyKey) notes.push('EVM wallets were skipped: ALCHEMY_API_KEY is not configured.');
+    if (hasSol && !heliusKey) notes.push('Solana wallets were skipped: HELIUS_API_KEY is not configured.');
+    const disabled = [...new Set(coverage.filter((c) => c.disabled).map((c) => c.chain))];
+    if (disabled.length > 0) {
       notes.push(
-        `Not scanned — enable these networks on the Alchemy app to include them: ${[...disabledNetworks].join(', ')}. Bridges to them will show as money out.`,
+        `Not scanned — enable these networks on the Alchemy app to include them (or untick them for your wallets): ${disabled.join(', ')}. Bridges to them will show as money out.`,
       );
     }
-
-    entry.progress = 'Looking up collection names…';
-    await this.enrichNftNames(assets, alchemyKey);
-
-    entry.progress = 'Pricing transactions…';
-    const pricer = await this.buildPricer(movements, fees);
-
     if (coverage.some((c) => c.truncated)) {
-      notes.push(
-        'Some very active wallets hit the scan limit; the oldest history beyond it is not included.',
-      );
+      notes.push('Some very active wallets hit the scan limit; the oldest history beyond it is not included.');
     }
     notes.push(
       'NFT and token values come from what you paid or received in ETH/SOL/POL/APE, their wrapped versions, or stablecoins in the same transaction.',
     );
-    if (evmAddresses.length > 0 && alchemyKey) {
+    if (hasEvm && alchemyKey) {
       notes.push(
-        'Outside Ethereum and Polygon, NFT sale proceeds paid out by a contract in native ETH/APE cannot be traced yet; WETH/stablecoin proceeds are.',
+        'Outside Ethereum and Polygon, NFT sale proceeds paid out by a contract in native ETH/APE are found from your balance change around the sale.',
       );
     }
+    if (!relayKey) {
+      notes.push(
+        "Relay bridges are paired by amount and timing; set RELAY_API_KEY to pair them exactly from Relay's records.",
+      );
+    }
+    for (const address of relayFailed) {
+      notes.push(`Couldn't load Relay history for ${shortAddress(address)}; its bridges fall back to amount/timing matching.`);
+    }
 
-    entry.progress = 'Checking bridge records…';
-    const relayLinks = await this.fetchRelayLinks([...evmAddresses, ...solAddresses], notes);
+    job.progress = 'Pricing transactions…';
+    const pricer = await this.buildPricer(movements, fees);
 
-    entry.progress = 'Checking which transfers went to exchanges…';
-    const own = new Set(linked.map((w) => addressIdentity(w.chain, w.address)));
-    const detectedExchanges = alchemyKey
-      ? await this.detectExchangeDepositAddresses(
-          new EvmActivityFetcher(alchemyKey),
-          movements,
-          pricer,
-          own,
-        )
-      : new Map<string, string>();
+    if (alchemyKey && rescanned.some((t) => t.chain !== 'solana')) {
+      job.progress = 'Checking which transfers went to exchanges…';
+      const own = new Set(linked.map((w) => addressIdentity(w.chain, w.address)));
+      detectedExchanges = await this.detectExchangeDepositAddresses(
+        new EvmActivityFetcher(alchemyKey),
+        movements,
+        pricer,
+        own,
+      );
+      await this.saveRow(userId, 'deposits', '', '', { detected: [...detectedExchanges] });
+    }
 
     return {
-      wallets: linked.map((w) => ({ chain: w.chain, address: w.address })),
+      wallets: linked,
       movements,
       fees,
       pricer,
@@ -444,30 +761,72 @@ export class CashflowService {
       notes,
       relayLinks,
       detectedExchanges,
+      walletChains,
     };
   }
 
-  private async fetchRelayLinks(addresses: string[], notes: string[]): Promise<ExplicitLink[]> {
-    const apiKey = this.config.get<string>('relay.apiKey');
-    if (!apiKey) {
-      notes.push(
-        "Relay bridges are paired by amount and timing; set RELAY_API_KEY to pair them exactly from Relay's records.",
-      );
-      return [];
-    }
-    const relay = new RelayLinksFetcher(apiKey);
-    const links: ExplicitLink[] = [];
-    for (const address of addresses) {
-      try {
-        links.push(...(await relay.fetchLinks(address)));
-      } catch (err) {
-        this.logger.warn(`Relay history lookup failed for ${address}: ${(err as Error).message}`);
-        notes.push(
-          `Couldn't load Relay history for ${shortAddress(address)}; its bridges fall back to amount/timing matching.`,
+  /**
+   * Refetch each flagged tx for every scanned wallet on its chain and swap it
+   * into that wallet's saved scan. Returns notes for anything that failed.
+   */
+  private async reimport(
+    userId: string,
+    flags: Array<typeof cashflowFlags.$inferSelect>,
+    targets: ScanTarget[],
+    job: Entry,
+  ): Promise<string[]> {
+    const { alchemyKey, heliusKey } = this.apiKeys();
+    const failures: string[] = [];
+    const byChain = new Map<string, string[]>();
+    for (const f of flags) byChain.set(f.chain, [...(byChain.get(f.chain) ?? []), f.txHash]);
+    const rows = await this.db
+      .select()
+      .from(cashflowScans)
+      .where(and(eq(cashflowScans.userId, userId), eq(cashflowScans.kind, 'activity')));
+
+    const done: string[] = [];
+    for (const [chain, hashes] of byChain) {
+      const isSol = chain === 'solana';
+      const key = isSol ? heliusKey : alchemyKey;
+      const wallets = targets.filter((t) => t.chain === chain);
+      if (!key || wallets.length === 0) {
+        failures.push(
+          `Flagged ${CHAIN_NAMES[chain] ?? chain} transactions weren't re-imported: none of your wallets are scanned on that chain.`,
         );
+        continue;
       }
+      let ok = true;
+      for (const t of wallets) {
+        const row = rows.find((r) => r.chain === chain && r.address === t.address);
+        if (!row || (row.data as SavedChainScan).error) continue; // never scanned (or failed) — a full scan covers it
+        job.progress = `Re-importing ${hashes.length} flagged ${CHAIN_NAMES[chain] ?? chain} transaction${hashes.length === 1 ? '' : 's'} for ${shortAddress(t.address)}…`;
+        try {
+          const assets = new Map<string, LedgerAsset>();
+          const fresh = isSol
+            ? await new SolanaActivityFetcher(key).fetchTxs(t.address, hashes, assets)
+            : await new EvmActivityFetcher(key).fetchTxs(chain, t.address, hashes, assets);
+          await this.enrichNftNames(assets, alchemyKey);
+          const hashSet = new Set(isSol ? hashes : hashes.map((h) => h.toLowerCase()));
+          const next = replaceTxs(row.data as SavedChainScan, hashSet, fresh);
+          // Keep scanned_at: this row's history wasn't rescanned, only these txs.
+          await this.db.update(cashflowScans).set({ data: next }).where(eq(cashflowScans.id, row.id));
+        } catch (err) {
+          ok = false;
+          this.logger.warn(`Re-import failed on ${chain} for ${t.address}: ${(err as Error).message}`);
+          failures.push(
+            `Re-importing flagged ${CHAIN_NAMES[chain] ?? chain} transactions failed for ${shortAddress(t.address)}: ${(err as Error).message.slice(0, 120)}`,
+          );
+        }
+      }
+      if (ok) done.push(...flags.filter((f) => f.chain === chain).map((f) => f.id));
     }
-    return links;
+    if (done.length > 0) {
+      await this.db
+        .update(cashflowFlags)
+        .set({ reimportedAt: new Date() })
+        .where(and(eq(cashflowFlags.userId, userId), inArray(cashflowFlags.id, done)));
+    }
+    return failures;
   }
 
   /**
@@ -615,6 +974,26 @@ export class CashflowService {
       },
     };
   }
+}
+
+export function normalizeTarget(t: ScanTarget): ScanTarget {
+  return { chain: t.chain, address: t.chain === 'solana' ? t.address : t.address.toLowerCase() };
+}
+
+type ScanStateRow = typeof cashflowScanState.$inferSelect;
+
+/** Another API instance is scanning for this user and still checking in. */
+export function remoteScanActive(state: ScanStateRow, now = Date.now()): boolean {
+  return state.status === 'scanning' && now - state.heartbeatAt.getTime() < HEARTBEAT_STALE_MS;
+}
+
+function remoteComputing(state: ScanStateRow, entry: Entry | undefined): CashflowResponse {
+  return {
+    status: 'computing',
+    startedAt: state.startedAt.toISOString(),
+    progress: state.progress ?? 'Scanning…',
+    previous: entry?.report ?? null,
+  };
 }
 
 type TxPairFields = Pick<TxLinkInput, 'fromChain' | 'fromTxHash' | 'toChain' | 'toTxHash'>;

@@ -67,6 +67,8 @@ export interface LedgerMovement {
    * internal-transfer tracing, or by a smart-contract wallet).
    */
   inferred?: boolean;
+  /** Solana: taken from Helius' NFT event (compressed/Core NFTs) rather than a token transfer. */
+  fromEvent?: boolean;
 }
 
 export interface LedgerFee {
@@ -99,6 +101,11 @@ export interface BuildReportInput {
   rejectedLinks?: TxPair[];
   /** Exchange-owned addresses, keyed by `addressIdentity`. */
   exchangeAddresses?: Map<string, { exchange: string; source: CashflowExchangeSource }>;
+  /**
+   * Report only transactions on these chains. Every movement is still analysed,
+   * so a bridge out of a chain in scope still pairs with its arrival elsewhere.
+   */
+  chainScope?: (chain: string) => boolean;
 }
 
 export interface TxPair {
@@ -592,6 +599,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
   let lastAt: Date | null = null;
 
   for (const g of ordered) {
+    if (input.chainScope && !input.chainScope(g.chain)) continue;
     const at = g.timestamp;
     const bookTransfers = (legs: PricedLeg[], dir: 'in' | 'out') => {
       for (const l of legs) {
@@ -1124,6 +1132,11 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       (a, b) => b.depositedUsd + b.withdrawnUsd - (a.depositedUsd + a.withdrawnUsd),
     ),
     walletFilter: null,
+    chainFilter: null,
+    walletChains: [],
+    availableChains: [],
+    scans: [],
+    flags: [],
     links: [],
     addressTags: [],
     exchangeNames: [],

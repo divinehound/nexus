@@ -392,6 +392,31 @@ describe('buildCashflowReport', () => {
       expect(r.activity[1].label).toBe('Bridged 1 ETH · Ethereum → Base');
     });
 
+    it('keeps a bridge paired when the report is narrowed to one chain', () => {
+      const movements = [
+        mv('0xl1', t(0), 'out', ETH, 1, RELAY),
+        mv('0xl2', t(2), 'in', BASE_ETH, 0.995, SOLVER, { chain: 'base' }),
+        mv('0xl3', t(5), 'out', ETH, 0.5, FRIEND),
+      ];
+      const r = buildCashflowReport({
+        movements,
+        fees: [],
+        wallets: [
+          { chain: 'ethereum', address: ME },
+          { chain: 'base', address: COLD },
+        ],
+        pricer,
+        coverage: [],
+        notes: [],
+        now: new Date('2024-03-01T00:00:00Z'),
+        chainScope: (c) => c === 'base',
+      });
+      // Only the Base half shows, still as a bridge — not money from a stranger.
+      expect(r.activity.map((a) => [a.chain, a.type])).toEqual([['base', 'bridge']]);
+      expect(r.totals.inUsd).toBe(0);
+      expect(r.outByCategory.transfer_out).toBeUndefined();
+    });
+
     it('recognises a canonical deposit that lands on the same address on L2 (from = to = you)', () => {
       const r = buildWith(
         [

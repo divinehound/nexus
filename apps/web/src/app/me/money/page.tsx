@@ -12,12 +12,14 @@ import type {
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { useAuth } from '@/context/auth-context';
-import { getMyCashflow } from '@/lib/api';
+import { getMyCashflow, type CashflowView } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { CashflowActionsProvider } from './actions';
 import { ActivityList } from './activity-list';
 import { CashflowChart, IN_COLOR, OUT_COLOR } from './cashflow-chart';
 import { CounterpartiesTable } from './counterparties';
+import { FlagsPanel } from './flags';
+import { ScanPanel } from './scan-panel';
 import { NftItemsTable } from './nft-items';
 import { AfterGas, Dual, Stat } from './ui';
 import {
@@ -54,22 +56,25 @@ function MoneyContent() {
   const [error, setError] = useState<string | null>(null);
   /** Linked address to report on alone; null = all wallets. */
   const [wallet, setWallet] = useState<string | null>(null);
+  /** Chain to report on alone; null = all chains. */
+  const [chain, setChain] = useState<string | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [scansOpen, setScansOpen] = useState(false);
+  const view = useMemo<CashflowView>(() => ({ wallet, chain }), [wallet, chain]);
 
-  const load = useCallback(
-    async (refresh = false) => {
-      if (!accessToken) return;
-      try {
-        setError(null);
-        setResponse(await getMyCashflow(accessToken, refresh, wallet));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load your money dashboard');
-      } finally {
-        setSwitching(false);
-      }
-    },
-    [accessToken, wallet],
-  );
+  // Loads saved scans; only wallets/chains never scanned are scanned. Rescans
+  // happen from the Scans panel.
+  const load = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      setError(null);
+      setResponse(await getMyCashflow(accessToken, false, view));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load your money dashboard');
+    } finally {
+      setSwitching(false);
+    }
+  }, [accessToken, view]);
 
   useEffect(() => {
     void load();
@@ -102,14 +107,15 @@ function MoneyContent() {
         </div>
         {response && response.status !== 'no_wallets' && (
           <div className="flex items-center gap-3 text-xs text-gray-500">
-            {report && !computing && <span>Updated {relativeTime(report.generatedAt)}</span>}
+            {report && !computing && <LastScanned report={report} />}
             <button
               type="button"
-              onClick={() => void load(true)}
-              disabled={computing}
+              onClick={() => setScansOpen(!scansOpen)}
+              disabled={!report}
+              aria-expanded={scansOpen}
               className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {computing ? 'Scanning…' : 'Refresh'}
+              {computing ? 'Scanning…' : 'Scans & refresh'}
             </button>
           </div>
         )}
@@ -157,14 +163,25 @@ function MoneyContent() {
       )}
 
       {report && (
-        <CashflowActionsProvider token={accessToken} wallet={wallet} onResponse={setResponse}>
+        <CashflowActionsProvider token={accessToken} view={view} onResponse={setResponse}>
+          {scansOpen && (
+            <ScanPanel report={report} computing={computing} onClose={() => setScansOpen(false)} />
+          )}
           <Dashboard
             report={report}
-            wallet={wallet}
-            switching={switching}
-            onWalletChange={(w) => {
-              setSwitching(true);
-              setWallet(w);
+            computing={computing}
+            filters={{
+              wallet,
+              chain,
+              switching,
+              onWalletChange: (w) => {
+                setSwitching(true);
+                setWallet(w);
+              },
+              onChainChange: (c) => {
+                setSwitching(true);
+                setChain(c);
+              },
             }}
           />
         </CashflowActionsProvider>
@@ -206,73 +223,162 @@ function walletOptions(report: CashflowReport): Array<{ address: string; label: 
   return [...seen.values()];
 }
 
-function WalletFilter({
-  report,
-  wallet,
-  switching,
-  onChange,
-}: {
-  report: CashflowReport;
+interface FilterState {
   wallet: string | null;
+  chain: string | null;
   switching: boolean;
-  onChange: (w: string | null) => void;
-}) {
-  const options = walletOptions(report);
-  if (options.length < 2) return null;
+  onWalletChange: (w: string | null) => void;
+  onChainChange: (c: string | null) => void;
+}
+
+/** Chains that have anything scanned, for the chain filter. */
+function chainOptions(report: CashflowReport): string[] {
+  const order = [...report.availableChains, 'solana'];
+  const seen = new Set(report.scans.filter((s) => s.transfers > 0).map((s) => s.chain));
+  if (report.chainFilter) seen.add(report.chainFilter);
+  return order.filter((c) => seen.has(c));
+}
+
+function Filters({ report, filters }: { report: CashflowReport; filters: FilterState }) {
+  const wallets = walletOptions(report);
+  const chains = chainOptions(report);
+  const select =
+    'rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200 disabled:opacity-50';
   return (
-    <label className="flex items-center gap-2 text-xs text-gray-400">
-      Wallet
-      <select
-        value={wallet ?? ''}
-        onChange={(e) => onChange(e.target.value || null)}
-        disabled={switching}
-        className="rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200 disabled:opacity-50"
-      >
-        <option value="">All wallets ({options.length})</option>
-        {options.map((o) => (
-          <option key={o.address} value={o.address}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      {switching && (
+    <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400">
+      {wallets.length > 1 && (
+        <label className="flex items-center gap-2">
+          Wallet
+          <select
+            value={filters.wallet ?? ''}
+            onChange={(e) => filters.onWalletChange(e.target.value || null)}
+            disabled={filters.switching}
+            className={select}
+          >
+            <option value="">All wallets ({wallets.length})</option>
+            {wallets.map((o) => (
+              <option key={o.address} value={o.address}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {chains.length > 1 && (
+        <label className="flex items-center gap-2">
+          Chain
+          <select
+            value={filters.chain ?? ''}
+            onChange={(e) => filters.onChainChange(e.target.value || null)}
+            disabled={filters.switching}
+            className={select}
+          >
+            <option value="">All chains ({chains.length})</option>
+            {chains.map((c) => (
+              <option key={c} value={c}>
+                {CHAIN_LABELS[c] ?? c}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {filters.switching && (
         <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-600 border-t-purple-400" />
       )}
-    </label>
+    </div>
+  );
+}
+
+/** "Scanned 3 hours ago" — the oldest saved scan, since page loads no longer rescan. */
+function LastScanned({ report }: { report: CashflowReport }) {
+  const times = report.scans
+    .map((s) => s.scannedAt)
+    .filter((t): t is string => !!t)
+    .sort();
+  if (times.length === 0) return null;
+  const oldest = relativeTime(times[0]);
+  const newest = relativeTime(times[times.length - 1]);
+  return (
+    <span title="When your saved scans were last refreshed">
+      Scanned {oldest === newest ? oldest : `${oldest} – ${newest}`}
+    </span>
   );
 }
 
 /** How much of the filtered wallet's history was read, per chain — to tell "missing" from "not scanned". */
+const STAT_LABELS: Record<string, string> = {
+  transactions: 'transactions',
+  transfers: 'transfer records',
+  nftLegs: 'NFT moves',
+  nftCollections: 'NFT collections',
+  nftsFromEvents: 'NFTs from sale/mint events (compressed/Core)',
+  tokenLegs: 'token moves',
+  nativeLegs: 'coin transfers',
+  escrowPayments: 'payments from bid escrow',
+  balanceChecks: 'balance checks',
+  inferredPayments: 'payments found by balance check',
+  dasRequested: 'metadata lookups',
+  dasResolved: 'metadata found',
+  dasFailedBatches: 'failed metadata batches',
+};
+
 function ScanCoverage({ report }: { report: CashflowReport }) {
   const rows = report.coverage.filter((c) => c.transfers > 0 || c.truncated || c.error);
   if (rows.length === 0) return null;
   return (
-    <p className="-mt-3 text-xs text-gray-500">
-      Scanned:{' '}
-      {rows.map((c, i) => (
-        <span key={`${c.chain}:${c.address}`}>
-          {i > 0 && ' · '}
-          {CHAIN_LABELS[c.chain] ?? c.chain} {c.transfers.toLocaleString()} records
-          {c.truncated && (
-            <span className="text-yellow-500"> (limit reached — oldest not scanned)</span>
-          )}
-          {c.error && <span className="text-red-400"> (failed: {c.error.slice(0, 80)})</span>}
-        </span>
-      ))}
-    </p>
+    <div className="-mt-3 text-xs text-gray-500">
+      <p>
+        Scanned:{' '}
+        {rows.map((c, i) => (
+          <span key={`${c.chain}:${c.address}`}>
+            {i > 0 && ' · '}
+            {CHAIN_LABELS[c.chain] ?? c.chain} {c.transfers.toLocaleString()} records
+            {c.truncated && (
+              <span className="text-yellow-500"> (limit reached — oldest not scanned)</span>
+            )}
+            {c.error && <span className="text-red-400"> (failed: {c.error.slice(0, 80)})</span>}
+          </span>
+        ))}
+      </p>
+      {rows.some((c) => c.stats) && (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-gray-400 hover:text-white">
+            Scan diagnostics
+          </summary>
+          <p className="mt-1 text-gray-500">
+            What the scanner found for this wallet — share this if something looks missing.
+          </p>
+          <table className="mt-1">
+            <tbody>
+              {rows
+                .filter((c) => c.stats)
+                .flatMap((c) =>
+                  Object.entries(c.stats ?? {})
+                    .filter(([, v]) => v > 0)
+                    .map(([k, v]) => (
+                      <tr key={`${c.chain}:${k}`}>
+                        <td className="pr-3 text-gray-400">{CHAIN_LABELS[c.chain] ?? c.chain}</td>
+                        <td className="pr-3">{STAT_LABELS[k] ?? k}</td>
+                        <td className="tabular-nums text-gray-300">{v.toLocaleString()}</td>
+                      </tr>
+                    )),
+                )}
+            </tbody>
+          </table>
+        </details>
+      )}
+    </div>
   );
 }
 
 function Dashboard({
   report,
-  wallet,
-  switching,
-  onWalletChange,
+  computing,
+  filters,
 }: {
   report: CashflowReport;
-  wallet: string | null;
-  switching: boolean;
-  onWalletChange: (w: string | null) => void;
+  computing: boolean;
+  filters: FilterState;
 }) {
   const [range, setRange] = useState<Range>('all');
   const months = useMemo(() => filterMonths(report.months, range), [report.months, range]);
@@ -310,16 +416,15 @@ function Dashboard({
     return (
       <div className="space-y-4">
         <div className="flex justify-end">
-          <WalletFilter
-            report={report}
-            wallet={wallet}
-            switching={switching}
-            onChange={onWalletChange}
-          />
+          <Filters report={report} filters={filters} />
         </div>
         <div className="rounded-xl border border-gray-800 p-8 text-center text-gray-400">
           No transactions found yet for{' '}
-          {report.walletFilter ? 'this wallet' : 'your linked wallets'}.
+          {report.walletFilter ? 'this wallet' : 'your linked wallets'}
+          {report.chainFilter
+            ? ` on ${CHAIN_LABELS[report.chainFilter] ?? report.chainFilter}`
+            : ''}
+          .
           <Coverage report={report} />
         </div>
       </div>
@@ -346,19 +451,17 @@ function Dashboard({
           </button>
         ))}
         <div className="ml-auto flex flex-wrap items-center gap-3">
-          <WalletFilter
-            report={report}
-            wallet={wallet}
-            switching={switching}
-            onChange={onWalletChange}
-          />
+          <Filters report={report} filters={filters} />
           <span className="text-xs text-gray-500">
             {report.totals.txCount.toLocaleString()} transactions
             {report.walletFilter ? ' in this wallet' : ''}
+            {report.chainFilter
+              ? ` on ${CHAIN_LABELS[report.chainFilter] ?? report.chainFilter}`
+              : ''}
           </span>
         </div>
       </div>
-      {report.walletFilter && <ScanCoverage report={report} />}
+      {(report.walletFilter || report.chainFilter) && <ScanCoverage report={report} />}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <Stat label="Money in" value={usd(totals.inUsd)} swatch={IN_COLOR} />
@@ -408,6 +511,8 @@ function Dashboard({
           color={IN_COLOR}
         />
       </div>
+
+      <FlagsPanel report={report} computing={computing} />
 
       <DetailTabs report={report} />
 
@@ -989,7 +1094,7 @@ function Coverage({ report }: { report: CashflowReport }) {
           {failed
             .map((c) => `${CHAIN_LABELS[c.chain] ?? c.chain} ${truncateAddress(c.address)}`)
             .join(', ')}
-          . Try Refresh later.
+          . Rescan them from Scans &amp; refresh.
         </div>
       )}
     </details>

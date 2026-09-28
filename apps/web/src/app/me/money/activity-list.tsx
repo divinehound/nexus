@@ -4,12 +4,14 @@ import { useMemo, useState } from 'react';
 import type {
   CashflowActivity,
   CashflowActivityLeg,
+  CashflowFlag,
   CashflowReport,
   CashflowTxType,
 } from '@nexus/types';
 import { addCashflowLink } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { useCashflowActions } from './actions';
+import { FlagControl, flagKey, flagsByTx } from './flags';
 import {
   CHAIN_LABELS,
   TX_TYPE_LABELS,
@@ -58,6 +60,8 @@ const ACTIVITY_FILTERS: Array<{
     match: (a) => a.type === 'exchange_deposit' || a.type === 'exchange_withdrawal',
   },
   { id: 'swaps', label: 'Swaps', match: (a) => a.type === 'swap' },
+  // Matched against the report's flags in ActivityList.
+  { id: 'flagged', label: '⚑ Flagged', match: null },
 ];
 const PAGE = 50;
 
@@ -77,18 +81,21 @@ export function ActivityList({ report }: { report: CashflowReport }) {
   const [open, setOpen] = useState<string | null>(null);
   const match = ACTIVITY_FILTERS.find((f) => f.id === filter)?.match;
   const multiWallet = new Set(report.wallets.map((w) => w.address.toLowerCase())).size > 1;
+  const flags = useMemo(() => flagsByTx(report), [report]);
 
   const rows = useMemo(() => {
     // "All" skips unsolicited airdrops (no money, no gas) — they're still under Transfers.
     const filtered = match
       ? report.activity.filter(match)
-      : report.activity.filter(
-          (a) =>
-            !(a.type === 'received_asset' && a.inUsd === 0 && a.outUsd === 0 && !isFreeMint(a)),
-        );
+      : filter === 'flagged'
+        ? report.activity.filter((a) => flags.has(flagKey(a.chain, a.txHash)))
+        : report.activity.filter(
+            (a) =>
+              !(a.type === 'received_asset' && a.inUsd === 0 && a.outUsd === 0 && !isFreeMint(a)),
+          );
     // The API sends newest first.
     return order === 'newest' ? filtered : [...filtered].reverse();
-  }, [report.activity, match, order]);
+  }, [report.activity, match, order, filter, flags]);
 
   return (
     <div>
@@ -142,13 +149,14 @@ export function ActivityList({ report }: { report: CashflowReport }) {
             <li key={key} className="py-3">
               <ActivityRow
                 a={a}
+                flagged={flags.has(flagKey(a.chain, a.txHash))}
                 showWallet={multiWallet}
                 onLink={() => setLinking(linking === key ? null : key)}
                 linkOpen={linking === key}
                 detailsOpen={open === key}
                 onDetails={() => setOpen(open === key ? null : key)}
               />
-              {open === key && <TxDetails a={a} />}
+              {open === key && <TxDetails a={a} flag={flags.get(flagKey(a.chain, a.txHash))} />}
               {linking === key && (
                 <LinkPicker source={a} report={report} onDone={() => setLinking(null)} />
               )}
@@ -195,6 +203,7 @@ function ExplorerLink({
 
 function ActivityRow({
   a,
+  flagged,
   showWallet,
   onLink,
   linkOpen,
@@ -202,6 +211,7 @@ function ActivityRow({
   onDetails,
 }: {
   a: CashflowActivity;
+  flagged: boolean;
   showWallet: boolean;
   onLink: () => void;
   linkOpen: boolean;
@@ -231,8 +241,8 @@ function ActivityRow({
     // Always record a rejection (the API drops any manual link for the pair
     // first). Just deleting a manual link would let the automatic matcher
     // pair the same two transactions straight back up.
-    void run('Unlinked — counted as separate transfers again', (token, wallet) =>
-      addCashflowLink(token, { kind: 'unlink', ...pair }, wallet),
+    void run('Unlinked — counted as separate transfers again', (token, view) =>
+      addCashflowLink(token, { kind: 'unlink', ...pair }, view),
     );
   };
 
@@ -248,6 +258,11 @@ function ActivityRow({
             {isFreeMint(a) ? 'Free mint' : TX_TYPE_LABELS[a.type]}
           </span>
           <span className="truncate text-sm text-gray-200">{a.label}</span>
+          {flagged && (
+            <span className="text-[11px] text-yellow-400" title="You flagged this as wrong">
+              ⚑ flagged
+            </span>
+          )}
         </div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-gray-500">
           {showWallet && <span>wallet {truncateAddress(a.wallet)}</span>}
@@ -335,7 +350,7 @@ function Counterparty({ chain, address }: { chain: string; address: string }) {
 }
 
 /** Everything the scanner found in one transaction, for checking it against the explorer. */
-function TxDetails({ a }: { a: CashflowActivity }) {
+function TxDetails({ a, flag }: { a: CashflowActivity; flag: CashflowFlag | undefined }) {
   return (
     <div className="mt-2 rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-xs">
       <div className="mb-2 flex flex-wrap items-center gap-x-3 text-gray-400">
@@ -401,6 +416,7 @@ function TxDetails({ a }: { a: CashflowActivity }) {
           profile.
         </p>
       )}
+      <FlagControl chain={a.chain} txHash={a.txHash} flag={flag} />
     </div>
   );
 }
@@ -449,8 +465,8 @@ function LinkPicker({
     const pair = sourceIsOut
       ? { fromChain: source.chain, fromTxHash: source.txHash, toChain: chain, toTxHash: txHash }
       : { fromChain: chain, fromTxHash: txHash, toChain: source.chain, toTxHash: source.txHash };
-    void run('Linked — counted as a move between your wallets', (token, wallet) =>
-      addCashflowLink(token, { kind: 'link', ...pair }, wallet),
+    void run('Linked — counted as a move between your wallets', (token, view) =>
+      addCashflowLink(token, { kind: 'link', ...pair }, view),
     ).then((ok) => ok && onDone());
   };
 

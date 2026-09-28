@@ -136,7 +136,8 @@ describe('EVM history paging', () => {
 });
 
 describe('wallet filter', () => {
-  const { CashflowService, sameWallet } = jest.requireActual('./cashflow.service');
+  const { CashflowService, sameWallet, targetSignature } = jest.requireActual('./cashflow.service');
+  const { EVM_CHAINS } = jest.requireActual('./evm-activity.fetcher');
   const A = '0xAAAA000000000000000000000000000000000001';
   const B = '0xbbbb000000000000000000000000000000000002';
   const ETH = { key: 'ethereum:native', chain: 'ethereum', kind: 'native', contract: '', name: 'Ether', symbol: 'ETH', price: { kind: 'native', symbol: 'ETH' } };
@@ -165,10 +166,13 @@ describe('wallet filter', () => {
       notes: [],
       relayLinks: [],
       detectedExchanges: new Map(),
+      walletChains: [],
     };
-    const signature = linked.map((w) => `${w.chain}:${w.address}`).sort().join('|');
+    const signature = targetSignature(
+      linked.flatMap((w) => EVM_CHAINS.map((chain: string) => ({ chain, address: w.address.toLowerCase() }))),
+    );
     (svc as never as { entries: Map<string, unknown> }).entries.set('u', {
-      status: 'ready', startedAt: new Date(), progress: '', report: null, error: null, walletsSignature: signature, scan,
+      status: 'ready', startedAt: new Date(), progress: '', report: null, error: null, signature, dataVersion: 0, scan,
     });
     return svc;
   }
@@ -179,15 +183,24 @@ describe('wallet filter', () => {
     expect(all.report.walletFilter).toBeNull();
     expect(all.report.outByCategory.transfer_out).toBe(3000);
 
-    const onlyA = await svc.getReport('u', false, A.toLowerCase());
+    const onlyA = await svc.getReport('u', false, { wallet: A.toLowerCase() });
     expect(onlyA.report.walletFilter).toBe(A.toLowerCase());
     expect(onlyA.report.outByCategory.transfer_out).toBe(1000);
     expect(onlyA.report.ownWalletTransfers.count).toBe(1);
     expect(onlyA.report.wallets).toHaveLength(2); // dropdown still lists every wallet
   });
 
+  it('narrows to one chain without rescanning', async () => {
+    const svc = service();
+    await svc.rebuild('u');
+    const base = await svc.getReport('u', false, { chain: 'base' });
+    expect(base.report.chainFilter).toBe('base');
+    expect(base.report.activity).toHaveLength(0);
+    await expect(svc.getReport('u', false, { chain: 'dogechain' })).rejects.toThrow('Unknown chain');
+  });
+
   it('rejects a wallet that is not linked', async () => {
-    await expect(service().getReport('u', false, '0xdead000000000000000000000000000000000000')).rejects.toThrow('not linked');
+    await expect(service().getReport('u', false, { wallet: '0xdead000000000000000000000000000000000000' })).rejects.toThrow('not linked');
   });
 
   it('compares EVM addresses case-insensitively, Solana exactly', () => {

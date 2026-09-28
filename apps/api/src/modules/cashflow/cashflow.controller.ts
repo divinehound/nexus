@@ -1,9 +1,21 @@
-import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
-import { IsIn, IsString, Length, Matches } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
+  IsIn,
+  IsOptional,
+  IsString,
+  Length,
+  Matches,
+  MaxLength,
+  ValidateNested,
+} from 'class-validator';
 import type { CashflowResponse } from '@nexus/types';
-import { CashflowService } from './cashflow.service';
+import { CashflowService, type ReportView } from './cashflow.service';
 import { EVM_CHAINS } from './evm-activity.fetcher';
 
 interface AuthRequest {
@@ -49,6 +61,59 @@ export class AddressTagDto {
   exchange!: string;
 }
 
+export class ScanTargetDto {
+  @IsIn(CHAINS)
+  chain!: string;
+
+  @IsString()
+  @Length(20, 64)
+  @Matches(HASH_OR_ADDRESS)
+  address!: string;
+}
+
+export class RefreshDto {
+  /** Wallet+chain pairs to rescan; omit to rescan everything. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => ScanTargetDto)
+  targets?: ScanTargetDto[];
+}
+
+export class WalletChainsDto {
+  @IsString()
+  @Length(42, 42)
+  @Matches(/^0x[0-9a-fA-F]{40}$/)
+  address!: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsIn(EVM_CHAINS, { each: true })
+  chains!: string[];
+}
+
+export class FlagDto {
+  @IsIn(CHAINS)
+  chain!: string;
+
+  @IsString()
+  @Length(10, 128)
+  @Matches(HASH_OR_ADDRESS)
+  txHash!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}
+
+/** ?wallet= and ?chain= narrow the returned report; they never change what's scanned. */
+const view = (wallet?: string, chain?: string): ReportView => ({
+  wallet: wallet || undefined,
+  chain: chain || undefined,
+});
+
 @ApiTags('me')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
@@ -59,22 +124,83 @@ export class CashflowController {
   @Get()
   @ApiOperation({
     summary: 'Money in/out, spending by category, and realized PnL across all linked wallets',
-    description: 'Builds in the background on first call or with ?refresh=true; poll until status is "ready".',
+    description:
+      'Loads saved scans (scanning only wallets/chains never scanned) in the background; ?refresh=true rescans everything. Poll until status is "ready".',
   })
   getCashflow(
     @Req() req: AuthRequest,
     @Query('refresh') refresh?: string,
     @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
   ): Promise<CashflowResponse> {
-    return this.cashflowService.getReport(req.user.sub, refresh === 'true' || refresh === '1', wallet || undefined);
+    return this.cashflowService.getReport(req.user.sub, refresh === 'true' || refresh === '1', view(wallet, chain));
+  }
+
+  @Post('refresh')
+  @ApiOperation({ summary: 'Rescan some wallet+chain pairs (or all, with no targets); the rest stays as saved' })
+  refresh(
+    @Req() req: AuthRequest,
+    @Body() body: RefreshDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.refresh(req.user.sub, body.targets, view(wallet, chain));
+  }
+
+  @Put('wallet-chains')
+  @ApiOperation({ summary: 'Choose which EVM chains are scanned for one of your EVM wallets' })
+  setWalletChains(
+    @Req() req: AuthRequest,
+    @Body() body: WalletChainsDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.setWalletChains(req.user.sub, body.address, body.chains, view(wallet, chain));
+  }
+
+  @Post('flags')
+  @ApiOperation({ summary: 'Flag a transaction as read wrong (or missing) so it can be re-imported on its own' })
+  addFlag(
+    @Req() req: AuthRequest,
+    @Body() body: FlagDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.addFlag(req.user.sub, body, view(wallet, chain));
+  }
+
+  @Delete('flags/:id')
+  @ApiOperation({ summary: 'Remove a flag' })
+  removeFlag(
+    @Req() req: AuthRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.removeFlag(req.user.sub, id, view(wallet, chain));
+  }
+
+  @Post('flags/reimport')
+  @ApiOperation({ summary: 'Re-read only the flagged transactions from the chain' })
+  reimportFlags(
+    @Req() req: AuthRequest,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.reimportFlags(req.user.sub, view(wallet, chain));
   }
 
   @Post('links')
   @ApiOperation({
     summary: 'Link two transactions as one move between your wallets (kind=link), or reject an automatic pairing (kind=unlink)',
   })
-  addLink(@Req() req: AuthRequest, @Body() body: TxLinkDto, @Query('wallet') wallet?: string): Promise<CashflowResponse> {
-    return this.cashflowService.addLink(req.user.sub, body, wallet || undefined);
+  addLink(
+    @Req() req: AuthRequest,
+    @Body() body: TxLinkDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.addLink(req.user.sub, body, view(wallet, chain));
   }
 
   @Delete('links/:id')
@@ -83,8 +209,9 @@ export class CashflowController {
     @Req() req: AuthRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
   ): Promise<CashflowResponse> {
-    return this.cashflowService.removeLink(req.user.sub, id, wallet || undefined);
+    return this.cashflowService.removeLink(req.user.sub, id, view(wallet, chain));
   }
 
   @Post('address-tags')
@@ -93,8 +220,9 @@ export class CashflowController {
     @Req() req: AuthRequest,
     @Body() body: AddressTagDto,
     @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
   ): Promise<CashflowResponse> {
-    return this.cashflowService.addAddressTag(req.user.sub, body, wallet || undefined);
+    return this.cashflowService.addAddressTag(req.user.sub, body, view(wallet, chain));
   }
 
   @Delete('address-tags/:id')
@@ -103,7 +231,8 @@ export class CashflowController {
     @Req() req: AuthRequest,
     @Param('id', ParseUUIDPipe) id: string,
     @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
   ): Promise<CashflowResponse> {
-    return this.cashflowService.removeAddressTag(req.user.sub, id, wallet || undefined);
+    return this.cashflowService.removeAddressTag(req.user.sub, id, view(wallet, chain));
   }
 }

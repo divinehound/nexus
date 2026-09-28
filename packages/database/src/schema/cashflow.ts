@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, timestamp, uniqueIndex, index } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, timestamp, text, jsonb, uniqueIndex, index } from 'drizzle-orm/pg-core';
 import { users } from './users';
 
 /**
@@ -49,4 +49,84 @@ export const cashflowAddressTags = pgTable(
     uniqueIndex('cashflow_address_tags_unique').on(table.userId, table.chainFamily, table.address),
     index('cashflow_address_tags_user_id_idx').on(table.userId),
   ],
+);
+
+/**
+ * Saved results of the Money dashboard's chain scans, so a page load (or an API
+ * restart) rebuilds the report from these instead of rescanning. One row per
+ * (kind, chain, address): kind 'activity' holds one wallet's history on one
+ * chain, 'relay' one address's Relay bridge records, 'deposits' the exchange
+ * deposit addresses detected across all wallets (chain and address '').
+ */
+export const cashflowScans = pgTable(
+  'cashflow_scans',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    kind: varchar('kind', { length: 16 }).notNull(),
+    chain: varchar('chain', { length: 32 }).notNull(),
+    address: varchar('address', { length: 255 }).notNull(),
+    data: jsonb('data').notNull(),
+    scannedAt: timestamp('scanned_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('cashflow_scans_unique').on(table.userId, table.kind, table.chain, table.address),
+  ],
+);
+
+/**
+ * Whether a scan is running for a user, shared across API instances. A
+ * running scan refreshes `heartbeatAt`; one that stops doing so (the instance
+ * restarted) is treated as abandoned.
+ */
+export const cashflowScanState = pgTable('cashflow_scan_state', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  status: varchar('status', { length: 16 }).notNull(), // 'scanning' | 'idle' | 'failed'
+  progress: text('progress'),
+  error: text('error'),
+  startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+  heartbeatAt: timestamp('heartbeat_at', { withTimezone: true }).defaultNow().notNull(),
+  /** Bumped whenever saved scan data changes, so other instances drop their cached report. */
+  dataVersion: timestamp('data_version', { withTimezone: true }).defaultNow().notNull(),
+});
+
+/**
+ * Which EVM chains to scan for one of the user's EVM addresses. No row means
+ * every supported chain.
+ */
+export const cashflowWalletChains = pgTable(
+  'cashflow_wallet_chains',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    address: varchar('address', { length: 255 }).notNull(),
+    chains: jsonb('chains').$type<string[]>().notNull(),
+  },
+  (table) => [uniqueIndex('cashflow_wallet_chains_unique').on(table.userId, table.address)],
+);
+
+/**
+ * Transactions the user marked as read wrong (or missing). Re-importing
+ * refetches only these, instead of rescanning whole wallets.
+ */
+export const cashflowFlags = pgTable(
+  'cashflow_flags',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    chain: varchar('chain', { length: 32 }).notNull(),
+    txHash: varchar('tx_hash', { length: 128 }).notNull(),
+    note: text('note'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    reimportedAt: timestamp('reimported_at', { withTimezone: true }),
+  },
+  (table) => [uniqueIndex('cashflow_flags_unique').on(table.userId, table.chain, table.txHash)],
 );
