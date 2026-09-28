@@ -67,6 +67,8 @@ export interface LedgerMovement {
    * internal-transfer tracing, or by a smart-contract wallet).
    */
   inferred?: boolean;
+  /** Solana: taken from Helius' NFT event (compressed/Core NFTs) rather than a token transfer. */
+  fromEvent?: boolean;
 }
 
 export interface LedgerFee {

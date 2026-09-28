@@ -41,7 +41,7 @@ const ZKSYNC_ETH = '0x000000000000000000000000000000000000800a';
 const ZKSYNC_BOOTLOADER = '0x0000000000000000000000000000000000008001';
 
 /** Transactions per wallet+chain checked for payments hidden inside contract calls. */
-const MAX_BALANCE_PROBES = 400;
+const MAX_BALANCE_PROBES = 1000;
 /** Ignore balance differences smaller than this (wei) — rounding and dust. */
 const BALANCE_PROBE_MIN_WEI = 10n ** 12n;
 
@@ -74,6 +74,8 @@ export interface ChainFetchResult {
   transfers: number;
   truncated: boolean;
   notes: string[];
+  /** Diagnostic counters surfaced on the page (see CashflowWalletCoverage.stats). */
+  stats?: Record<string, number>;
 }
 
 /** Resolve (and share) the asset for a transfer so later name enrichment updates every movement. */
@@ -225,7 +227,11 @@ export class EvmActivityFetcher {
     // Payments the transfer index can't see (ETH moved inside a contract call on
     // chains without internal tracing, or by a smart-contract wallet) show up
     // in the wallet's balance. Probe the txs that look incomplete.
-    const probes = balanceProbeCandidates(movements, txBlocks).slice(0, MAX_BALANCE_PROBES);
+    const probes = balanceProbeCandidates(movements, txBlocks, !INTERNAL_SUPPORTED.has(chain)).slice(
+      0,
+      MAX_BALANCE_PROBES,
+    );
+    let inferredCount = 0;
     if (probes.length > 0) {
       try {
         const feeWei = new Map(fees.map((f) => [f.txHash, BigInt(Math.round(f.feeNative * 1e18))]));
@@ -248,6 +254,7 @@ export class EvmActivityFetcher {
             counterparty: 'contract',
             inferred: true,
           });
+          inferredCount++;
         });
       } catch (err) {
         this.logger.warn(`${chain} balance probe failed for ${address}: ${(err as Error).message}`);
@@ -255,7 +262,15 @@ export class EvmActivityFetcher {
       }
     }
 
-    return { movements, fees, transfers: all.length, truncated, notes };
+    const stats = {
+      transfers: all.length,
+      nftLegs: movements.filter((m) => m.asset.kind === 'nft').length,
+      tokenLegs: movements.filter((m) => m.asset.kind === 'fungible').length,
+      nativeLegs: movements.filter((m) => m.asset.kind === 'native' && !m.inferred).length,
+      balanceChecks: probes.length,
+      inferredPayments: inferredCount,
+    };
+    return { movements, fees, transfers: all.length, truncated, notes, stats };
   }
 
   private async pageTransfers(
@@ -480,7 +495,17 @@ export interface BalanceProbe {
  * block with another of the wallet's txs are skipped: the balance change
  * across the block would mix them.
  */
-export function balanceProbeCandidates(movements: LedgerMovement[], txBlocks: Map<string, string>): BalanceProbe[] {
+export function balanceProbeCandidates(
+  movements: LedgerMovement[],
+  txBlocks: Map<string, string>,
+  /**
+   * On chains without internal-transfer tracing, probe every tx that moved an
+   * NFT/token — not only ones with no visible payment — so ETH that came back
+   * inside the call (a sweep router refunding unfilled orders, part of a sale
+   * paid out by a contract) is accounted for too.
+   */
+  everyAssetTx = false,
+): BalanceProbe[] {
   const byTx = new Map<string, LedgerMovement[]>();
   for (const m of movements) byTx.set(m.txHash, [...(byTx.get(m.txHash) ?? []), m]);
   const txsPerBlock = new Map<string, number>();
@@ -496,7 +521,7 @@ export function balanceProbeCandidates(movements: LedgerMovement[], txBlocks: Ma
     const moneyOut = legs.some((m) => m.direction === 'out' && m.asset.price);
     const looksUnpaid = assetIn && !assetOut && !moneyOut;
     const looksUnsold = assetOut && !assetIn && !moneyIn;
-    if (!looksUnpaid && !looksUnsold) continue;
+    if (!looksUnpaid && !looksUnsold && !(everyAssetTx && (assetIn || assetOut))) continue;
     let visibleNativeWei = 0n;
     for (const m of legs) {
       if (m.asset.kind !== 'native') continue;

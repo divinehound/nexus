@@ -243,23 +243,68 @@ function WalletFilter({
 }
 
 /** How much of the filtered wallet's history was read, per chain — to tell "missing" from "not scanned". */
+const STAT_LABELS: Record<string, string> = {
+  transactions: 'transactions',
+  transfers: 'transfer records',
+  nftLegs: 'NFT moves',
+  nftCollections: 'NFT collections',
+  nftsFromEvents: 'NFTs from sale/mint events (compressed/Core)',
+  tokenLegs: 'token moves',
+  nativeLegs: 'coin transfers',
+  escrowPayments: 'payments from bid escrow',
+  balanceChecks: 'balance checks',
+  inferredPayments: 'payments found by balance check',
+  dasRequested: 'metadata lookups',
+  dasResolved: 'metadata found',
+  dasFailedBatches: 'failed metadata batches',
+};
+
 function ScanCoverage({ report }: { report: CashflowReport }) {
   const rows = report.coverage.filter((c) => c.transfers > 0 || c.truncated || c.error);
   if (rows.length === 0) return null;
   return (
-    <p className="-mt-3 text-xs text-gray-500">
-      Scanned:{' '}
-      {rows.map((c, i) => (
-        <span key={`${c.chain}:${c.address}`}>
-          {i > 0 && ' · '}
-          {CHAIN_LABELS[c.chain] ?? c.chain} {c.transfers.toLocaleString()} records
-          {c.truncated && (
-            <span className="text-yellow-500"> (limit reached — oldest not scanned)</span>
-          )}
-          {c.error && <span className="text-red-400"> (failed: {c.error.slice(0, 80)})</span>}
-        </span>
-      ))}
-    </p>
+    <div className="-mt-3 text-xs text-gray-500">
+      <p>
+        Scanned:{' '}
+        {rows.map((c, i) => (
+          <span key={`${c.chain}:${c.address}`}>
+            {i > 0 && ' · '}
+            {CHAIN_LABELS[c.chain] ?? c.chain} {c.transfers.toLocaleString()} records
+            {c.truncated && (
+              <span className="text-yellow-500"> (limit reached — oldest not scanned)</span>
+            )}
+            {c.error && <span className="text-red-400"> (failed: {c.error.slice(0, 80)})</span>}
+          </span>
+        ))}
+      </p>
+      {rows.some((c) => c.stats) && (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-gray-400 hover:text-white">
+            Scan diagnostics
+          </summary>
+          <p className="mt-1 text-gray-500">
+            What the scanner found for this wallet — share this if something looks missing.
+          </p>
+          <table className="mt-1">
+            <tbody>
+              {rows
+                .filter((c) => c.stats)
+                .flatMap((c) =>
+                  Object.entries(c.stats ?? {})
+                    .filter(([, v]) => v > 0)
+                    .map(([k, v]) => (
+                      <tr key={`${c.chain}:${k}`}>
+                        <td className="pr-3 text-gray-400">{CHAIN_LABELS[c.chain] ?? c.chain}</td>
+                        <td className="pr-3">{STAT_LABELS[k] ?? k}</td>
+                        <td className="tabular-nums text-gray-300">{v.toLocaleString()}</td>
+                      </tr>
+                    )),
+                )}
+            </tbody>
+          </table>
+        </details>
+      )}
+    </div>
   );
 }
 

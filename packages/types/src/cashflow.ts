@@ -249,6 +249,8 @@ export interface CashflowWalletCoverage {
   transfers: number;
   truncated: boolean;
   error: string | null;
+  /** What the scanner found, for diagnosing gaps (e.g. nftLegs, tokenLegs, eventNfts, probes, inferred). */
+  stats?: Record<string, number>;
 }
 
 export interface CashflowReport {

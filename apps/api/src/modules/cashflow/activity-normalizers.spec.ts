@@ -276,3 +276,81 @@ describe('Solana history (Helius)', () => {
     expect(heliusResumeSignature('HTTP 500')).toBeNull();
   });
 });
+
+describe('bulk txs and Solana classification fallbacks', () => {
+  const { balanceProbeCandidates, inferHiddenNative } = jest.requireActual('./evm-activity.fetcher');
+  const { normalizeSolanaTx } = jest.requireActual('./solana-activity.fetcher');
+  const { buildCashflowReport } = jest.requireActual('./cashflow-ledger');
+  const ETH_A = { key: 'base:native', chain: 'base', kind: 'native', contract: '', name: 'Ether', symbol: 'ETH', price: { kind: 'native', symbol: 'ETH' } };
+  const NFT_A = { key: 'base:0xnft', chain: 'base', kind: 'nft', contract: '0xnft', name: 'Thing', symbol: null, price: null };
+  const leg = (direction: 'in' | 'out', asset: object, amount: number, tokenId: string | null = null) => ({
+    chain: 'base', txHash: '0xsweep', timestamp: new Date('2025-01-01T00:00:00Z'), wallet: ME.toLowerCase(), direction, asset, tokenId, amount, counterparty: '0xrouter',
+  });
+
+  it('on untraced chains, also checks paid asset txs — a sweep refund comes back as money in', () => {
+    // Sent 1 ETH to a sweep router for 3 NFTs; 2 filled, 0.3 ETH refunded inside the call.
+    const legs = [leg('out', ETH_A, 1), leg('in', NFT_A, 1, '1'), leg('in', NFT_A, 1, '2')];
+    const blocks = new Map([['0xsweep', '0x10']]);
+    expect(balanceProbeCandidates(legs, blocks, false)).toHaveLength(0); // traced chains: payment visible → skip
+    const [probe] = balanceProbeCandidates(legs, blocks, true);
+    expect(probe.visibleNativeWei).toBe(-(10n ** 18n));
+    const e = (n: number) => BigInt(Math.round(n * 1e6)) * 10n ** 12n;
+    // Balance fell 0.7 ETH + 0.002 gas.
+    expect(inferHiddenNative(-e(0.702), e(0.002), probe.visibleNativeWei)).toBe(e(0.3));
+
+    const report = buildCashflowReport({
+      movements: [...legs, { ...leg('in', ETH_A, 0.3), counterparty: 'contract', inferred: true }],
+      fees: [],
+      wallets: [{ chain: 'base', address: ME }],
+      pricer: { usdPerUnit: () => 3000 },
+      coverage: [],
+      notes: [],
+      now: new Date(),
+    });
+    expect(report.collections[0]).toMatchObject({ buyCount: 2, qtyBought: 2 });
+    expect(report.collections[0].spentUsd).toBeCloseTo(2100); // 0.7 ETH, not 1
+    expect(report.totals.inUsd).toBe(0); // the refund isn't income
+  });
+
+  const W = 'AHu9YFzhgCxDscBEEMJwzJG3GnKgWHrB8P214LgGQn8c';
+  const t = (extra: object) => ({ signature: 'sig', timestamp: 1_700_000_000, ...extra });
+
+  it('treats a lone indivisible token as an NFT when neither DAS nor the transfer says', () => {
+    const { movements } = normalizeSolanaTx(
+      W,
+      t({ tokenTransfers: [{ fromUserAccount: 'x', toUserAccount: W, tokenAmount: 1, decimals: 0, mint: 'MintNoMeta' }] }),
+      new Map(),
+      new Map(),
+    );
+    expect(movements[0].asset.kind).toBe('nft');
+    const fungible = normalizeSolanaTx(
+      W,
+      t({ tokenTransfers: [{ fromUserAccount: 'x', toUserAccount: W, tokenAmount: 1, decimals: 0, mint: 'MintF', tokenStandard: 'Fungible' }] }),
+      new Map(),
+      new Map(),
+    ).movements;
+    expect(fungible[0].asset.kind).toBe('fungible');
+  });
+
+  it("keeps an escrow-listed NFT as the user's, and books the sale when the listing fills", () => {
+    const assets = new Map();
+    const listing = t({ signature: 'list', type: 'NFT_LISTING', tokenTransfers: [{ fromUserAccount: W, toUserAccount: 'MEescrow', tokenAmount: 1, mint: 'MintA', tokenStandard: 'NonFungible' }] });
+    const buy = t({ signature: 'buy', timestamp: 1_600_000_000, type: 'NFT_SALE', nativeTransfers: [{ fromUserAccount: W, toUserAccount: 'Seller', amount: 1e9 }], tokenTransfers: [{ fromUserAccount: 'Seller', toUserAccount: W, tokenAmount: 1, mint: 'MintA', tokenStandard: 'NonFungible' }], events: { nft: { type: 'NFT_SALE', buyer: W, seller: 'Seller', amount: 1e9, nfts: [{ mint: 'MintA' }] } } });
+    // Filled from escrow: the NFT leaves the escrow (not the wallet); the wallet gets paid.
+    const fill = t({ signature: 'fill', timestamp: 1_800_000_000, type: 'NFT_SALE', nativeTransfers: [{ fromUserAccount: 'Buyer', toUserAccount: W, amount: 3e9 }], tokenTransfers: [{ fromUserAccount: 'MEescrow', toUserAccount: 'Buyer', tokenAmount: 1, mint: 'MintA' }], events: { nft: { type: 'NFT_SALE', buyer: 'Buyer', seller: W, amount: 3e9, nfts: [{ mint: 'MintA' }] } } });
+    const movements = [buy, listing, fill].flatMap((x) => normalizeSolanaTx(W, x, new Map(), assets).movements);
+    const report = buildCashflowReport({
+      movements,
+      fees: [],
+      wallets: [{ chain: 'solana', address: W }],
+      pricer: { usdPerUnit: () => 100 },
+      coverage: [],
+      notes: [],
+      now: new Date(),
+    });
+    const c = report.collections[0];
+    expect(c).toMatchObject({ buyCount: 1, sellCount: 1, qtySoldWithoutBasis: 0 });
+    expect(c.realizedPnlUsd).toBeCloseTo(200); // bought 1 SOL, sold 3 SOL @ $100
+    expect(c.realizedPnlNative).toBeCloseTo(2);
+  });
+});

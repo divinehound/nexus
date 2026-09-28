@@ -376,6 +376,7 @@ export class CashflowService {
           transfers: r.transfers,
           truncated: r.truncated,
           error: null,
+          stats: r.stats,
         });
       } catch (err) {
         const message = (err as Error).message;
