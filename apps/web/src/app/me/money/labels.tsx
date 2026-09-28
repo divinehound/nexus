@@ -7,7 +7,13 @@ import type {
   CashflowReport,
   CashflowTxNote,
 } from '@nexus/types';
-import { addCashflowContactLabel, removeCashflowContactLabel, setCashflowTxNote } from '@/lib/api';
+import {
+  addCashflowContactLabel,
+  addCashflowContactLabels,
+  removeCashflowContactLabel,
+  removeCashflowContactLabels,
+  setCashflowTxNote,
+} from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { useCashflowActions } from './actions';
 import { flagKey } from './flags';
@@ -351,14 +357,54 @@ export function TransfersTable({
   showAddress?: boolean;
 }) {
   const [limit, setLimit] = useState(50);
+  // Selected transfers (by tx — a name is per transaction), for naming several at once.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const sorted = [...rows].sort((a, b) => b.at.localeCompare(a.at));
   const notes = notesByTx(report);
+  const shown = sorted.slice(0, limit);
+  const shownKeys = [...new Set(shown.map((t) => flagKey(t.chain, t.txHash)))];
+  const allShown = shownKeys.length > 0 && shownKeys.every((k) => selected.has(k));
+  const toggle = (key: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const picked = sorted.filter((t) => selected.has(flagKey(t.chain, t.txHash)));
   return (
     <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-3">
+      {selected.size > 0 && (
+        <BulkNameBar
+          targets={[...new Map(picked.map((t) => [flagKey(t.chain, t.txHash), t])).values()].map(
+            (t) => ({ kind: 'tx' as const, chain: t.chain, ref: t.txHash }),
+          )}
+          report={report}
+          onDone={() => setSelected(new Set())}
+        />
+      )}
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead className="text-left text-gray-500">
             <tr>
+              <th className="w-6 py-1.5 pr-2">
+                <input
+                  type="checkbox"
+                  checked={allShown}
+                  onChange={() =>
+                    setSelected((prev) => {
+                      const next = new Set(prev);
+                      for (const k of shownKeys) {
+                        if (allShown) next.delete(k);
+                        else next.add(k);
+                      }
+                      return next;
+                    })
+                  }
+                  aria-label={allShown ? 'Unselect all' : 'Select all to name them together'}
+                  title={allShown ? 'Unselect all' : 'Select all to name them together'}
+                />
+              </th>
               <th className="py-1.5 pr-3 font-medium">Date</th>
               {showAddress && <th className="py-1.5 pr-3 font-medium">Address</th>}
               <th className="py-1.5 pr-3 font-medium">Direction</th>
@@ -371,9 +417,11 @@ export function TransfersTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/60">
-            {sorted.slice(0, limit).map((t, i) => (
+            {shown.map((t, i) => (
               <TransferLine
                 key={`${t.chain}:${t.txHash}:${t.address}:${i}`}
+                selected={selected.has(flagKey(t.chain, t.txHash))}
+                onToggle={() => toggle(flagKey(t.chain, t.txHash))}
                 t={t}
                 report={report}
                 note={notes.get(flagKey(t.chain, t.txHash))}
@@ -397,12 +445,101 @@ export function TransfersTable({
   );
 }
 
+export interface ContactTarget {
+  kind: 'address' | 'tx';
+  chain: string;
+  ref: string;
+}
+
+/** Name every selected address or transfer at once, or clear the names they have. */
+export function BulkNameBar({
+  targets,
+  report,
+  onDone,
+}: {
+  targets: ContactTarget[];
+  report: CashflowReport;
+  onDone: () => void;
+}) {
+  const { run, busy } = useCashflowActions();
+  const [name, setName] = useState('');
+  const named = targets
+    .map((t) => findContactLabel(report, t.kind, t.chain, t.ref))
+    .filter((l): l is CashflowContactLabel => !!l);
+  const n = targets.length;
+  const noun = (count: number) =>
+    targets[0]?.kind === 'address'
+      ? `address${count === 1 ? '' : 'es'}`
+      : `transfer${count === 1 ? '' : 's'}`;
+  return (
+    <form
+      className="mb-2 flex flex-wrap items-center gap-2 rounded-md bg-purple-500/10 px-2 py-1.5 text-xs"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void run(`Named ${n} ${noun(n)} “${name.trim()}”`, (tk, view) =>
+          addCashflowContactLabels(tk, { targets, label: name }, view),
+        ).then((ok) => ok && onDone());
+      }}
+    >
+      <span className="text-purple-200">
+        {n} {noun(n)} selected
+      </span>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        list={CONTACT_NAMES_LIST}
+        maxLength={100}
+        placeholder="Who is this? e.g. Bob"
+        aria-label={`Name for the selected ${noun(2)}`}
+        className="w-48 rounded-md border border-gray-700 bg-gray-900 px-2 py-0.5 text-gray-200"
+      />
+      <button
+        type="submit"
+        disabled={busy || !name.trim()}
+        className="rounded-md bg-purple-600 px-2 py-0.5 text-white hover:bg-purple-500 disabled:opacity-50"
+      >
+        Name them
+      </button>
+      {named.length > 0 && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            void run(`Cleared ${named.length} name${named.length === 1 ? '' : 's'}`, (tk, view) =>
+              removeCashflowContactLabels(
+                tk,
+                named.map((l) => l.id),
+                view,
+              ),
+            ).then((ok) => ok && onDone())
+          }
+          title={
+            targets[0]?.kind === 'tx'
+              ? 'Remove the names given to these transfers (names on their addresses stay)'
+              : 'Remove the names on these addresses'
+          }
+          className="text-red-300 hover:text-red-200 disabled:opacity-50"
+        >
+          Clear their names
+        </button>
+      )}
+      <button type="button" onClick={onDone} className="ml-auto text-gray-400 hover:text-white">
+        Unselect
+      </button>
+    </form>
+  );
+}
+
 function TransferLine({
   t,
   report,
   note,
   showAddress,
+  selected,
+  onToggle,
 }: {
+  selected: boolean;
+  onToggle: () => void;
   t: TransferRow;
   report: CashflowReport;
   note: CashflowTxNote | undefined;
@@ -435,10 +572,18 @@ function TransferLine({
         ]
       : []),
   ];
-  const cols = showAddress ? 7 : 6;
+  const cols = showAddress ? 8 : 7;
   return (
     <Fragment>
-      <tr className="align-top">
+      <tr className={cn('align-top', selected && 'bg-purple-500/5')}>
+        <td className="py-1.5 pr-2">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggle}
+            aria-label="Select this transfer"
+          />
+        </td>
         <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
           {new Date(t.at).toLocaleDateString()}
           <div className="text-gray-600">{CHAIN_LABELS[t.chain] ?? t.chain}</div>

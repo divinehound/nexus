@@ -536,14 +536,29 @@ export class CashflowService {
   }
 
   async addContactLabel(userId: string, input: ContactLabelInput, view: ReportView = {}): Promise<CashflowResponse> {
-    const label = input.label.trim().replace(/\s+/g, ' ');
+    return this.addContactLabels(userId, [input], input.label, view);
+  }
+
+  /** One person name on many addresses/transfers (replacing any name they had). */
+  async addContactLabels(
+    userId: string,
+    targets: Array<Omit<ContactLabelInput, 'label'>>,
+    rawLabel: string,
+    view: ReportView = {},
+  ): Promise<CashflowResponse> {
+    const label = rawLabel.trim().replace(/\s+/g, ' ');
     if (!label) throw new BadRequestException('Enter a name');
-    const evm = input.chain !== 'solana';
-    const scope = input.kind === 'address' ? (evm ? 'evm' : 'solana') : input.chain;
-    const ref = evm ? input.ref.toLowerCase() : input.ref;
+    const rows = new Map<string, { userId: string; kind: string; scope: string; ref: string; label: string }>();
+    for (const t of targets) {
+      const evm = t.chain !== 'solana';
+      const scope = t.kind === 'address' ? (evm ? 'evm' : 'solana') : t.chain;
+      const ref = evm ? t.ref.toLowerCase() : t.ref;
+      // Postgres rejects an upsert that touches the same row twice.
+      rows.set(`${t.kind}|${scope}|${ref}`, { userId, kind: t.kind, scope, ref, label });
+    }
     await this.db
       .insert(cashflowContactLabels)
-      .values({ userId, kind: input.kind, scope, ref, label })
+      .values([...rows.values()])
       .onConflictDoUpdate({
         target: [
           cashflowContactLabels.userId,
@@ -557,9 +572,13 @@ export class CashflowService {
   }
 
   async removeContactLabel(userId: string, id: string, view: ReportView = {}): Promise<CashflowResponse> {
+    return this.removeContactLabels(userId, [id], view);
+  }
+
+  async removeContactLabels(userId: string, ids: string[], view: ReportView = {}): Promise<CashflowResponse> {
     await this.db
       .delete(cashflowContactLabels)
-      .where(and(eq(cashflowContactLabels.userId, userId), eq(cashflowContactLabels.id, id)));
+      .where(and(eq(cashflowContactLabels.userId, userId), inArray(cashflowContactLabels.id, ids)));
     return this.rebuild(userId, view);
   }
 

@@ -821,6 +821,27 @@ export function removeCashflowContactLabel(token: string, id: string, view: Cash
   );
 }
 
+/** One person name on many addresses/transfers at once. */
+export function addCashflowContactLabels(
+  token: string,
+  input: { targets: Array<{ kind: 'address' | 'tx'; chain: string; ref: string }>; label: string },
+  view: CashflowView = {},
+) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/contact-labels/batch${cashflowQuery(view)}`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+export function removeCashflowContactLabels(token: string, ids: string[], view: CashflowView = {}) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/contact-labels/remove${cashflowQuery(view)}`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify({ ids }),
+  });
+}
+
 /** Save your note on a transaction; an empty note removes it. */
 export function setCashflowTxNote(
   token: string,

@@ -78,3 +78,33 @@ export function Dual({
     </>
   );
 }
+
+/** A small "open in explorer" icon link, placed after a name or address. */
+export function ExplorerIcon({ url, label }: { url: string; label: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={label}
+      aria-label={label}
+      className="inline-flex shrink-0 text-gray-500 hover:text-purple-300"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        width="12"
+        height="12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        aria-hidden="true"
+      >
+        <path
+          d="M6.5 3.5H3.75a.75.75 0 0 0-.75.75v8c0 .41.34.75.75.75h8c.41 0 .75-.34.75-.75V9.5"
+          strokeLinecap="round"
+        />
+        <path d="M9.5 2.75h3.75v3.75M13 3 7.5 8.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </a>
+  );
+}

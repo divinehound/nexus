@@ -3,7 +3,7 @@ import { validateSync } from 'class-validator';
 import { relayRequestToLink } from './relay-links.fetcher';
 import { sweepTarget } from './cashflow.service';
 import { EVM_EXCHANGE_WALLETS } from './exchange-wallets';
-import { AddressTagDto, TxLinkDto } from './cashflow.controller';
+import { AddressTagDto, ContactLabelBatchDto, ContactLabelRemoveDto, TxLinkDto } from './cashflow.controller';
 
 const coinbase = [...EVM_EXCHANGE_WALLETS].filter(([, name]) => name === 'Coinbase').map(([a]) => a);
 const binance = [...EVM_EXCHANGE_WALLETS].filter(([, name]) => name === 'Binance').map(([a]) => a);
@@ -63,6 +63,14 @@ describe('request validation', () => {
       ['kind', 'fromChain', 'fromTxHash'],
     );
     expect(errors(AddressTagDto, { chain: 'base', address: '0x123', exchange: '' })).toEqual(['address', 'exchange']);
+  });
+
+  it('checks every target when naming many transfers at once', () => {
+    const tx = (ref: string, chain = 'ethereum') => ({ kind: 'tx', chain, ref });
+    expect(errors(ContactLabelBatchDto, { targets: [tx('0x' + 'a'.repeat(64)), tx('5'.repeat(87), 'solana')], label: 'Bob' })).toEqual([]);
+    expect(errors(ContactLabelBatchDto, { targets: [tx('0x' + 'a'.repeat(64)), tx("0x'; drop")], label: 'Bob' })).toEqual(['targets']);
+    expect(errors(ContactLabelBatchDto, { targets: [], label: '' })).toEqual(['targets', 'label']);
+    expect(errors(ContactLabelRemoveDto, { ids: ['not-a-uuid'] })).toEqual(['ids']);
   });
 });
 
