@@ -7,16 +7,21 @@ import {
   addWatchedWallet,
   getMyCashflow,
   removeCashflowAddressTag,
+  removeCashflowContactLabel,
 } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { useCashflowActions } from './actions';
 import { IN_COLOR, OUT_COLOR } from './cashflow-chart';
 import { CHAIN_LABELS, addressExplorerUrl, pnlClass, usd, usdSigned } from './format';
 import {
-  ContactLabelControl,
+  ContactChip,
+  ContactNameEditor,
   ContactNameOptions,
+  RowMenu,
   TransfersTable,
+  contactMenuItems,
   findContactLabel,
+  type MenuItem,
   type TransferRow,
 } from './labels';
 import { Stat } from './ui';
@@ -166,7 +171,7 @@ export function CounterpartiesTable({ report }: { report: CashflowReport }) {
 
 function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: CashflowReport }) {
   const { run, busy } = useCashflowActions();
-  const [tagging, setTagging] = useState(false);
+  const [editing, setEditing] = useState<'name' | 'tag' | null>(null);
   const [exchange, setExchange] = useState(report.exchangeNames[0] ?? 'Coinbase');
   const url = addressExplorerUrl(c.chain, c.address);
   const family = c.chain === 'solana' ? 'solana' : 'evm';
@@ -187,95 +192,103 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
   const canWatch = canTag && !own && c.exchangeSource !== 'known' && !tag;
   const count = c.sentCount + c.receivedCount;
 
+  const addWatched = () => {
+    if (
+      !window.confirm(
+        `Add ${truncateAddress(c.address)} as one of your wallets (watch-only)? It will be scanned and counted as part of your portfolio.`,
+      )
+    )
+      return;
+    void run('Added as your watch-only wallet — scanning it now', async (token, view) => {
+      await addWatchedWallet(token, {
+        family,
+        address: c.address,
+        label: nameLabel?.label ?? undefined,
+      });
+      return getMyCashflow(token, false, view);
+    });
+  };
+  // An exchange's public wallet is shared by all its customers: no names or tags on it, only per transfer.
+  const personal = canTag && c.exchangeSource !== 'known';
+  const items: MenuItem[] = [
+    ...(personal
+      ? contactMenuItems(
+          nameLabel,
+          'address',
+          () => setEditing('name'),
+          (id) =>
+            void run('Name removed', (token, view) => removeCashflowContactLabel(token, id, view)),
+        )
+      : []),
+    ...(tag
+      ? [
+          {
+            label: 'Remove exchange tag',
+            danger: true,
+            onSelect: () =>
+              void run('Tag removed', (token, view) =>
+                removeCashflowAddressTag(token, tag.id, view),
+              ),
+          },
+        ]
+      : personal
+        ? [
+            {
+              label: c.exchange ? 'Wrong exchange? Retag…' : 'This is my exchange account…',
+              onSelect: () => setEditing('tag'),
+            },
+          ]
+        : []),
+    ...(canWatch
+      ? [
+          {
+            label: 'This is my wallet (watch-only)…',
+            title:
+              "Counts it as yours (moves to/from it aren't spending) and scans it for its own trades. It can't be used to sign in.",
+            onSelect: addWatched,
+          },
+        ]
+      : []),
+  ];
+
   return (
     <Fragment>
       <tr className="align-top">
         <td className="py-2 pr-4">
-          {url && canTag ? (
-            <a
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="font-mono text-gray-200 hover:text-purple-300"
-            >
-              {c.address.length > 16 ? truncateAddress(c.address) : c.address}
-            </a>
-          ) : (
-            <span className="font-mono text-gray-200">{c.address}</span>
-          )}
+          <div className="flex items-center gap-1">
+            {url && canTag ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-gray-200 hover:text-purple-300"
+              >
+                {c.address.length > 16 ? truncateAddress(c.address) : c.address}
+              </a>
+            ) : (
+              <span className="font-mono text-gray-200">{c.address}</span>
+            )}
+            <RowMenu items={items} label="Address actions" />
+          </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-gray-500">
             <span>{CHAIN_LABELS[c.chain] ?? c.chain}</span>
-            {canTag && c.exchangeSource !== 'known' && (
-              <ContactLabelControl
-                key={nameLabel?.id ?? 'none'}
-                kind="address"
-                chain={c.chain}
-                refValue={c.address}
-                label={nameLabel}
-              />
-            )}
+            {nameLabel && <ContactChip name={nameLabel.label} />}
             {c.exchange && (
               <span className="rounded bg-purple-500/15 px-1.5 py-0.5 text-purple-200">
                 {c.exchange} · {c.exchangeSource ? SOURCE_LABELS[c.exchangeSource] : ''}
               </span>
             )}
-            {tag ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() =>
-                  void run('Tag removed', (token, view) =>
-                    removeCashflowAddressTag(token, tag.id, view),
-                  )
-                }
-                className="text-gray-400 hover:text-white disabled:opacity-50"
-              >
-                Remove tag
-              </button>
-            ) : (
-              canTag &&
-              c.exchangeSource !== 'known' &&
-              !tagging && (
-                <button
-                  type="button"
-                  onClick={() => setTagging(true)}
-                  className="text-purple-300 hover:text-purple-200"
-                >
-                  {c.exchange ? 'Not right?' : 'This is my exchange account'}
-                </button>
-              )
-            )}
-            {canWatch && (
-              <button
-                type="button"
-                disabled={busy}
-                title="Add it as a watch-only wallet: it counts as yours (moves to/from it aren't spending) and is scanned for its own trades. It can't be used to sign in."
-                onClick={() => {
-                  if (
-                    !window.confirm(
-                      `Add ${truncateAddress(c.address)} as one of your wallets (watch-only)? It will be scanned and counted as part of your portfolio.`,
-                    )
-                  )
-                    return;
-                  void run(
-                    'Added as your watch-only wallet — scanning it now',
-                    async (token, view) => {
-                      await addWatchedWallet(token, {
-                        family,
-                        address: c.address,
-                        label: nameLabel?.label ?? undefined,
-                      });
-                      return getMyCashflow(token, false, view);
-                    },
-                  );
-                }}
-                className="text-emerald-300 hover:text-emerald-200 disabled:opacity-50"
-              >
-                This is my wallet
-              </button>
-            )}
           </div>
-          {tagging && (
+          {editing === 'name' && (
+            <ContactNameEditor
+              kind="address"
+              chain={c.chain}
+              refValue={c.address}
+              initial={nameLabel?.label ?? ''}
+              onDone={() => setEditing(null)}
+            />
+          )}
+          {editing === 'tag' && (
             <form
               className="mt-2 flex flex-wrap items-center gap-2"
               onSubmit={(e) => {
@@ -286,7 +299,7 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
                     { chain: c.chain, address: c.address, exchange },
                     view,
                   ),
-                ).then((ok) => ok && setTagging(false));
+                ).then((ok) => ok && setEditing(null));
               }}
             >
               <select
@@ -310,7 +323,7 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
               </button>
               <button
                 type="button"
-                onClick={() => setTagging(false)}
+                onClick={() => setEditing(null)}
                 className="text-xs text-gray-400 hover:text-white"
               >
                 Cancel

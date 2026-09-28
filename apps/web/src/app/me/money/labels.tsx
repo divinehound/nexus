@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type {
   CashflowContactLabel,
   CashflowCounterpartyTransfer,
@@ -54,218 +54,283 @@ export function ContactNameOptions({ report }: { report: CashflowReport }) {
   );
 }
 
+export interface MenuItem {
+  label: string;
+  onSelect: () => void;
+  title?: string;
+  danger?: boolean;
+}
+
 /**
- * Names the person behind an address, or behind one transfer. A transfer's
- * own name beats its address's — for someone paying from a shared exchange
- * wallet, or a wallet more than one person used.
+ * A "⋯" button opening a short list of actions, so rows show their data and
+ * keep the actions out of the way. Positioned fixed so scrolling tables don't
+ * clip it; closes on outside click, Escape, scroll or resize.
  */
-export function ContactLabelControl({
+export function RowMenu({ items, label = 'Actions' }: { items: MenuItem[]; label?: string }) {
+  // Opens toward the side with room: from the button's left edge on the left half of the screen, else its right edge.
+  const [pos, setPos] = useState<{ top: number; left?: number; right?: number } | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!pos) return;
+    const close = () => setPos(null);
+    const onDown = (e: MouseEvent) => {
+      if (!menu.current?.contains(e.target as Node) && !button.current?.contains(e.target as Node))
+        close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        close();
+        button.current?.focus();
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    menu.current?.querySelector('button')?.focus();
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [pos]);
+
+  if (items.length === 0) return null;
+  return (
+    <>
+      <button
+        ref={button}
+        type="button"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={!!pos}
+        title={label}
+        onClick={() => {
+          if (pos) return setPos(null);
+          const r = button.current!.getBoundingClientRect();
+          setPos(
+            r.left < window.innerWidth / 2
+              ? { top: r.bottom + 4, left: Math.max(8, r.left) }
+              : { top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) },
+          );
+        }}
+        className="rounded px-1.5 leading-5 text-gray-500 hover:bg-gray-800 hover:text-white"
+      >
+        ⋯
+      </button>
+      {pos && (
+        <div
+          ref={menu}
+          role="menu"
+          style={pos}
+          className="fixed z-50 min-w-48 rounded-lg border border-gray-700 bg-gray-900 py-1 text-left text-xs shadow-xl"
+        >
+          {items.map((it) => (
+            <button
+              key={it.label}
+              type="button"
+              role="menuitem"
+              title={it.title}
+              onClick={() => {
+                setPos(null);
+                it.onSelect();
+              }}
+              className={cn(
+                'block w-full whitespace-nowrap px-3 py-1.5 text-left hover:bg-gray-800 focus:bg-gray-800 focus:outline-none',
+                it.danger ? 'text-red-300' : 'text-gray-200',
+              )}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** A person's name as shown on a row: solid when set here, faded when it comes from the address. */
+export function ContactChip({ name, inherited }: { name: string; inherited?: boolean }) {
+  return (
+    <span
+      className={cn(
+        'rounded px-1.5 py-0.5 text-xs',
+        inherited ? 'bg-sky-500/10 text-sky-300/80' : 'bg-sky-500/15 text-sky-200',
+      )}
+      title={inherited ? 'Named on the address' : undefined}
+    >
+      👤 {name}
+    </span>
+  );
+}
+
+/** Form naming the person behind an address (every transfer with it) or one transfer. */
+export function ContactNameEditor({
   kind,
   chain,
   refValue,
-  label,
-  inherited,
-  compact,
+  initial,
+  onDone,
 }: {
   kind: 'address' | 'tx';
   chain: string;
   /** The address, or the tx hash. */
   refValue: string;
-  label: CashflowContactLabel | undefined;
-  /** For a transfer with no name of its own: the name it gets from its address. */
-  inherited?: string | null;
-  compact?: boolean;
+  initial: string;
+  onDone: () => void;
 }) {
   const { run, busy } = useCashflowActions();
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(label?.label ?? '');
+  const [name, setName] = useState(initial);
   const what = kind === 'address' ? 'this address' : 'this transfer';
-
-  if (editing) {
-    return (
-      <form
-        className="inline-flex flex-wrap items-center gap-1.5"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void run(`Named ${what} “${name.trim()}”`, (t, view) =>
-            addCashflowContactLabel(t, { kind, chain, ref: refValue, label: name }, view),
-          ).then((ok) => ok && setEditing(false));
-        }}
-      >
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          list={CONTACT_NAMES_LIST}
-          maxLength={100}
-          autoFocus
-          placeholder="Who is this? e.g. Bob"
-          aria-label={`Name for ${what}`}
-          className="w-36 rounded-md border border-gray-700 bg-gray-900 px-2 py-0.5 text-xs text-gray-200"
-        />
-        <button
-          type="submit"
-          disabled={busy || !name.trim()}
-          className="rounded-md bg-purple-600 px-2 py-0.5 text-xs text-white hover:bg-purple-500 disabled:opacity-50"
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          onClick={() => setEditing(false)}
-          className="text-xs text-gray-400 hover:text-white"
-        >
-          Cancel
-        </button>
-      </form>
-    );
-  }
-
-  if (label) {
-    return (
-      <span className="inline-flex flex-wrap items-center gap-1.5">
-        <button
-          type="button"
-          onClick={() => {
-            setName(label.label);
-            setEditing(true);
-          }}
-          title={`Rename — ${kind === 'address' ? 'applies to every transfer with this address' : 'just this transfer'}`}
-          className="rounded bg-sky-500/15 px-1.5 py-0.5 text-xs text-sky-200 hover:bg-sky-500/25"
-        >
-          👤 {label.label}
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() =>
-            void run('Name removed', (t, view) => removeCashflowContactLabel(t, label.id, view))
-          }
-          title="Remove this name"
-          aria-label="Remove this name"
-          className="text-xs text-gray-500 hover:text-white disabled:opacity-50"
-        >
-          ×
-        </button>
-      </span>
-    );
-  }
-
   return (
-    <span className="inline-flex flex-wrap items-center gap-1.5">
-      {inherited && (
-        <span
-          className="rounded bg-sky-500/10 px-1.5 py-0.5 text-xs text-sky-300/80"
-          title="Named on the address"
-        >
-          👤 {inherited}
-        </span>
-      )}
+    <form
+      className="mt-1.5 flex flex-wrap items-center gap-1.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void run(`Named ${what} “${name.trim()}”`, (t, view) =>
+          addCashflowContactLabel(t, { kind, chain, ref: refValue, label: name }, view),
+        ).then((ok) => ok && onDone());
+      }}
+    >
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        list={CONTACT_NAMES_LIST}
+        maxLength={100}
+        autoFocus
+        placeholder="Who is this? e.g. Bob"
+        aria-label={`Name for ${what}`}
+        className="w-40 rounded-md border border-gray-700 bg-gray-900 px-2 py-0.5 text-xs text-gray-200"
+      />
       <button
-        type="button"
-        onClick={() => {
-          setName(inherited ?? '');
-          setEditing(true);
-        }}
-        title={
-          kind === 'address'
-            ? 'Name the person behind this address — all their transfers add up under that name'
-            : 'Name who this one transfer was with (e.g. a friend paying from their exchange account). Naming a transfer from an exchange counts it as their money, not yours.'
-        }
-        className={cn(
-          'text-xs underline-offset-2 hover:underline',
-          compact ? 'text-gray-500 hover:text-sky-300' : 'text-sky-300 hover:text-sky-200',
-        )}
+        type="submit"
+        disabled={busy || !name.trim()}
+        className="rounded-md bg-purple-600 px-2 py-0.5 text-xs text-white hover:bg-purple-500 disabled:opacity-50"
       >
-        {inherited ? 'Different person?' : kind === 'address' ? 'Name who this is…' : 'Name…'}
+        Save
       </button>
-    </span>
+      <button type="button" onClick={onDone} className="text-xs text-gray-400 hover:text-white">
+        Cancel
+      </button>
+      <span className="text-[11px] text-gray-500">
+        {kind === 'address'
+          ? 'Applies to every transfer with this address.'
+          : 'Just this transfer. Naming a transfer from an exchange counts it as their money, not yours.'}
+      </span>
+    </form>
   );
 }
 
-/** Your note on a transaction: shown inline, edited in place. */
+/** Form for your note on a transaction; saving it empty removes it. */
+export function NoteEditor({
+  chain,
+  txHash,
+  initial,
+  onDone,
+}: {
+  chain: string;
+  txHash: string;
+  initial: string;
+  onDone: () => void;
+}) {
+  const { run, busy } = useCashflowActions();
+  const [text, setText] = useState(initial);
+  return (
+    <form
+      className="mt-1.5 flex w-full flex-wrap items-start gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void run(text.trim() ? 'Note saved' : 'Note removed', (t, view) =>
+          setCashflowTxNote(t, { chain, txHash, note: text }, view),
+        ).then((ok) => ok && onDone());
+      }}
+    >
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        maxLength={2000}
+        rows={2}
+        autoFocus
+        placeholder="Your note on this transaction"
+        aria-label="Note"
+        className="min-w-64 flex-1 rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          type="submit"
+          disabled={busy}
+          className="rounded-md bg-purple-600 px-2 py-1 text-xs text-white hover:bg-purple-500 disabled:opacity-50"
+        >
+          Save
+        </button>
+        <button type="button" onClick={onDone} className="text-xs text-gray-400 hover:text-white">
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** Menu items to name/rename/unname an address or transfer. */
+export function contactMenuItems(
+  label: CashflowContactLabel | undefined,
+  kind: 'address' | 'tx',
+  onEdit: () => void,
+  remove: (id: string) => void,
+  inherited?: string | null,
+): MenuItem[] {
+  if (label)
+    return [
+      { label: `Rename “${label.label}”…`, onSelect: onEdit },
+      { label: 'Remove name', onSelect: () => remove(label.id), danger: true },
+    ];
+  if (kind === 'tx')
+    return [
+      {
+        label: inherited ? 'A different person…' : 'Name who this was with…',
+        onSelect: onEdit,
+        title: 'e.g. a friend paying from their exchange account',
+      },
+    ];
+  return [{ label: 'Name who this is…', onSelect: onEdit }];
+}
+
+/** Your note in a details panel: shown, with an edit/add link. */
 export function TxNoteControl({
   chain,
   txHash,
   note,
-  compact,
 }: {
   chain: string;
   txHash: string;
   note: CashflowTxNote | undefined;
-  compact?: boolean;
 }) {
-  const { run, busy } = useCashflowActions();
   const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(note?.note ?? '');
-
-  if (editing) {
+  if (editing)
     return (
-      <form
-        className="mt-1 flex w-full flex-wrap items-start gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void run(text.trim() ? 'Note saved' : 'Note removed', (t, view) =>
-            setCashflowTxNote(t, { chain, txHash, note: text }, view),
-          ).then((ok) => ok && setEditing(false));
-        }}
-      >
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          maxLength={2000}
-          rows={2}
-          autoFocus
-          placeholder="Your note on this transaction"
-          aria-label="Note"
-          className="min-w-64 flex-1 rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200"
-        />
-        <div className="flex items-center gap-2">
-          <button
-            type="submit"
-            disabled={busy}
-            className="rounded-md bg-purple-600 px-2 py-1 text-xs text-white hover:bg-purple-500 disabled:opacity-50"
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            onClick={() => setEditing(false)}
-            className="text-xs text-gray-400 hover:text-white"
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
+      <NoteEditor
+        chain={chain}
+        txHash={txHash}
+        initial={note?.note ?? ''}
+        onDone={() => setEditing(false)}
+      />
     );
-  }
-  if (note) {
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          setText(note.note);
-          setEditing(true);
-        }}
-        title="Edit note"
-        className="whitespace-pre-wrap text-left text-xs italic text-amber-200/90 hover:text-amber-100"
-      >
-        📝 {note.note}
-      </button>
-    );
-  }
   return (
     <button
       type="button"
-      onClick={() => {
-        setText('');
-        setEditing(true);
-      }}
+      onClick={() => setEditing(true)}
+      title={note ? 'Edit note' : undefined}
       className={cn(
-        'text-xs underline-offset-2 hover:underline',
-        compact ? 'text-gray-500 hover:text-amber-200' : 'text-gray-400 hover:text-amber-200',
+        'whitespace-pre-wrap text-left text-xs',
+        note
+          ? 'italic text-amber-200/90 hover:text-amber-100'
+          : 'text-gray-400 underline-offset-2 hover:text-amber-200 hover:underline',
       )}
     >
-      📝 Add note
+      📝 {note ? note.note : 'Add note'}
     </button>
   );
 }
@@ -274,7 +339,7 @@ export type TransferRow = CashflowCounterpartyTransfer & { address: string };
 
 /**
  * Transfers one by one (for an address, an exchange or a person), each with
- * its person name and your note.
+ * its person name and your note; actions sit in a ⋯ menu per row.
  */
 export function TransfersTable({
   rows,
@@ -285,9 +350,9 @@ export function TransfersTable({
   report: CashflowReport;
   showAddress?: boolean;
 }) {
-  const notes = notesByTx(report);
   const [limit, setLimit] = useState(50);
   const sorted = [...rows].sort((a, b) => b.at.localeCompare(a.at));
+  const notes = notesByTx(report);
   return (
     <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-3">
       <div className="overflow-x-auto">
@@ -299,79 +364,22 @@ export function TransfersTable({
               <th className="py-1.5 pr-3 font-medium">Direction</th>
               <th className="py-1.5 pr-3 text-right font-medium">Amount</th>
               <th className="py-1.5 pr-3 text-right font-medium">USD</th>
-              <th className="py-1.5 pr-3 font-medium">Who</th>
-              <th className="py-1.5 font-medium">Note</th>
+              <th className="py-1.5 pr-3 font-medium">Who · note</th>
+              <th className="w-6 py-1.5">
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/60">
-            {sorted.slice(0, limit).map((t, i) => {
-              const url = txExplorerUrl(t.chain, t.txHash);
-              const own = findContactLabel(report, 'tx', t.chain, t.txHash);
-              const inherited = findContactLabel(report, 'address', t.chain, t.address)?.label;
-              return (
-                <tr key={`${t.chain}:${t.txHash}:${t.address}:${i}`} className="align-top">
-                  <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
-                    {new Date(t.at).toLocaleDateString()}
-                    <div className="text-gray-600">{CHAIN_LABELS[t.chain] ?? t.chain}</div>
-                  </td>
-                  {showAddress && (
-                    <td className="py-1.5 pr-3 font-mono text-gray-300">
-                      {t.address.length > 16 ? truncateAddress(t.address) : t.address}
-                    </td>
-                  )}
-                  <td
-                    className={cn(
-                      'whitespace-nowrap py-1.5 pr-3',
-                      t.direction === 'in' ? 'text-sky-300' : 'text-orange-300',
-                    )}
-                  >
-                    {url ? (
-                      <a
-                        href={url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title={`Open this transaction on ${explorerName(t.chain)}`}
-                        className="underline decoration-gray-600 underline-offset-2 hover:text-purple-300"
-                      >
-                        {t.direction === 'in' ? '← Received' : '→ Sent'}{' '}
-                        <span aria-hidden="true">↗</span>
-                      </a>
-                    ) : t.direction === 'in' ? (
-                      '← Received'
-                    ) : (
-                      '→ Sent'
-                    )}
-                    {t.exchange && <div className="text-gray-500">{t.exchange} account</div>}
-                  </td>
-                  <td className="whitespace-nowrap py-1.5 pr-3 text-right tabular-nums text-gray-200">
-                    {qty(t.amount)} {t.symbol ?? ''}
-                  </td>
-                  <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
-                    {usd(t.usd)}
-                  </td>
-                  <td className="py-1.5 pr-3">
-                    <ContactLabelControl
-                      key={own?.id ?? 'none'}
-                      kind="tx"
-                      chain={t.chain}
-                      refValue={t.txHash}
-                      label={own}
-                      inherited={inherited}
-                      compact
-                    />
-                  </td>
-                  <td className="py-1.5">
-                    <TxNoteControl
-                      key={notes.get(flagKey(t.chain, t.txHash))?.updatedAt ?? 'none'}
-                      chain={t.chain}
-                      txHash={t.txHash}
-                      note={notes.get(flagKey(t.chain, t.txHash))}
-                      compact
-                    />
-                  </td>
-                </tr>
-              );
-            })}
+            {sorted.slice(0, limit).map((t, i) => (
+              <TransferLine
+                key={`${t.chain}:${t.txHash}:${t.address}:${i}`}
+                t={t}
+                report={report}
+                note={notes.get(flagKey(t.chain, t.txHash))}
+                showAddress={showAddress}
+              />
+            ))}
           </tbody>
         </table>
       </div>
@@ -386,5 +394,126 @@ export function TransfersTable({
       )}
       {sorted.length === 0 && <p className="py-3 text-center text-gray-500">Nothing here.</p>}
     </div>
+  );
+}
+
+function TransferLine({
+  t,
+  report,
+  note,
+  showAddress,
+}: {
+  t: TransferRow;
+  report: CashflowReport;
+  note: CashflowTxNote | undefined;
+  showAddress?: boolean;
+}) {
+  const { run } = useCashflowActions();
+  const [editing, setEditing] = useState<'name' | 'note' | null>(null);
+  const url = txExplorerUrl(t.chain, t.txHash);
+  const own = findContactLabel(report, 'tx', t.chain, t.txHash);
+  const inherited = findContactLabel(report, 'address', t.chain, t.address)?.label ?? null;
+  const items: MenuItem[] = [
+    ...contactMenuItems(
+      own,
+      'tx',
+      () => setEditing('name'),
+      (id) => void run('Name removed', (tk, view) => removeCashflowContactLabel(tk, id, view)),
+      inherited,
+    ),
+    { label: note ? 'Edit note…' : 'Add note…', onSelect: () => setEditing('note') },
+    ...(note
+      ? [
+          {
+            label: 'Remove note',
+            danger: true,
+            onSelect: () =>
+              void run('Note removed', (tk, view) =>
+                setCashflowTxNote(tk, { chain: t.chain, txHash: t.txHash, note: '' }, view),
+              ),
+          },
+        ]
+      : []),
+  ];
+  const cols = showAddress ? 7 : 6;
+  return (
+    <Fragment>
+      <tr className="align-top">
+        <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
+          {new Date(t.at).toLocaleDateString()}
+          <div className="text-gray-600">{CHAIN_LABELS[t.chain] ?? t.chain}</div>
+        </td>
+        {showAddress && (
+          <td className="py-1.5 pr-3 font-mono text-gray-300">
+            {t.address.length > 16 ? truncateAddress(t.address) : t.address}
+          </td>
+        )}
+        <td
+          className={cn(
+            'whitespace-nowrap py-1.5 pr-3',
+            t.direction === 'in' ? 'text-sky-300' : 'text-orange-300',
+          )}
+        >
+          {url ? (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`Open this transaction on ${explorerName(t.chain)}`}
+              className="underline decoration-gray-600 underline-offset-2 hover:text-purple-300"
+            >
+              {t.direction === 'in' ? '← Received' : '→ Sent'} <span aria-hidden="true">↗</span>
+            </a>
+          ) : t.direction === 'in' ? (
+            '← Received'
+          ) : (
+            '→ Sent'
+          )}
+          {t.exchange && <div className="text-gray-500">{t.exchange} account</div>}
+        </td>
+        <td className="whitespace-nowrap py-1.5 pr-3 text-right tabular-nums text-gray-200">
+          {qty(t.amount)} {t.symbol ?? ''}
+        </td>
+        <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">{usd(t.usd)}</td>
+        <td className="py-1.5 pr-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {own ? (
+              <ContactChip name={own.label} />
+            ) : inherited ? (
+              <ContactChip name={inherited} inherited />
+            ) : null}
+            {note && (
+              <span className="whitespace-pre-wrap italic text-amber-200/90">📝 {note.note}</span>
+            )}
+            {!own && !inherited && !note && <span className="text-gray-600">—</span>}
+          </div>
+        </td>
+        <td className="py-1.5 text-right">
+          <RowMenu items={items} label="Transfer actions" />
+        </td>
+      </tr>
+      {editing && (
+        <tr>
+          <td colSpan={cols} className="pb-2">
+            {editing === 'name' ? (
+              <ContactNameEditor
+                kind="tx"
+                chain={t.chain}
+                refValue={t.txHash}
+                initial={own?.label ?? inherited ?? ''}
+                onDone={() => setEditing(null)}
+              />
+            ) : (
+              <NoteEditor
+                chain={t.chain}
+                txHash={t.txHash}
+                initial={note?.note ?? ''}
+                onDone={() => setEditing(null)}
+              />
+            )}
+          </td>
+        </tr>
+      )}
+    </Fragment>
   );
 }
