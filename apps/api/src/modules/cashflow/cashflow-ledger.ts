@@ -130,6 +130,8 @@ interface Lot {
   gasNative: number;
   /** Cost in the chain's own coin, converted at the acquisition-day rate. */
   costNative: number;
+  /** Units whose USD cost is unknown (no USD price on the day they were bought). */
+  usdMissingQty: number;
 }
 
 /** One NFT holding period: acquired once, disposed at most once. */
@@ -150,6 +152,8 @@ interface NftTrip {
   proceedsNative: number | null;
   sellGasUsd: number;
   sellGasNative: number;
+  /** No USD price on the acquisition day — the USD cost is unknown (the coin cost is still exact). */
+  usdMissing: boolean;
 }
 
 class Position {
@@ -174,6 +178,10 @@ class Position {
   tradeGainUsd = 0;
   priceMoveUsd = 0;
   qtySoldWithoutBasis = 0;
+  /** Buys/sales that moved money but had no USD price for the day. */
+  usdPriceMissing = 0;
+  /** Sales whose USD result is known (both the sale and the purchase were priced). */
+  sellCountUsd = 0;
   firstAt: Date;
   lastAt: Date;
 
@@ -201,11 +209,20 @@ class Position {
     gasUsd = 0,
     costNative = 0,
     gasNative = 0,
+    usdMissing = false,
   ) {
     const key = this.lotKey(tokenId);
-    const lot = this.lots.get(key) ?? { qty: 0, cost: 0, gas: 0, gasNative: 0, costNative: 0 };
+    const lot = this.lots.get(key) ?? {
+      qty: 0,
+      cost: 0,
+      gas: 0,
+      gasNative: 0,
+      costNative: 0,
+      usdMissingQty: 0,
+    };
     lot.qty += qty;
     lot.cost += costUsd;
+    if (usdMissing) lot.usdMissingQty += qty;
     lot.gas += gasUsd;
     lot.gasNative += gasNative;
     lot.costNative += costNative;
@@ -216,17 +233,27 @@ class Position {
   dispose(
     qty: number,
     tokenId: string | null,
-  ): { basis: number; gas: number; gasNative: number; basisNative: number; missing: number } {
+  ): {
+    basis: number;
+    gas: number;
+    gasNative: number;
+    basisNative: number;
+    missing: number;
+    /** Units removed whose USD cost was never known. */
+    usdMissing: number;
+  } {
     const key = this.lotKey(tokenId);
     const lot = this.lots.get(key);
     if (!lot || lot.qty <= EPSILON)
-      return { basis: 0, gas: 0, gasNative: 0, basisNative: 0, missing: qty };
+      return { basis: 0, gas: 0, gasNative: 0, basisNative: 0, missing: qty, usdMissing: 0 };
     const take = Math.min(qty, lot.qty);
     const fraction = lot.qty > 0 ? take / lot.qty : 0;
     const basis = lot.cost * fraction;
     const gas = lot.gas * fraction;
     const gasNative = lot.gasNative * fraction;
     const basisNative = lot.costNative * fraction;
+    const usdMissing = lot.usdMissingQty * fraction;
+    lot.usdMissingQty -= usdMissing;
     lot.qty -= take;
     lot.cost -= basis;
     lot.gas -= gas;
@@ -234,7 +261,14 @@ class Position {
     lot.costNative -= basisNative;
     if (lot.qty <= EPSILON) this.lots.delete(key);
     const missing = qty - take;
-    return { basis, gas, gasNative, basisNative, missing: missing > EPSILON ? missing : 0 };
+    return {
+      basis,
+      gas,
+      gasNative,
+      basisNative,
+      missing: missing > EPSILON ? missing : 0,
+      usdMissing: usdMissing > EPSILON ? usdMissing : 0,
+    };
   }
 
   /** Start tracking an NFT the user just acquired. */
@@ -248,6 +282,7 @@ class Position {
     costNative: number,
     gasUsd: number,
     gasNative: number,
+    usdMissing = false,
   ) {
     if (this.asset.kind !== 'nft' || tokenId === null) return;
     const trip: NftTrip = {
@@ -267,6 +302,7 @@ class Position {
       proceedsNative: null,
       sellGasUsd: 0,
       sellGasNative: 0,
+      usdMissing,
     };
     this.trips.push(trip);
     const open = this.openTrips.get(tokenId) ?? [];
@@ -334,6 +370,7 @@ class Position {
         proceedsNative: null,
         sellGasUsd: 0,
         sellGasNative: 0,
+        usdMissing: false,
       };
       this.trips.push(unknown);
       closed.push(unknown);
@@ -363,6 +400,8 @@ class Position {
 interface PricedLeg {
   movement: LedgerMovement;
   usd: number | null;
+  /** Value in the tx chain's own coin — exact for native/wrapped-native legs, even with no USD price. */
+  native: number | null;
 }
 
 export function buildCashflowReport(input: BuildReportInput): CashflowReport {
@@ -473,15 +512,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
    */
   const bookSplit = (
     p: Position,
-    realizedUsd: number,
+    /** null when the USD result is unknown (no USD price on the buy or sale day). */
+    realizedUsd: number | null,
     pnlNative: number | null,
     saleRate: number | null,
   ) => {
-    const tradeGain = pnlNative !== null && saleRate ? pnlNative * saleRate : realizedUsd;
-    p.tradeGainUsd += tradeGain;
-    p.priceMoveUsd += realizedUsd - tradeGain;
-    totalTradeGain += tradeGain;
-    totalPriceMove += realizedUsd - tradeGain;
+    if (realizedUsd !== null) {
+      const tradeGain = pnlNative !== null && saleRate ? pnlNative * saleRate : realizedUsd;
+      p.tradeGainUsd += tradeGain;
+      p.priceMoveUsd += realizedUsd - tradeGain;
+      totalTradeGain += tradeGain;
+      totalPriceMove += realizedUsd - tradeGain;
+    }
     if (pnlNative !== null) {
       p.realizedPnlNative += pnlNative;
       const sym = nativeSymbolFor(p.asset.chain);
@@ -616,6 +658,9 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       unOut,
       moneyIn,
       moneyOut,
+      moneyInNative,
+      moneyOutNative,
+      moneyUsdKnown,
     } = a;
     const bridge = bridgeRoles.get(g);
 
@@ -688,22 +733,30 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     if (unIn.length > 0 && unOut.length === 0) {
       // ── Acquisition: purchase, mint, or free receive ──
       const cost = Math.max(0, moneyOut - moneyIn);
+      // "Paid" is about money leaving, not about whether we have a USD price
+      // for the day — an unpriced ETH mint is still a paid mint.
+      const paid = cost > 0 || (!moneyUsdKnown && pricedOut.length > 0);
+      const usdMissing = paid && !moneyUsdKnown;
+      const costNative =
+        moneyOutNative !== null && moneyInNative !== null
+          ? Math.max(0, moneyOutNative - moneyInNative)
+          : null;
       const share = cost / unIn.length;
       const gasShare = feeUsd / unIn.length;
       const gasShareNative = feeNative / unIn.length;
       const allMint = unIn.every((m) => m.counterparty === '');
       for (const m of unIn) {
         const p = positionFor(m.asset, at);
-        const shareNative = toNative(share, nativeRate(m.chain, at));
-        p.acquire(m.amount, share, m.tokenId, gasShare, shareNative, gasShareNative);
-        const via: CashflowNftAcquiredVia =
-          cost > 0
-            ? m.counterparty === ''
-              ? 'mint'
-              : 'purchase'
-            : m.counterparty === ''
-              ? 'free_mint'
-              : 'received';
+        const shareNative =
+          costNative !== null ? costNative / unIn.length : toNative(share, nativeRate(m.chain, at));
+        p.acquire(m.amount, share, m.tokenId, gasShare, shareNative, gasShareNative, usdMissing);
+        const via: CashflowNftAcquiredVia = paid
+          ? m.counterparty === ''
+            ? 'mint'
+            : 'purchase'
+          : m.counterparty === ''
+            ? 'free_mint'
+            : 'received';
         p.openTrip(
           m.tokenId,
           m.amount,
@@ -714,13 +767,15 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           shareNative,
           gasShare,
           gasShareNative,
+          usdMissing,
         );
         p.gasUsd += gasShare;
-        if (cost > 0) p.spentNative += shareNative;
-        if (cost > 0) {
+        if (paid) {
+          p.spentNative += shareNative;
           p.buyCount++;
           p.qtyBought += m.amount;
           p.spentUsd += share;
+          if (usdMissing) p.usdPriceMissing++;
           legUsd.set(m, share);
           const category: CashflowCategory =
             m.asset.kind === 'nft'
@@ -732,7 +787,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         }
       }
       txOut += cost;
-      if (cost > 0) {
+      if (paid) {
         type = unIn.some((m) => m.asset.kind === 'nft')
           ? allMint
             ? 'nft_mint'
@@ -749,7 +804,12 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       }
     } else if (unOut.length > 0 && unIn.length === 0) {
       const proceeds = moneyIn - moneyOut;
-      if (proceeds > 0) {
+      const proceedsNative =
+        moneyInNative !== null && moneyOutNative !== null ? moneyInNative - moneyOutNative : null;
+      // Like buys: money arriving makes it a sale even when the day has no USD price.
+      const sold =
+        proceeds > 0 || (!moneyUsdKnown && pricedIn.length > 0 && (proceedsNative ?? 1) > 0);
+      if (sold) {
         // ── Sale ──
         const share = proceeds / unOut.length;
         const gasShare = feeUsd / unOut.length;
@@ -758,32 +818,46 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         let realizedAfterGas = 0;
         for (const m of unOut) {
           const p = positionFor(m.asset, at);
-          const { basis, gas, gasNative, basisNative, missing } = p.dispose(m.amount, m.tokenId);
+          const d = p.dispose(m.amount, m.tokenId);
           const saleRate = nativeRate(m.chain, at);
-          const shareNative = toNative(share, saleRate);
-          p.proceedsNative += shareNative;
+          const nativeKnown = proceedsNative !== null || saleRate !== null;
+          const shareNative =
+            proceedsNative !== null ? proceedsNative / unOut.length : toNative(share, saleRate);
+          // USD P/L needs both the sale's and the purchase's USD value.
+          const usdOk = moneyUsdKnown && d.usdMissing === 0;
+          const pnlNative = nativeKnown ? shareNative - d.basisNative : null;
           for (const t of p.closeTrips(m.tokenId, m.amount, at, 'sale', g.txHash)) {
             const f = t.qty / m.amount;
-            t.proceedsUsd = share * f;
-            t.proceedsNative = saleRate ? shareNative * f : null;
+            t.proceedsUsd = moneyUsdKnown ? share * f : null;
+            t.proceedsNative = nativeKnown ? shareNative * f : null;
             t.sellGasUsd = gasShare * f;
             t.sellGasNative = gasShareNative * f;
           }
-          if (saleRate)
-            p.realizedPnlAfterGasNative += shareNative - basisNative - gasNative - gasShareNative;
-          bookSplit(p, share - basis, saleRate ? shareNative - basisNative : null, saleRate);
+          if (nativeKnown) {
+            p.proceedsNative += shareNative;
+            p.realizedPnlAfterGasNative +=
+              shareNative - d.basisNative - d.gasNative - gasShareNative;
+          }
+          bookSplit(p, usdOk ? share - d.basis : null, pnlNative, saleRate);
           p.sellCount++;
           p.qtySold += m.amount;
-          p.qtySoldWithoutBasis += missing;
-          p.proceedsUsd += share;
+          p.qtySoldWithoutBasis += d.missing;
           p.gasUsd += gasShare;
-          p.realizedPnlUsd += share - basis;
-          // After gas: also subtract the gas paid to acquire these units and this sale's gas.
-          p.realizedPnlAfterGasUsd += share - basis - gas - gasShare;
-          realized += share - basis;
-          realizedAfterGas += share - basis - gas - gasShare;
-          legUsd.set(m, share);
-          book(at, 'in', m.asset.kind === 'nft' ? 'nft_sale' : 'token_sale', share);
+          if (moneyUsdKnown) {
+            p.proceedsUsd += share;
+            book(at, 'in', m.asset.kind === 'nft' ? 'nft_sale' : 'token_sale', share);
+            legUsd.set(m, share);
+          }
+          if (usdOk) {
+            p.sellCountUsd++;
+            p.realizedPnlUsd += share - d.basis;
+            // After gas: also subtract the gas paid to acquire these units and this sale's gas.
+            p.realizedPnlAfterGasUsd += share - d.basis - d.gas - gasShare;
+            realized += share - d.basis;
+            realizedAfterGas += share - d.basis - d.gas - gasShare;
+          } else {
+            p.usdPriceMissing++;
+          }
         }
         bookRealized(at, realized, realizedAfterGas);
         txIn += proceeds;
@@ -819,9 +893,12 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       let carriedGas = feeUsd;
       let carriedGasNative = feeNative;
       let carriedNative = 0;
+      // Unknown USD cost on what's given up (or on this tx's money) stays unknown on what's received.
+      let carriedUsdMissing = !moneyUsdKnown;
       for (const m of unOut) {
         const p = positionFor(m.asset, at);
         const d = p.dispose(m.amount, m.tokenId);
+        if (d.usdMissing > 0) carriedUsdMissing = true;
         p.closeTrips(m.tokenId, m.amount, at, 'swap', g.txHash);
         carried += d.basis;
         carriedGas += d.gas;
@@ -847,7 +924,11 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       }
       const basis = carried + Math.max(0, netMoney);
       const share = basis / unIn.length;
-      const basisNative = carriedNative + toNative(Math.max(0, netMoney), swapRate);
+      const netMoneyNative =
+        moneyOutNative !== null && moneyInNative !== null
+          ? Math.max(0, moneyOutNative - moneyInNative)
+          : toNative(Math.max(0, netMoney), swapRate);
+      const basisNative = carriedNative + netMoneyNative;
       for (const m of unIn) {
         const p = positionFor(m.asset, at);
         p.acquire(
@@ -857,6 +938,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           carriedGas / unIn.length,
           basisNative / unIn.length,
           carriedGasNative / unIn.length,
+          carriedUsdMissing,
         );
         p.openTrip(
           m.tokenId,
@@ -868,6 +950,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           basisNative / unIn.length,
           carriedGas / unIn.length,
           carriedGasNative / unIn.length,
+          carriedUsdMissing,
         );
         legUsd.set(m, share);
       }
@@ -957,6 +1040,8 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       priceMoveUsd: p.priceMoveUsd,
       openCostBasisUsd: p.openCost,
       qtySoldWithoutBasis: p.qtySoldWithoutBasis,
+      usdPriceMissing: p.usdPriceMissing,
+      sellCountUsd: p.sellCountUsd,
       firstAt: p.firstAt.toISOString(),
       lastAt: p.lastAt.toISOString(),
       items: p.trips.map(toNftItem).sort(newestFirst).slice(0, MAX_ITEMS_PER_COLLECTION),
@@ -1062,8 +1147,14 @@ interface TxAnalysis {
   pricedOut: PricedLeg[];
   unIn: LedgerMovement[];
   unOut: LedgerMovement[];
+  /** USD value of the money legs (unpriced legs count as 0 — see moneyUsdKnown). */
   moneyIn: number;
   moneyOut: number;
+  /** Money legs in the chain's own coin; null if a leg couldn't be converted. */
+  moneyInNative: number | null;
+  moneyOutNative: number | null;
+  /** False when a money leg had no USD price for its day. */
+  moneyUsdKnown: boolean;
 }
 
 function analyze(
@@ -1072,6 +1163,20 @@ function analyze(
   priceLeg: (m: LedgerMovement) => number | null,
   pricer: UsdPricer,
 ): TxAnalysis {
+  // Value money legs in the chain's own coin: exact for the coin (and its
+  // wrapped form) itself, converted via USD for anything else.
+  const chainSymbol = nativeSymbolFor(g.chain);
+  const chainRate = pricer.usdPerUnit({ kind: 'native', symbol: chainSymbol }, dayKey(g.timestamp));
+  const leg = (m: LedgerMovement, usd: number | null): PricedLeg => ({
+    movement: m,
+    usd,
+    native:
+      m.asset.price?.kind === 'native' && m.asset.price.symbol === chainSymbol
+        ? m.amount
+        : usd !== null && chainRate
+          ? usd / chainRate
+          : null,
+  });
   const external: LedgerMovement[] = [];
   const ownIn: LedgerMovement[] = [];
   let ownMoveUsd = 0;
@@ -1095,7 +1200,7 @@ function analyze(
   const ownArrivals: PricedLeg[] = [];
   if (!g.fee) {
     for (const m of ownIn) {
-      if (m.asset.price) ownArrivals.push({ movement: m, usd: priceLegQuiet(pricer, m) });
+      if (m.asset.price) ownArrivals.push(leg(m, priceLegQuiet(pricer, m)));
     }
   }
 
@@ -1125,10 +1230,12 @@ function analyze(
     const scale = gross > 0 ? Math.abs(e.net) / gross : 0;
     for (const m of dominant) {
       const scaled: LedgerMovement = { ...m, amount: m.amount * scale };
-      (e.net > 0 ? pricedIn : pricedOut).push({ movement: scaled, usd: priceLeg(scaled) });
+      (e.net > 0 ? pricedIn : pricedOut).push(leg(scaled, priceLeg(scaled)));
     }
   }
   const sumUsd = (legs: PricedLeg[]) => legs.reduce((sum, l) => sum + (l.usd ?? 0), 0);
+  const sumNative = (legs: PricedLeg[]) =>
+    legs.every((l) => l.native !== null) ? legs.reduce((sum, l) => sum + l.native!, 0) : null;
   return {
     external,
     hadOwnMove,
@@ -1140,6 +1247,9 @@ function analyze(
     unOut,
     moneyIn: sumUsd(pricedIn),
     moneyOut: sumUsd(pricedOut),
+    moneyInNative: sumNative(pricedIn),
+    moneyOutNative: sumNative(pricedOut),
+    moneyUsdKnown: [...pricedIn, ...pricedOut].every((l) => l.usd !== null),
   };
 }
 
@@ -1302,8 +1412,9 @@ const chainName = (chain: string) => CHAIN_NAMES[chain] ?? chain;
 const MAX_ITEMS_PER_COLLECTION = 1000;
 
 function toNftItem(t: NftTrip): CashflowNftItem {
-  const sold = t.disposedVia === 'sale' && t.proceedsUsd !== null;
-  const realized = sold ? t.proceedsUsd! - t.costUsd : null;
+  const sold = t.disposedVia === 'sale';
+  const realized =
+    sold && t.proceedsUsd !== null && !t.usdMissing ? t.proceedsUsd - t.costUsd : null;
   const pnlNative = sold && t.proceedsNative !== null ? t.proceedsNative - t.costNative : null;
   return {
     tokenId: t.tokenId,
@@ -1311,7 +1422,7 @@ function toNftItem(t: NftTrip): CashflowNftItem {
     acquiredAt: t.acquiredAt?.toISOString() ?? null,
     acquiredVia: t.acquiredVia,
     acquireTxHash: t.acquireTxHash,
-    costUsd: t.costUsd,
+    costUsd: t.usdMissing ? null : t.costUsd,
     costNative: t.costNative,
     buyGasUsd: t.buyGasUsd,
     buyGasNative: t.buyGasNative,
@@ -1327,6 +1438,7 @@ function toNftItem(t: NftTrip): CashflowNftItem {
     realizedPnlNative: pnlNative,
     realizedPnlAfterGasNative:
       pnlNative === null ? null : pnlNative - t.buyGasNative - t.sellGasNative,
+    usdPriceMissing: t.usdMissing || (sold && t.proceedsUsd === null),
     holdSeconds:
       t.acquiredAt && t.disposedAt
         ? Math.round((t.disposedAt.getTime() - t.acquiredAt.getTime()) / 1000)

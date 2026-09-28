@@ -61,16 +61,13 @@ function TxLink({
 }
 
 function PnlText({ item, symbol }: { item: CashflowNftItem; symbol: string }) {
-  const u = item.realizedPnlUsd ?? 0;
+  const u = item.realizedPnlUsd;
+  const n = item.realizedPnlNative;
   return (
     <>
-      <span className={pnlClass(u)}>{usdSigned(u)}</span>
-      {item.realizedPnlNative !== null && (
-        <span className={pnlClass(item.realizedPnlNative)}>
-          {' '}
-          / {nativeAmount(item.realizedPnlNative, symbol)}
-        </span>
-      )}
+      {u !== null && <span className={pnlClass(u)}>{usdSigned(u)}</span>}
+      {u !== null && n !== null && ' / '}
+      {n !== null && <span className={pnlClass(n)}>{nativeAmount(n, symbol)}</span>}
     </>
   );
 }
@@ -84,14 +81,21 @@ export function NftItemsTable({ position }: { position: CashflowPosition }) {
   const sym = position.nativeSymbol;
 
   const summary = useMemo(() => {
-    const sold = items.filter((i) => i.realizedPnlUsd !== null);
-    const winsUsd = sold.filter((i) => (i.realizedPnlUsd ?? 0) > 0).length;
+    const sold = items.filter((i) => i.disposedVia === 'sale');
+    // Win rates only over sales where that currency's result is known.
+    const soldUsd = sold.filter((i) => i.realizedPnlUsd !== null);
+    const winsUsd = soldUsd.filter((i) => (i.realizedPnlUsd ?? 0) > 0).length;
     const soldNative = sold.filter((i) => i.realizedPnlNative !== null);
     const winsNative = soldNative.filter((i) => (i.realizedPnlNative ?? 0) > 0).length;
-    const ranked = [...sold].sort((a, b) => (b.realizedPnlUsd ?? 0) - (a.realizedPnlUsd ?? 0));
+    // Rank by USD when every sale has one, otherwise by the coin (always known for coin sales).
+    const byUsd = soldUsd.length === sold.length;
+    const rankable = byUsd ? soldUsd : soldNative;
+    const value = (i: CashflowNftItem) => (byUsd ? i.realizedPnlUsd : i.realizedPnlNative) ?? 0;
+    const ranked = [...rankable].sort((a, b) => value(b) - value(a));
     const holds = sold.map((i) => i.holdSeconds).filter((h): h is number => h !== null);
     return {
       sold: sold.length,
+      soldUsd: soldUsd.length,
       winsUsd,
       soldNative: soldNative.length,
       winsNative,
@@ -140,17 +144,19 @@ export function NftItemsTable({ position }: { position: CashflowPosition }) {
       <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400">
         <span>
           <span className="text-gray-200">{summary.sold}</span> sold
-          {summary.sold > 0 && (
+          {summary.soldUsd > 0 && (
             <>
               {' · '}
               <span className="text-gray-200">{summary.winsUsd}</span> at a profit in USD (
-              {pct(summary.winsUsd, summary.sold)})
-              {summary.soldNative > 0 && (
-                <>
-                  , <span className="text-gray-200">{summary.winsNative}</span> in {sym} (
-                  {pct(summary.winsNative, summary.soldNative)})
-                </>
-              )}
+              {pct(summary.winsUsd, summary.soldUsd)})
+            </>
+          )}
+          {summary.soldNative > 0 && (
+            <>
+              {summary.soldUsd > 0 ? ', ' : ' · '}
+              <span className="text-gray-200">{summary.winsNative}</span>
+              {summary.soldUsd > 0 ? '' : ' at a profit'} in {sym} (
+              {pct(summary.winsNative, summary.soldNative)})
             </>
           )}
         </span>
@@ -270,6 +276,14 @@ export function NftItemsTable({ position }: { position: CashflowPosition }) {
                 </td>
                 <td className="py-1.5 pr-3 text-right tabular-nums">
                   <Dual usd={i.realizedPnlUsd} native={i.realizedPnlNative} symbol={sym} signed />
+                  {i.usdPriceMissing && (
+                    <div
+                      className="cursor-help text-gray-500"
+                      title={`No USD price was available for the ${i.costUsd === null ? 'buy' : 'sale'} day, so this is shown in ${sym} only.`}
+                    >
+                      no USD price
+                    </div>
+                  )}
                   {i.acquiredVia === 'unknown' && i.realizedPnlUsd !== null && (
                     <span
                       className="cursor-help text-yellow-500"

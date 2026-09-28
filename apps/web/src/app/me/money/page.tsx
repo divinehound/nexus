@@ -481,7 +481,10 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
       return next;
     });
   // Spam airdrops never involve money — hide them unless asked.
-  const traded = rows.filter((r) => r.spentUsd > 0 || r.proceedsUsd > 0);
+  // Anything actually bought or sold — including on days with no USD price.
+  const traded = rows.filter(
+    (r) => r.buyCount > 0 || r.sellCount > 0 || r.spentUsd > 0 || r.proceedsUsd > 0,
+  );
   const visible = showAll ? rows : traded;
   const totals = traded.reduce(
     (acc, r) => ({
@@ -493,8 +496,19 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
       priceMove: acc.priceMove + r.priceMoveUsd,
       gas: acc.gas + r.gasUsd,
       open: acc.open + r.openCostBasisUsd,
+      sellsUsd: acc.sellsUsd + r.sellCountUsd,
     }),
-    { spent: 0, proceeds: 0, pnl: 0, pnlAfterGas: 0, tradeGain: 0, priceMove: 0, gas: 0, open: 0 },
+    {
+      spent: 0,
+      proceeds: 0,
+      pnl: 0,
+      pnlAfterGas: 0,
+      tradeGain: 0,
+      priceMove: 0,
+      gas: 0,
+      open: 0,
+      sellsUsd: 0,
+    },
   );
   const qtyUnit = kind === 'nft' ? 'items' : 'amount';
   const pnlNative = perSymbol(traded, (r) => r.realizedPnlNative, true);
@@ -515,27 +529,37 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
         />
         <Stat
           label="Realized profit / loss"
-          value={usdSigned(totals.pnl)}
-          valueClass={pnlClass(totals.pnl)}
+          // No sale had a USD price: the USD result is unknown, not zero.
+          value={totals.sellsUsd > 0 ? usdSigned(totals.pnl) : '—'}
+          valueClass={totals.sellsUsd > 0 ? pnlClass(totals.pnl) : undefined}
           sub={
             <>
               {pnlNative && <div className="text-gray-300">{pnlNative}</div>}
-              <AfterGas value={totals.pnlAfterGas} />
-              {pnlAfterGasNative && <span className="text-gray-300"> · {pnlAfterGasNative}</span>}
+              {totals.sellsUsd > 0 && <AfterGas value={totals.pnlAfterGas} />}
+              {pnlAfterGasNative && (
+                <span className="text-gray-300">
+                  {totals.sellsUsd > 0 ? ' · ' : 'after gas '}
+                  {pnlAfterGasNative}
+                </span>
+              )}
             </>
           }
         />
         <Stat
           label="From trading vs. coin price"
-          value={usdSigned(totals.tradeGain)}
-          valueClass={pnlClass(totals.tradeGain)}
+          value={totals.sellsUsd > 0 ? usdSigned(totals.tradeGain) : '—'}
+          valueClass={totals.sellsUsd > 0 ? pnlClass(totals.tradeGain) : undefined}
           sub={
-            <>
-              coin price moved{' '}
-              <span className={cn('tabular-nums', pnlClass(totals.priceMove))}>
-                {usdSigned(totals.priceMove)}
-              </span>
-            </>
+            totals.sellsUsd > 0 ? (
+              <>
+                coin price moved{' '}
+                <span className={cn('tabular-nums', pnlClass(totals.priceMove))}>
+                  {usdSigned(totals.priceMove)}
+                </span>
+              </>
+            ) : (
+              'needs USD prices for the sales'
+            )
           }
         />
         <Stat
@@ -622,8 +646,12 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
                     {r.qtyBought ? qty(r.qtyBought) : '—'}
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums">
-                    {r.spentUsd ? (
-                      <Dual usd={r.spentUsd} native={r.spentNative} symbol={r.nativeSymbol} />
+                    {r.spentUsd || r.spentNative ? (
+                      <Dual
+                        usd={r.spentUsd || null}
+                        native={r.spentNative}
+                        symbol={r.nativeSymbol}
+                      />
                     ) : (
                       '—'
                     )}
@@ -632,8 +660,12 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
                     {r.qtySold ? qty(r.qtySold) : '—'}
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums">
-                    {r.proceedsUsd ? (
-                      <Dual usd={r.proceedsUsd} native={r.proceedsNative} symbol={r.nativeSymbol} />
+                    {r.proceedsUsd || r.proceedsNative ? (
+                      <Dual
+                        usd={r.proceedsUsd || null}
+                        native={r.proceedsNative}
+                        symbol={r.nativeSymbol}
+                      />
                     ) : (
                       '—'
                     )}
@@ -642,11 +674,20 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
                     {r.sellCount > 0 ? (
                       <>
                         <Dual
-                          usd={r.realizedPnlUsd}
+                          usd={r.sellCountUsd > 0 ? r.realizedPnlUsd : null}
                           native={r.realizedPnlNative}
                           symbol={r.nativeSymbol}
                           signed
                         />
+                        {r.usdPriceMissing > 0 && (
+                          <div
+                            className="cursor-help text-xs text-yellow-500"
+                            title={`${r.usdPriceMissing} buy/sale${r.usdPriceMissing === 1 ? '' : 's'} happened on days with no USD price. They're included in the ${r.nativeSymbol} figures but left out of the USD ones.`}
+                          >
+                            {r.usdPriceMissing} trade{r.usdPriceMissing === 1 ? '' : 's'} in{' '}
+                            {r.nativeSymbol} only
+                          </div>
+                        )}
                         {r.qtySoldWithoutBasis > 0 && (
                           <span
                             className="cursor-help text-xs text-yellow-500"
@@ -669,7 +710,7 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
                   <td className="py-2 pr-4 text-right tabular-nums">
                     {r.sellCount > 0 ? (
                       <Dual
-                        usd={r.realizedPnlAfterGasUsd}
+                        usd={r.sellCountUsd > 0 ? r.realizedPnlAfterGasUsd : null}
                         native={r.realizedPnlAfterGasNative}
                         symbol={r.nativeSymbol}
                         signed

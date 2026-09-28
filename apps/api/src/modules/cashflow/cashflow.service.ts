@@ -273,7 +273,7 @@ export class CashflowService {
     });
     if (report.totals.unpricedMovements > 0) {
       report.notes.push(
-        `${report.totals.unpricedMovements} movements had no USD price for their day and count as $0 (historical prices older than a year need a paid CoinGecko key).`,
+        `${report.totals.unpricedMovements} movements had no USD price for their day (neither CoinGecko nor Coinbase had one). They're still counted in ETH/SOL/etc.; only their USD value is left out.`,
       );
     }
     report.links = links;

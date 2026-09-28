@@ -51,7 +51,11 @@ export class PriceOracleService {
    * [fromDate, toDate] inclusive. Missing days are fetched from CoinGecko in a
    * single range call and written back to the cache.
    */
-  async getDailyUsdRates(token: NativeToken, fromDate: Date, toDate: Date): Promise<Map<string, number>> {
+  async getDailyUsdRates(
+    token: NativeToken,
+    fromDate: Date,
+    toDate: Date,
+  ): Promise<Map<string, number>> {
     const { symbol, coinId } = token;
     const fromKey = toDayKey(fromDate);
     const toKey = toDayKey(toDate);
@@ -70,23 +74,35 @@ export class PriceOracleService {
     const missing = this.enumerateDays(fromDate, toDate).filter((d) => !rates.has(d));
     if (missing.length === 0) return rates;
 
-    const fetched = await this.fetchRangeFromCoinGecko(coinId, fromDate, toDate);
-    if (fetched.size === 0) {
-      if (rates.size === 0) {
-        this.logger.warn(`No USD rates available for ${symbol} (${fromKey}..${toKey}); USD PnL will be 0`);
+    const toInsert: Array<typeof tokenPriceDaily.$inferInsert> = [];
+    const fill = (prices: Map<string, number>, source: string) => {
+      for (const day of missing) {
+        const price = prices.get(day);
+        if (price === undefined || rates.has(day)) continue;
+        rates.set(day, price);
+        toInsert.push({ symbol, date: day, usdPrice: price, source });
       }
-      return rates;
+    };
+
+    fill(await this.fetchRangeFromCoinGecko(coinId, fromDate, toDate), 'coingecko');
+
+    // CoinGecko's free tier only serves the last 365 days (and rejects longer
+    // ranges outright). Fill whatever is still missing from Coinbase's public
+    // daily candles, which go back years and need no key.
+    const stillMissing = missing.filter((d) => !rates.has(d));
+    if (stillMissing.length > 0 && COINBASE_PRODUCTS[symbol]) {
+      const from = new Date(`${stillMissing[0]}T00:00:00Z`);
+      const to = new Date(`${stillMissing[stillMissing.length - 1]}T00:00:00Z`);
+      fill(await this.fetchRangeFromCoinbase(symbol, from, to), 'coinbase');
     }
 
-    const toInsert: Array<typeof tokenPriceDaily.$inferInsert> = [];
-    for (const day of missing) {
-      const price = fetched.get(day);
-      if (price === undefined) continue;
-      rates.set(day, price);
-      toInsert.push({ symbol, date: day, usdPrice: price, source: 'coingecko' });
-    }
     if (toInsert.length > 0) {
       await this.db.insert(tokenPriceDaily).values(toInsert).onConflictDoNothing();
+    }
+    if (rates.size === 0) {
+      this.logger.warn(
+        `No USD rates available for ${symbol} (${fromKey}..${toKey}); USD PnL will be 0`,
+      );
     }
     return rates;
   }
@@ -117,7 +133,11 @@ export class PriceOracleService {
    * the (hourly or daily) points to a single USD price per UTC day (last point
    * of the day wins).
    */
-  private async fetchRangeFromCoinGecko(coinId: string, fromDate: Date, toDate: Date): Promise<Map<string, number>> {
+  private async fetchRangeFromCoinGecko(
+    coinId: string,
+    fromDate: Date,
+    toDate: Date,
+  ): Promise<Map<string, number>> {
     const result = new Map<string, number>();
     try {
       // Pad by a day on each side so day-boundary points are captured.
@@ -136,6 +156,49 @@ export class PriceOracleService {
       }
     } catch (err) {
       this.logger.warn(`CoinGecko range fetch failed for ${coinId}: ${(err as Error).message}`);
+    }
+    return result;
+  }
+
+  /**
+   * Daily closes from Coinbase Exchange's public candles endpoint
+   * (max 300 candles per request, so long ranges are fetched in windows).
+   * Products are tried in order — POL traded as MATIC before its rename.
+   */
+  private async fetchRangeFromCoinbase(
+    symbol: string,
+    fromDate: Date,
+    toDate: Date,
+  ): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    for (const product of COINBASE_PRODUCTS[symbol] ?? []) {
+      try {
+        for (const [start, end] of coinbaseWindows(fromDate, toDate)) {
+          const url = new URL(`https://api.exchange.coinbase.com/products/${product}/candles`);
+          url.searchParams.set('granularity', '86400');
+          url.searchParams.set('start', start.toISOString());
+          url.searchParams.set('end', end.toISOString());
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 20000);
+          try {
+            // Coinbase rejects requests without a User-Agent.
+            const res = await fetch(url.toString(), {
+              headers: { accept: 'application/json', 'user-agent': 'nexus-price-oracle' },
+              signal: controller.signal,
+            });
+            if (res.status === 404) break; // product didn't exist — try the next name
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            for (const [day, price] of parseCoinbaseCandles(await res.json())) {
+              if (!result.has(day)) result.set(day, price);
+            }
+          } finally {
+            clearTimeout(timer);
+          }
+          await new Promise((r) => setTimeout(r, 150)); // public limit is ~10 req/s
+        }
+      } catch (err) {
+        this.logger.warn(`Coinbase candles fetch failed for ${product}: ${(err as Error).message}`);
+      }
     }
     return result;
   }
@@ -163,12 +226,53 @@ export class PriceOracleService {
   /** Inclusive list of 'YYYY-MM-DD' day keys between two dates (UTC). */
   private enumerateDays(fromDate: Date, toDate: Date): string[] {
     const days: string[] = [];
-    const cursor = new Date(Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate()));
-    const end = new Date(Date.UTC(toDate.getUTCFullYear(), toDate.getUTCMonth(), toDate.getUTCDate()));
+    const cursor = new Date(
+      Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate()),
+    );
+    const end = new Date(
+      Date.UTC(toDate.getUTCFullYear(), toDate.getUTCMonth(), toDate.getUTCDate()),
+    );
     while (cursor <= end) {
       days.push(toDayKey(cursor));
       cursor.setUTCDate(cursor.getUTCDate() + 1);
     }
     return days;
   }
+}
+
+/** Coinbase Exchange products for each native token we price, tried in order. */
+const COINBASE_PRODUCTS: Record<string, string[]> = {
+  ETH: ['ETH-USD'],
+  SOL: ['SOL-USD'],
+  APE: ['APE-USD'],
+  POL: ['POL-USD', 'MATIC-USD'],
+};
+
+const DAY_MS = 86_400_000;
+const COINBASE_MAX_CANDLES = 300;
+
+/** Split [from, to] into windows of at most 300 daily candles. */
+export function coinbaseWindows(fromDate: Date, toDate: Date): Array<[Date, Date]> {
+  const windows: Array<[Date, Date]> = [];
+  let start = Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), fromDate.getUTCDate());
+  const end = Date.UTC(toDate.getUTCFullYear(), toDate.getUTCMonth(), toDate.getUTCDate());
+  while (start <= end) {
+    const windowEnd = Math.min(end, start + (COINBASE_MAX_CANDLES - 1) * DAY_MS);
+    windows.push([new Date(start), new Date(windowEnd + DAY_MS - 1000)]);
+    start = windowEnd + DAY_MS;
+  }
+  return windows;
+}
+
+/** Coinbase candles are `[time, low, high, open, close, volume]` with `time` in seconds; keep the close per UTC day. */
+export function parseCoinbaseCandles(json: unknown): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!Array.isArray(json)) return out;
+  for (const row of json) {
+    if (!Array.isArray(row) || row.length < 5) continue;
+    const [time, , , , close] = row;
+    if (typeof time !== 'number' || typeof close !== 'number' || !(close > 0)) continue;
+    out.set(toDayKey(new Date(time * 1000)), close);
+  }
+  return out;
 }
