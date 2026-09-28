@@ -69,6 +69,8 @@ export interface LedgerMovement {
   inferred?: boolean;
   /** Solana: taken from Helius' NFT event (compressed/Core NFTs) rather than a token transfer. */
   fromEvent?: boolean;
+  /** Solana: a Metaplex Core asset read from the Core program's instructions. */
+  fromCore?: boolean;
 }
 
 export interface LedgerFee {

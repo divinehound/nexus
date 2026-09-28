@@ -20,11 +20,27 @@ const ESCROW_EVENT = /^(NFT_(GLOBAL_)?BID(_CANCELLED)?|NFT_LISTING|NFT_CANCEL_LI
 const NFT_STANDARDS = new Set(['NonFungible', 'ProgrammableNonFungible', 'NonFungibleEdition']);
 const FUNGIBLE_INTERFACES = new Set(['FungibleToken', 'FungibleAsset']);
 const FUNGIBLE_STANDARDS = new Set(['Fungible', 'FungibleAsset']);
+/** Metaplex Core: NFTs that are single program accounts, not SPL tokens, so no token transfer ever shows. */
+export const MPL_CORE_PROGRAM = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
+/** MplAssetInstruction variant indexes (the first byte of the instruction data). */
+const CORE_CREATE_V1 = 0;
+const CORE_BURN_V1 = 12;
+const CORE_TRANSFER_V1 = 14;
+const CORE_CREATE_V2 = 20;
 /** DAS getAssetBatch ids per request — small, so one bad batch doesn't lose everyone's metadata. */
 const DAS_BATCH = 100;
 
+/** One instruction as Helius returns it: account addresses and base58 data. */
+export interface HeliusInstruction {
+  programId?: string;
+  accounts?: string[];
+  data?: string;
+  innerInstructions?: HeliusInstruction[];
+}
+
 export interface HeliusEnhancedTx {
   signature: string;
+  instructions?: HeliusInstruction[];
   timestamp: number;
   fee?: number;
   feePayer?: string;
@@ -223,7 +239,106 @@ export function normalizeSolanaTx(
       }
     }
   }
+  // Metaplex Core mints/transfers/burns, read from the instructions themselves
+  // (Helius often has no event for them, and there's no token transfer).
+  for (const move of coreAssetMoves(tx, wallet)) {
+    if (tokenMints.has(move.asset)) continue;
+    tokenMints.add(move.asset);
+    const info = mintInfo.get(move.asset) ?? {
+      isNft: true,
+      name: null,
+      symbol: null,
+      collection: move.collection,
+      collectionName: null,
+    };
+    const asset = solanaTokenAsset(move.asset, 'NonFungible', info, assets);
+    movements.push({
+      ...base,
+      direction: move.direction,
+      asset,
+      tokenId: move.asset,
+      amount: 1,
+      counterparty: move.counterparty,
+      fromCore: true,
+    });
+  }
   return { movements, fee };
+}
+
+export interface CoreAssetMove {
+  asset: string;
+  collection: string | null;
+  direction: 'in' | 'out';
+  /** '' for a mint or burn. */
+  counterparty: string;
+}
+
+/**
+ * Metaplex Core asset moves for `wallet` in a tx — top-level or called by
+ * another program (e.g. a launchpad or Candy Machine minting via CPI).
+ * Account layouts follow mpl-core's MplAssetInstruction; an optional account
+ * that isn't passed is filled with the program's own id.
+ */
+export function coreAssetMoves(tx: HeliusEnhancedTx, wallet: string): CoreAssetMove[] {
+  const moves: CoreAssetMove[] = [];
+  const visit = (ix: HeliusInstruction) => {
+    if (ix.programId === MPL_CORE_PROGRAM && ix.accounts?.length) {
+      const move = coreMove(ix.accounts, firstByte(ix.data), wallet);
+      if (move) moves.push(move);
+    }
+    for (const inner of ix.innerInstructions ?? []) visit(inner);
+  };
+  for (const ix of tx.instructions ?? []) visit(ix);
+  return moves;
+}
+
+function coreMove(accounts: string[], variant: number | null, wallet: string): CoreAssetMove | null {
+  const opt = (i: number) => {
+    const a = accounts[i];
+    return a && a !== MPL_CORE_PROGRAM ? a : null;
+  };
+  const asset = accounts[0];
+  if (variant === CORE_CREATE_V1 || variant === CORE_CREATE_V2) {
+    // asset, collection?, authority?, payer, owner?, update_authority?, …
+    // The program makes the owner: owner ?? update_authority ?? payer.
+    const owner = opt(4) ?? opt(5) ?? opt(3);
+    if (owner !== wallet) return null;
+    return { asset, collection: opt(1), direction: 'in', counterparty: '' };
+  }
+  if (variant === CORE_TRANSFER_V1) {
+    // asset, collection?, payer, authority?, new_owner, …
+    const from = opt(3) ?? opt(2);
+    const to = opt(4);
+    if (to === wallet && from !== wallet)
+      return { asset, collection: opt(1), direction: 'in', counterparty: from ?? '' };
+    if (from === wallet && to !== wallet)
+      return { asset, collection: opt(1), direction: 'out', counterparty: to ?? '' };
+    return null;
+  }
+  if (variant === CORE_BURN_V1) {
+    // asset, collection?, payer, authority?, …
+    if ((opt(3) ?? opt(2)) !== wallet) return null;
+    return { asset, collection: opt(1), direction: 'out', counterparty: '' };
+  }
+  return null;
+}
+
+const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+/** First byte of base58-encoded instruction data, or null if it isn't valid base58. */
+export function firstByte(data: string | undefined): number | null {
+  if (!data) return null;
+  let n = 0n;
+  for (const ch of data) {
+    const v = BASE58.indexOf(ch);
+    if (v < 0) return null;
+    n = n * 58n + BigInt(v);
+  }
+  let leadingZeros = 0;
+  while (leadingZeros < data.length && data[leadingZeros] === '1') leadingZeros++;
+  if (leadingZeros > 0) return 0;
+  if (n === 0n) return null;
+  return Number(n >> BigInt((n.toString(16).length + 1 >> 1) * 8 - 8));
 }
 
 /** Full transaction history for one Solana address via Helius' enhanced transactions API. */
@@ -306,6 +421,7 @@ export class SolanaActivityFetcher {
     for (const tx of txs) {
       for (const t of tx.tokenTransfers ?? []) if (t.mint && !knownAsset('solana', t.mint)) mints.add(t.mint);
       for (const n of tx.events?.nft?.nfts ?? []) if (n.mint) mints.add(n.mint);
+      for (const m of coreAssetMoves(tx, address)) mints.add(m.asset);
     }
     const dasStats = { dasRequested: 0, dasResolved: 0, dasFailedBatches: 0 };
     const mintInfo = await this.fetchMintInfo([...mints], dasStats);
@@ -327,6 +443,7 @@ export class SolanaActivityFetcher {
       nftLegs: movements.filter((m) => m.asset.kind === 'nft').length,
       tokenLegs: movements.filter((m) => m.asset.kind === 'fungible').length,
       nftsFromEvents: movements.filter((m) => m.fromEvent).length,
+      coreNfts: movements.filter((m) => m.fromCore).length,
       escrowPayments: movements.filter((m) => m.inferred).length,
       nftCollections: new Set(movements.filter((m) => m.asset.kind === 'nft').map((m) => m.asset.key)).size,
       ...dasStats,

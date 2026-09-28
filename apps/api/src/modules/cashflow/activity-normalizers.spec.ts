@@ -1,6 +1,6 @@
 import type { LedgerAsset } from './cashflow-ledger';
 import { normalizeEvmTransfer, type AlchemyTransfer } from './evm-activity.fetcher';
-import { normalizeSolanaTx, type MintInfo } from './solana-activity.fetcher';
+import { normalizeSolanaTx, type HeliusInstruction, type MintInfo } from './solana-activity.fetcher';
 import { nearestDay } from './cashflow.service';
 
 const ME = '0xAbC0000000000000000000000000000000000001';
@@ -352,5 +352,112 @@ describe('bulk txs and Solana classification fallbacks', () => {
     expect(c).toMatchObject({ buyCount: 1, sellCount: 1, qtySoldWithoutBasis: 0 });
     expect(c.realizedPnlUsd).toBeCloseTo(200); // bought 1 SOL, sold 3 SOL @ $100
     expect(c.realizedPnlNative).toBeCloseTo(2);
+  });
+});
+
+describe('Metaplex Core assets', () => {
+  const { MPL_CORE_PROGRAM, coreAssetMoves, firstByte, SolanaActivityFetcher } = jest.requireActual('./solana-activity.fetcher');
+  const { buildCashflowReport } = jest.requireActual('./cashflow-ledger');
+  const ME = 'MeWa11et1111111111111111111111111111111111';
+  const CREATOR = 'Creator111111111111111111111111111111111111';
+  const COLLECTION = 'Co11ection111111111111111111111111111111111';
+  const ASSET = 'Asset11111111111111111111111111111111111111';
+  const LAUNCHPAD = 'LaunchPad1111111111111111111111111111111111';
+  const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const b58 = (bytes: number[]) => {
+    let n = bytes.reduce((acc, b) => acc * 256n + BigInt(b), 0n);
+    let out = '';
+    while (n > 0n) {
+      out = ALPHABET[Number(n % 58n)] + out;
+      n /= 58n;
+    }
+    for (const b of bytes) {
+      if (b !== 0) break;
+      out = '1' + out;
+    }
+    return out;
+  };
+  const P = MPL_CORE_PROGRAM;
+  // createV2: asset, collection?, authority?, payer, owner?, update_authority?, system, log_wrapper?
+  const createV2 = (accounts: string[]) => ({ programId: P, accounts, data: b58([20, 0, 5, 104, 105, 33, 1, 2]) });
+  const tx = (instructions: HeliusInstruction[], extra: object = {}) => ({
+    signature: 'sigCore',
+    timestamp: 1_740_000_000,
+    fee: 5000,
+    feePayer: ME,
+    instructions,
+    ...extra,
+  });
+
+  it('decodes the instruction variant from base58 data', () => {
+    expect(firstByte(b58([20, 7, 9]))).toBe(20);
+    expect(firstByte(b58([14, 0, 0]))).toBe(14);
+    expect(firstByte(b58([0, 3]))).toBe(0);
+    expect(firstByte('0OIl')).toBeNull();
+  });
+
+  it('counts a top-level createV2 mint to the payer as a paid mint', () => {
+    const t = tx([createV2([ASSET, P, P, ME, P, P, '11111111111111111111111111111111', P])], {
+      nativeTransfers: [{ fromUserAccount: ME, toUserAccount: CREATOR, amount: 500_000_000 }],
+    });
+    const assets = new Map();
+    const r = normalizeSolanaTx(ME, t, new Map(), assets);
+    expect(r.movements.map((m) => [m.direction, m.asset.kind, m.tokenId, m.counterparty])).toEqual([
+      ['out', 'native', null, CREATOR],
+      ['in', 'nft', ASSET, ''],
+    ]);
+    const report = buildCashflowReport({
+      movements: r.movements,
+      fees: [],
+      wallets: [{ chain: 'solana', address: ME }],
+      pricer: { usdPerUnit: () => 100 },
+      coverage: [],
+      notes: [],
+      now: new Date('2025-06-01T00:00:00Z'),
+    });
+    expect(report.activity[0].type).toBe('nft_mint');
+    expect(report.outByCategory.nft_mint).toBe(50);
+  });
+
+  it('finds a createV2 made by a launchpad (CPI) and groups it by its collection', () => {
+    const t = tx([
+      {
+        programId: LAUNCHPAD,
+        accounts: [ME],
+        data: b58([1]),
+        innerInstructions: [createV2([ASSET, COLLECTION, CREATOR, ME, ME, P, '11111111111111111111111111111111', P])],
+      },
+    ]);
+    const moves = coreAssetMoves(t, ME);
+    expect(moves).toEqual([{ asset: ASSET, collection: COLLECTION, direction: 'in', counterparty: '' }]);
+    const info: MintInfo = { isNft: true, name: 'Thing #4', symbol: null, collection: COLLECTION, collectionName: 'Things' };
+    const r = normalizeSolanaTx(ME, t, new Map([[ASSET, info]]), new Map());
+    expect(r.movements[0].asset).toMatchObject({ key: `solana:${COLLECTION}`, kind: 'nft', name: 'Things' });
+  });
+
+  it('ignores a mint for someone else, and reads Core transfers both ways', () => {
+    expect(coreAssetMoves(tx([createV2([ASSET, P, P, ME, CREATOR, P, 'sys', P])]), ME)).toEqual([]);
+    const transfer = (from: string, to: string) => ({ programId: P, accounts: [ASSET, COLLECTION, from, P, to, P, P], data: b58([14, 0]) });
+    expect(coreAssetMoves(tx([transfer(ME, CREATOR)]), ME)).toEqual([
+      { asset: ASSET, collection: COLLECTION, direction: 'out', counterparty: CREATOR },
+    ]);
+    expect(coreAssetMoves(tx([transfer(CREATOR, ME)]), ME)).toEqual([
+      { asset: ASSET, collection: COLLECTION, direction: 'in', counterparty: CREATOR },
+    ]);
+  });
+
+  it('asks DAS about Core assets so they get their collection name', async () => {
+    const dasIds: string[][] = [];
+    jest.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
+      if (String(url).includes('/v0/transactions'))
+        return new Response(JSON.stringify([tx([createV2([ASSET, COLLECTION, P, ME, P, P, 'sys', P])])]), { status: 200 });
+      dasIds.push(JSON.parse(String((init as RequestInit).body)).params.ids);
+      return new Response(JSON.stringify({ result: [] }), { status: 200 });
+    });
+    const r = await new SolanaActivityFetcher('key').fetchTxs(ME, ['sigCore'], new Map());
+    expect(dasIds[0]).toContain(ASSET);
+    expect(r.stats?.coreNfts).toBe(1);
+    expect(r.movements[0].asset.key).toBe(`solana:${COLLECTION}`); // DAS came back empty → the instruction's collection
+    jest.restoreAllMocks();
   });
 });
