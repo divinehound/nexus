@@ -684,17 +684,35 @@ function DetailTabs({ report }: { report: CashflowReport }) {
   );
 }
 
+/** A small ↗ icon after a collection/token name, linking its contract on the chain's explorer. */
 function ContractLink({ chain, contract }: { chain: string; contract: string }) {
   const url = contract ? addressExplorerUrl(chain, contract) : null;
   if (!url) return null;
+  const label = `View ${chain === 'solana' ? 'collection' : 'contract'} on ${explorerName(chain)}`;
   return (
     <a
       href={url}
       target="_blank"
       rel="noopener noreferrer"
-      className="ml-5 text-[11px] text-gray-500 underline-offset-2 hover:text-purple-300 hover:underline"
+      title={label}
+      aria-label={label}
+      className="inline-flex shrink-0 text-gray-500 hover:text-purple-300"
     >
-      {chain === 'solana' ? 'collection' : 'contract'} on {explorerName(chain)} ↗
+      <svg
+        viewBox="0 0 16 16"
+        width="12"
+        height="12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        aria-hidden="true"
+      >
+        <path
+          d="M6.5 3.5H3.75a.75.75 0 0 0-.75.75v8c0 .41.34.75.75.75h8c.41 0 .75-.34.75-.75V9.5"
+          strokeLinecap="round"
+        />
+        <path d="M9.5 2.75h3.75v3.75M13 3 7.5 8.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
     </a>
   );
 }
@@ -862,40 +880,51 @@ function PositionsTable({
                 <tr className="align-top">
                   <td className="py-2 pr-4">
                     {(kind === 'nft' ? r.items.length : r.trades.length) > 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => toggle(r.key)}
-                        aria-expanded={expanded.has(r.key)}
-                        className="group flex items-start gap-1.5 text-left"
-                      >
-                        <span
-                          className={cn(
-                            'mt-0.5 text-xs text-gray-500 transition-transform',
-                            expanded.has(r.key) && 'rotate-90',
-                          )}
-                          aria-hidden="true"
+                      <>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => toggle(r.key)}
+                            aria-expanded={expanded.has(r.key)}
+                            className="group flex items-center gap-1.5 text-left"
+                          >
+                            <span
+                              className={cn(
+                                'text-xs text-gray-500 transition-transform',
+                                expanded.has(r.key) && 'rotate-90',
+                              )}
+                              aria-hidden="true"
+                            >
+                              ▶
+                            </span>
+                            <span className="font-medium text-gray-200 group-hover:text-purple-300">
+                              {r.name}
+                            </span>
+                          </button>
+                          <ContractLink chain={r.chain} contract={r.contract} />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => toggle(r.key)}
+                          tabIndex={-1}
+                          className="ml-[1.1rem] block text-left text-xs text-gray-500 hover:text-gray-300"
                         >
-                          ▶
-                        </span>
-                        <span>
-                          <span className="font-medium text-gray-200 group-hover:text-purple-300">
-                            {r.name}
-                          </span>
-                          <span className="block text-xs text-gray-500">
-                            {CHAIN_LABELS[r.chain] ?? r.chain} ·{' '}
-                            {r.symbol && kind === 'fungible' && r.symbol !== r.name
-                              ? `${r.symbol} · `
-                              : ''}
-                            {expanded.has(r.key) ? 'hide' : 'show'}{' '}
-                            {kind === 'nft'
-                              ? `${r.items.length} item${r.items.length === 1 ? '' : 's'}`
-                              : `${r.trades.length} trade${r.trades.length === 1 ? '' : 's'}`}
-                          </span>
-                        </span>
-                      </button>
+                          {CHAIN_LABELS[r.chain] ?? r.chain} ·{' '}
+                          {r.symbol && kind === 'fungible' && r.symbol !== r.name
+                            ? `${r.symbol} · `
+                            : ''}
+                          {expanded.has(r.key) ? 'hide' : 'show'}{' '}
+                          {kind === 'nft'
+                            ? `${r.items.length} item${r.items.length === 1 ? '' : 's'}`
+                            : `${r.trades.length} trade${r.trades.length === 1 ? '' : 's'}`}
+                        </button>
+                      </>
                     ) : (
                       <>
-                        <div className="font-medium text-gray-200">{r.name}</div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium text-gray-200">{r.name}</span>
+                          <ContractLink chain={r.chain} contract={r.contract} />
+                        </div>
                         <div className="text-xs text-gray-500">
                           {CHAIN_LABELS[r.chain] ?? r.chain}
                           {r.symbol && kind === 'fungible' && r.symbol !== r.name
@@ -904,7 +933,6 @@ function PositionsTable({
                         </div>
                       </>
                     )}
-                    <ContractLink chain={r.chain} contract={r.contract} />
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums text-gray-300">
                     {r.qtyBought ? qty(r.qtyBought) : '—'}
