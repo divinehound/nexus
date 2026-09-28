@@ -14,6 +14,7 @@ export const RELAY_CHAIN_IDS: Record<number, string> = {
   7777777: 'zora',
   81457: 'blast',
   59144: 'linea',
+  4663: 'robinhood',
   792703809: 'solana',
 };
 

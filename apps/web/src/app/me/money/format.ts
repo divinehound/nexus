@@ -122,6 +122,7 @@ export const CHAIN_LABELS: Record<string, string> = {
   zora: 'Zora',
   blast: 'Blast',
   linea: 'Linea',
+  robinhood: 'Robinhood Chain',
   solana: 'Solana',
 };
 
@@ -142,6 +143,10 @@ const EXPLORERS: Record<string, { tx: string; address: string }> = {
   },
   blast: { tx: 'https://blastscan.io/tx/', address: 'https://blastscan.io/address/' },
   linea: { tx: 'https://lineascan.build/tx/', address: 'https://lineascan.build/address/' },
+  robinhood: {
+    tx: 'https://robinhoodchain.blockscout.com/tx/',
+    address: 'https://robinhoodchain.blockscout.com/address/',
+  },
   solana: { tx: 'https://solscan.io/tx/', address: 'https://solscan.io/account/' },
 };
 
@@ -156,6 +161,7 @@ const EXPLORER_NAMES: Record<string, string> = {
   zora: 'Zora Explorer',
   blast: 'Blastscan',
   linea: 'Lineascan',
+  robinhood: 'Blockscout',
   solana: 'Solscan',
 };
 
