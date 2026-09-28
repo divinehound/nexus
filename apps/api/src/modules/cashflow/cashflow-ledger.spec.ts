@@ -1069,3 +1069,138 @@ describe('OTC deals (money and NFTs sent as separate transfers)', () => {
     expect(build(late).activity.find((a) => a.txHash === '0xducks')!.type).toBe('received_asset');
   });
 });
+
+describe('one payment for NFTs sent in several transactions', () => {
+  const SELLER = '0xse11e40000000000000000000000000000000007';
+  const DUCKS: LedgerAsset = { ...PUNKS, key: 'ethereum:ducks2', contract: 'ducks2', name: 'Yucky Ducks' };
+  const h = (hours: number) => new Date(Date.UTC(2024, 0, 10) + hours * 3_600_000).toISOString();
+  const duck = (tx: string, at: string, id: string, party = SELLER, dir: 'in' | 'out' = 'in') =>
+    mv(tx, at, dir, DUCKS, 1, party, { tokenId: id });
+  // 0.04 ETH, and the ducks arrive in three txs — the last one carrying two.
+  const movements = [
+    mv('0xpay', h(0), 'out', ETH, 0.04, SELLER),
+    duck('0xd1', h(1), '1'),
+    duck('0xd2', h(2), '2'),
+    duck('0xd3', h(3), '3'),
+    duck('0xd3', h(3), '4'),
+  ];
+  const withLinks = (ms: LedgerMovement[], links: Array<[string, string]>) =>
+    buildCashflowReport({
+      movements: ms,
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      explicitLinks: links.map(([a, b]) => ({
+        fromChain: 'ethereum',
+        fromTxHash: a,
+        toChain: 'ethereum',
+        toTxHash: b,
+        source: 'manual' as const,
+      })),
+    });
+
+  it('splits a linked payment across the linked transfers by how many NFTs each moved', () => {
+    // A different sender, so only the manual links can pair them.
+    const other = movements.map((m) => (m.txHash === '0xpay' ? { ...m, counterparty: '0xsomeoneelse' } : m));
+    const r = withLinks(other, [
+      ['0xpay', '0xd1'],
+      ['0xpay', '0xd2'],
+      ['0xd3', '0xpay'],
+    ]);
+    const cost = (tx: string) => r.activity.find((a) => a.txHash === tx)!.outUsd;
+    expect(cost('0xd1')).toBeCloseTo(20); // 0.01 ETH × $2000
+    expect(cost('0xd2')).toBeCloseTo(20);
+    expect(cost('0xd3')).toBeCloseTo(40); // two ducks
+    expect(r.outByCategory.nft_purchase).toBeCloseTo(80);
+    const pay = r.activity.find((a) => a.txHash === '0xpay')!;
+    expect(pay.label).toBe('Paid 0.04 ETH for assets received separately in 3 transactions (OTC purchase)');
+    expect(pay.linkedTxs?.map((l) => l.txHash)).toEqual(['0xd1', '0xd2', '0xd3']);
+    const pos = r.collections.find((c) => c.name === 'Yucky Ducks')!;
+    expect(pos.items.map((i) => i.costUsd)).toEqual(Array(4).fill(expect.closeTo(20)));
+    // Counted once, not once per linked transfer: $80 out in total, the items'
+    // costs add up to exactly the payment, and the payment row has no cost of its own.
+    expect(r.totals.outUsd).toBeCloseTo(80);
+    expect(r.outByCategory.transfer_out).toBeUndefined();
+    expect(pay.outUsd).toBe(0);
+    expect(pos.spentUsd).toBeCloseTo(80);
+    expect(pos.items.reduce((n, i) => n + i.costNative, 0)).toBeCloseTo(0.04);
+    expect(r.totals.openCostBasisUsd).toBeCloseTo(80);
+  });
+
+  it('groups them automatically when it is the only payment to that person', () => {
+    const r = build(movements);
+    expect(r.activity.filter((a) => a.type === 'nft_purchase')).toHaveLength(3);
+    expect(r.outByCategory.nft_purchase).toBeCloseTo(80);
+    expect(r.totals.outUsd).toBeCloseTo(80);
+  });
+
+  it('pairs each payment with its closest transfer when there were several deals', () => {
+    const r = build([
+      mv('0xpayA', h(0), 'out', ETH, 0.01, SELLER),
+      duck('0xd1', h(1), '1'),
+      mv('0xpayB', h(10), 'out', ETH, 0.02, SELLER),
+      duck('0xd2', h(11), '2'),
+    ]);
+    expect(r.activity.find((a) => a.txHash === '0xd1')!.linkedTo?.txHash).toBe('0xpayA');
+    expect(r.activity.find((a) => a.txHash === '0xd2')!.linkedTo?.txHash).toBe('0xpayB');
+  });
+
+  it('works for sales too: two NFTs sent to a buyer in two txs, paid once', () => {
+    const BUYER = '0xb4ye400000000000000000000000000000000008';
+    const r = build([
+      ...movements,
+      duck('0xs1', h(30), '1', BUYER, 'out'),
+      duck('0xs2', h(31), '2', BUYER, 'out'),
+      mv('0xgot', h(32), 'in', ETH, 0.06, BUYER),
+    ]);
+    const sales = r.activity.filter((a) => a.type === 'nft_sale');
+    expect(sales.map((a) => a.inUsd)).toEqual([expect.closeTo(60), expect.closeTo(60)]);
+    expect(r.totals.realizedPnlUsd).toBeCloseTo(120 - 40);
+  });
+});
+
+describe('token trades (the expandable list under each token)', () => {
+  it('lists buys, sales and moves newest first, with average-cost P/L on sales', () => {
+    const r = build([
+      mv('0xb1', '2024-01-05T00:00:00Z', 'out', ETH, 1, MARKET),
+      mv('0xb1', '2024-01-05T00:00:00Z', 'in', PEPE, 1000, MARKET),
+      mv('0xb2', '2024-01-06T00:00:00Z', 'out', ETH, 0.5, MARKET),
+      mv('0xb2', '2024-01-06T00:00:00Z', 'in', PEPE, 1000, MARKET),
+      mv('0xa1', '2024-01-07T00:00:00Z', 'in', PEPE, 500, FRIEND),
+      mv('0xs1', '2024-02-10T00:00:00Z', 'out', PEPE, 1000, MARKET),
+      mv('0xs1', '2024-02-10T00:00:00Z', 'in', ETH, 1, MARKET),
+    ]);
+    const pepe = r.tokens.find((t) => t.symbol === 'PEPE')!;
+    expect(pepe.trades.map((t) => [t.txHash, t.kind, t.qty])).toEqual([
+      ['0xs1', 'sell', 1000],
+      ['0xa1', 'received', 500],
+      ['0xb2', 'buy', 1000],
+      ['0xb1', 'buy', 1000],
+    ]);
+    const [sell, received, , firstBuy] = pepe.trades;
+    expect(firstBuy.usd).toBeCloseTo(2000); // 1 ETH × $2000
+    expect(received.usd).toBe(0);
+    // Average cost: $3000 for 2500 PEPE → $1.20 each; 1000 sold for 1 ETH at $3000.
+    expect(sell.usd).toBeCloseTo(3000);
+    expect(sell.costBasisUsd).toBeCloseTo(1200);
+    expect(sell.pnlUsd).toBeCloseTo(1800);
+    expect(sell.pnlUsd).toBeCloseTo(pepe.realizedPnlUsd);
+    expect(r.collections.every((c) => c.trades.length === 0)).toBe(true);
+  });
+
+  it('records a token-for-token swap on both tokens', () => {
+    const r = build([
+      mv('0xb1', '2024-01-05T00:00:00Z', 'out', ETH, 1, MARKET),
+      mv('0xb1', '2024-01-05T00:00:00Z', 'in', PEPE, 1000, MARKET),
+      mv('0xsw', '2024-01-08T00:00:00Z', 'out', PEPE, 1000, MARKET),
+      mv('0xsw', '2024-01-08T00:00:00Z', 'in', DOGE, 50, MARKET),
+    ]);
+    const pepe = r.tokens.find((t) => t.symbol === 'PEPE')!;
+    const doge = r.tokens.find((t) => t.symbol === 'DOGE')!;
+    expect(pepe.trades[0]).toMatchObject({ kind: 'swap_out', qty: 1000, costBasisUsd: expect.closeTo(2000) });
+    expect(doge.trades[0]).toMatchObject({ kind: 'swap_in', qty: 50, usd: expect.closeTo(2000) });
+  });
+});

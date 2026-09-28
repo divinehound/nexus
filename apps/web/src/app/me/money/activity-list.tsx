@@ -6,6 +6,7 @@ import type {
   CashflowActivityLeg,
   CashflowFlag,
   CashflowReport,
+  CashflowResponse,
   CashflowTxType,
 } from '@nexus/types';
 import { addCashflowLink } from '@/lib/api';
@@ -224,30 +225,39 @@ function ActivityRow({
   // trade: paid on another chain (Relay), or an OTC deal paid separately.
   const unpaid = a.type === 'received_asset';
   const unsold = a.type === 'sent_asset';
-  const linkable = OUTGOING.includes(a.type) || INCOMING.includes(a.type) || unpaid || unsold;
+  // A trade's payment can take more transfers (one payment, NFTs sent in several txs).
+  const tradePayment = a.type === 'trade_payment';
+  const linkable =
+    OUTGOING.includes(a.type) || INCOMING.includes(a.type) || unpaid || unsold || tradePayment;
+  const linked = a.linkedTxs ?? (a.linkedTo ? [a.linkedTo] : []);
+  const isBridge = a.type === 'bridge';
 
   const unlink = () => {
-    if (!a.linkedTo) return;
-    const pair =
-      a.linkSide === 'out'
-        ? {
-            fromChain: a.chain,
-            fromTxHash: a.txHash,
-            toChain: a.linkedTo.chain,
-            toTxHash: a.linkedTo.txHash,
-          }
-        : {
-            fromChain: a.linkedTo.chain,
-            fromTxHash: a.linkedTo.txHash,
-            toChain: a.chain,
-            toTxHash: a.txHash,
-          };
+    if (linked.length === 0) return;
     // Always record a rejection (the API drops any manual link for the pair
     // first). Just deleting a manual link would let the automatic matcher
     // pair the same two transactions straight back up.
-    void run('Unlinked — counted as separate transfers again', (token, view) =>
-      addCashflowLink(token, { kind: 'unlink', ...pair }, view),
-    );
+    void run('Unlinked — counted as separate transfers again', async (token, view) => {
+      let last: CashflowResponse | null = null;
+      for (const other of linked) {
+        const pair =
+          a.linkSide === 'out'
+            ? {
+                fromChain: a.chain,
+                fromTxHash: a.txHash,
+                toChain: other.chain,
+                toTxHash: other.txHash,
+              }
+            : {
+                fromChain: other.chain,
+                fromTxHash: other.txHash,
+                toChain: a.chain,
+                toTxHash: a.txHash,
+              };
+        last = await addCashflowLink(token, { kind: 'unlink', ...pair }, view);
+      }
+      return last!;
+    });
   };
 
   return (
@@ -274,12 +284,13 @@ function ActivityRow({
             <span className="font-mono">↔ {truncateAddress(a.counterparty)}</span>
           )}
           <ExplorerLink chain={a.chain} hash={a.txHash} />
-          {a.linkedTo && (
-            <ExplorerLink chain={a.linkedTo.chain} hash={a.linkedTo.txHash}>
-              {a.linkSide === 'out' ? 'Arrival' : 'Departure'} on{' '}
-              {CHAIN_LABELS[a.linkedTo.chain] ?? a.linkedTo.chain}
+          {linked.map((l, i) => (
+            <ExplorerLink key={`${l.chain}:${l.txHash}`} chain={l.chain} hash={l.txHash}>
+              {isBridge
+                ? `${a.linkSide === 'out' ? 'Arrival' : 'Departure'} on ${CHAIN_LABELS[l.chain] ?? l.chain}`
+                : `Linked tx${linked.length > 1 ? ` ${i + 1}` : ''}${l.chain !== a.chain ? ` on ${CHAIN_LABELS[l.chain] ?? l.chain}` : ''}`}
             </ExplorerLink>
-          )}
+          ))}
           <button
             type="button"
             onClick={onDetails}
@@ -289,14 +300,14 @@ function ActivityRow({
             {detailsOpen ? 'Hide details' : 'Details'}
           </button>
           {a.linkSource && <span>{LINK_SOURCE_LABELS[a.linkSource]}</span>}
-          {a.linkedTo && (a.type === 'bridge' || a.linkSource) && (
+          {linked.length > 0 && (isBridge || a.linkSource) && (
             <button
               type="button"
               disabled={busy}
               onClick={unlink}
               className="text-gray-400 underline-offset-2 hover:text-white hover:underline disabled:opacity-50"
             >
-              Unlink
+              {linked.length > 1 ? `Unlink all ${linked.length}` : 'Unlink'}
             </button>
           )}
           {linkable && (
@@ -312,7 +323,9 @@ function ActivityRow({
                   ? 'Link to its payment…'
                   : unsold
                     ? 'Link to what you were paid…'
-                    : 'Link…'}
+                    : tradePayment
+                      ? 'Link more transfers…'
+                      : 'Link…'}
             </button>
           )}
         </div>
@@ -435,7 +448,7 @@ function TxDetails({ a, flag }: { a: CashflowActivity; flag: CashflowFlag | unde
 const moneyOf = (a: CashflowActivity) =>
   OUTGOING.includes(a.type) ? a.outUsd - a.feeUsd : a.inUsd;
 
-function LinkPicker({
+export function LinkPicker({
   source,
   report,
   onDone,
@@ -457,13 +470,15 @@ function LinkPicker({
     // What the other half can be: money for assets and assets for money (a
     // trade — OTC or cross-chain), or money going the other way (a bridge).
     const partnerTypes: CashflowTxType[] =
-      source.type === 'received_asset'
-        ? OUTGOING
-        : source.type === 'sent_asset'
-          ? INCOMING
-          : sourceIsOut
-            ? [...INCOMING, 'received_asset']
-            : [...OUTGOING, 'sent_asset'];
+      source.type === 'trade_payment'
+        ? [source.linkSide === 'in' ? 'sent_asset' : 'received_asset']
+        : source.type === 'received_asset'
+          ? OUTGOING
+          : source.type === 'sent_asset'
+            ? INCOMING
+            : sourceIsOut
+              ? [...INCOMING, 'received_asset']
+              : [...OUTGOING, 'sent_asset'];
     const t0 = new Date(source.timestamp).getTime();
     const value = moneyOf(source);
     const party = source.counterparty?.toLowerCase() ?? null;
@@ -492,17 +507,45 @@ function LinkPicker({
       .slice(0, 8);
   }, [report.activity, source, sourceIsOut, assetSource]);
 
-  const link = (chain: string, txHash: string) => {
-    const pair = sourceIsOut
-      ? { fromChain: source.chain, fromTxHash: source.txHash, toChain: chain, toTxHash: txHash }
-      : { fromChain: chain, fromTxHash: txHash, toChain: source.chain, toTxHash: source.txHash };
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const togglePick = (key: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  /** Link the source to each chosen tx — together they're one trade (e.g. one payment, NFTs in 3 txs). */
+  const link = (others: Array<{ chain: string; txHash: string }>) => {
+    const pairFor = (o: { chain: string; txHash: string }) =>
+      sourceIsOut
+        ? {
+            fromChain: source.chain,
+            fromTxHash: source.txHash,
+            toChain: o.chain,
+            toTxHash: o.txHash,
+          }
+        : {
+            fromChain: o.chain,
+            fromTxHash: o.txHash,
+            toChain: source.chain,
+            toTxHash: source.txHash,
+          };
     void run(
       source.type === 'received_asset'
         ? 'Linked — that payment now counts as what you paid for this'
         : source.type === 'sent_asset'
           ? 'Linked — counted as a sale for that payment'
-          : 'Linked',
-      (token, view) => addCashflowLink(token, { kind: 'link', ...pair }, view),
+          : others.length > 1
+            ? `Linked ${others.length} transactions as one trade`
+            : 'Linked',
+      async (token, view) => {
+        let last: CashflowResponse | null = null;
+        for (const o of others)
+          last = await addCashflowLink(token, { kind: 'link', ...pairFor(o) }, view);
+        return last!;
+      },
     ).then((ok) => ok && onDone());
   };
 
@@ -518,26 +561,50 @@ function LinkPicker({
               : 'Where did this money come from — or what did you sell for it?'}
       </div>
       {candidates.length > 0 ? (
-        <ul className="space-y-1">
-          {candidates.map(({ b, dt }) => (
-            <li key={`${b.chain}:${b.txHash}`}>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => link(b.chain, b.txHash)}
-                className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left hover:bg-gray-800 disabled:opacity-50"
-              >
-                <span className="min-w-0 truncate text-gray-200">
-                  <span className="text-gray-500">{CHAIN_LABELS[b.chain] ?? b.chain} · </span>
-                  {b.label}
-                </span>
-                <span className="shrink-0 text-xs tabular-nums text-gray-400">
-                  {usd(moneyOf(b))} · {formatGap(dt)}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="space-y-1">
+            {candidates.map(({ b, dt }) => {
+              const key = `${b.chain}:${b.txHash}`;
+              return (
+                <li key={key}>
+                  <label className="flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 hover:bg-gray-800">
+                    <input
+                      type="checkbox"
+                      checked={picked.has(key)}
+                      disabled={busy}
+                      onChange={() => togglePick(key)}
+                    />
+                    <span className="min-w-0 flex-1 truncate text-gray-200">
+                      <span className="text-gray-500">{CHAIN_LABELS[b.chain] ?? b.chain} · </span>
+                      {b.label}
+                    </span>
+                    <span className="shrink-0 text-xs tabular-nums text-gray-400">
+                      {usd(moneyOf(b))} · {formatGap(dt)}
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          <button
+            type="button"
+            disabled={busy || picked.size === 0}
+            onClick={() =>
+              link(
+                candidates
+                  .filter(({ b }) => picked.has(`${b.chain}:${b.txHash}`))
+                  .map(({ b }) => ({ chain: b.chain, txHash: b.txHash })),
+              )
+            }
+            className="mt-2 rounded-md bg-purple-600 px-3 py-1 text-xs font-medium text-white hover:bg-purple-500 disabled:opacity-50"
+          >
+            Link {picked.size > 1 ? `${picked.size} transactions` : 'selected'}
+          </button>
+          <p className="mt-1 text-[11px] text-gray-500">
+            Tick every transaction in the deal — e.g. one payment for NFTs sent in several
+            transactions. The money is split across them by number of NFTs and counted once.
+          </p>
+        </>
       ) : (
         <p className="text-xs text-gray-500">No transfers in the week around this one.</p>
       )}
@@ -545,7 +612,7 @@ function LinkPicker({
         className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-800 pt-3"
         onSubmit={(e) => {
           e.preventDefault();
-          if (manualHash.trim()) link(manualChain, manualHash.trim());
+          if (manualHash.trim()) link([{ chain: manualChain, txHash: manualHash.trim() }]);
         }}
       >
         <label className="text-xs text-gray-400" htmlFor={`link-chain-${source.txHash}`}>

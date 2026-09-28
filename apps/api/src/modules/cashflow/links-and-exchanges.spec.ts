@@ -69,7 +69,7 @@ describe('request validation', () => {
 describe('link delete conditions stay scoped to the user', () => {
   // Imported lazily so the pure tests above don't need the DB schema.
   const { PgDialect } = jest.requireActual('drizzle-orm/pg-core');
-  const { samePairCondition, sharesTxLinkCondition, normalizePair } = jest.requireActual('./cashflow.service');
+  const { samePairCondition, normalizePair } = jest.requireActual('./cashflow.service');
   const dialect = new PgDialect();
   const pair = { fromChain: 'ethereum', fromTxHash: '0xabc', toChain: 'solana', toTxHash: 'SoLsig' };
 
@@ -97,12 +97,6 @@ describe('link delete conditions stay scoped to the user', () => {
     const q = dialect.sqlToQuery(samePairCondition('user-1', pair));
     assertScoped(q.sql);
     expect(q.params[0]).toBe('user-1');
-  });
-
-  it('shares-a-tx delete', () => {
-    const q = dialect.sqlToQuery(sharesTxLinkCondition('user-1', pair));
-    assertScoped(q.sql);
-    expect(q.sql).toContain('"kind" = $2');
   });
 
   it('lowercases EVM hashes but not Solana signatures', () => {

@@ -11,6 +11,7 @@ import type {
   CashflowNftAcquiredVia,
   CashflowNftDisposedVia,
   CashflowNftItem,
+  CashflowTokenTrade,
   CashflowPosition,
   CashflowReport,
   CashflowTxType,
@@ -180,6 +181,8 @@ interface NftTrip {
 
 class Position {
   readonly lots = new Map<string, Lot>();
+  /** Tokens only: every buy, sale and move, in the order they happened. */
+  readonly trades: CashflowTokenTrade[] = [];
   /** NFTs only: every holding period, in the order they started. */
   readonly trips: NftTrip[] = [];
   private readonly openTrips = new Map<string, NftTrip[]>();
@@ -404,6 +407,11 @@ class Position {
     }
     if (open.length === 0) this.openTrips.delete(tokenId);
     return closed;
+  }
+
+  /** Tokens only (NFTs have per-item trips instead). */
+  trade(t: CashflowTokenTrade) {
+    if (this.asset.kind !== 'nft') this.trades.push(t);
   }
 
   get qtyHeld(): number {
@@ -735,10 +743,12 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       const legsSrc = bridge.self.legs;
       const phrase = assetPhrase(legsSrc.map((l) => l.movement));
       const sameChain = pair.group.chain === g.chain;
+      const many =
+        (bridge.others?.length ?? 1) > 1 ? ` in ${bridge.others!.length} transactions` : '';
       const label = bridge.funds
         ? bridge.trade === 'sale'
-          ? `Received ${phrase} for ${sameChain ? 'assets sent separately (OTC sale)' : `a sale on ${chainName(pair.group.chain)}`}`
-          : `Paid ${phrase} for ${sameChain ? 'assets received separately (OTC purchase)' : `a purchase on ${chainName(pair.group.chain)}`}`
+          ? `Received ${phrase} for ${sameChain ? `assets sent separately${many} (OTC sale)` : `a sale on ${chainName(pair.group.chain)}`}`
+          : `Paid ${phrase} for ${sameChain ? `assets received separately${many} (OTC purchase)` : `a purchase on ${chainName(pair.group.chain)}${many}`}`
         : bridge.side === 'out'
           ? `Bridged ${phrase} · ${chainName(g.chain)} → ${chainName(pair.group.chain)}`
           : `Bridge arrival: ${phrase} from ${chainName(pair.group.chain)}`;
@@ -756,6 +766,9 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         counterparty: null,
         exchange: null,
         linkedTo: { chain: pair.group.chain, txHash: pair.group.txHash },
+        ...(bridge.others && bridge.others.length > 1
+          ? { linkedTxs: bridge.others.map((o) => ({ chain: o.chain, txHash: o.txHash })) }
+          : {}),
         linkSource: bridge.source,
         linkSide: bridge.side,
         legs: legsSrc.map((l) => toLeg(l.movement, l.usd)),
@@ -823,6 +836,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           usdMissing,
         );
         p.gasUsd += gasShare;
+        p.trade({
+          txHash: g.txHash,
+          at: at.toISOString(),
+          kind: paid ? 'buy' : 'received',
+          qty: m.amount,
+          usd: paid ? (usdMissing ? null : share) : 0,
+          native: paid ? shareNative : 0,
+          costBasisUsd: null,
+          pnlUsd: null,
+          pnlNative: null,
+          gasUsd: gasShare,
+        });
         if (paid) {
           p.spentNative += shareNative;
           p.buyCount++;
@@ -892,6 +917,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
               shareNative - d.basisNative - d.gasNative - gasShareNative;
           }
           bookSplit(p, usdOk ? share - d.basis : null, pnlNative, saleRate);
+          p.trade({
+            txHash: g.txHash,
+            at: at.toISOString(),
+            kind: 'sell',
+            qty: m.amount,
+            usd: moneyUsdKnown ? share : null,
+            native: nativeKnown ? shareNative : null,
+            costBasisUsd: d.usdMissing > 0 ? null : d.basis,
+            pnlUsd: usdOk ? share - d.basis : null,
+            pnlNative,
+            gasUsd: gasShare,
+          });
           p.sellCount++;
           p.qtySold += m.amount;
           p.qtySoldWithoutBasis += d.missing;
@@ -919,8 +956,20 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         // ── Gave an asset away (gift, move to an unlinked wallet, burn) ──
         for (const m of unOut) {
           const p = positionFor(m.asset, at);
-          p.dispose(m.amount, m.tokenId);
+          const d = p.dispose(m.amount, m.tokenId);
           p.gasUsd += feeUsd / unOut.length;
+          p.trade({
+            txHash: g.txHash,
+            at: at.toISOString(),
+            kind: m.counterparty === '' ? 'burned' : 'sent',
+            qty: m.amount,
+            usd: 0,
+            native: 0,
+            costBasisUsd: d.usdMissing > 0 ? null : d.basis,
+            pnlUsd: null,
+            pnlNative: null,
+            gasUsd: feeUsd / unOut.length,
+          });
           for (const t of p.closeTrips(
             m.tokenId,
             m.amount,
@@ -953,6 +1002,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         const d = p.dispose(m.amount, m.tokenId);
         if (d.usdMissing > 0) carriedUsdMissing = true;
         p.closeTrips(m.tokenId, m.amount, at, 'swap', g.txHash);
+        p.trade({
+          txHash: g.txHash,
+          at: at.toISOString(),
+          kind: 'swap_out',
+          qty: m.amount,
+          usd: null,
+          native: null,
+          costBasisUsd: d.usdMissing > 0 ? null : d.basis,
+          pnlUsd: null,
+          pnlNative: null,
+          gasUsd: feeUsd / (unIn.length + unOut.length),
+        });
         carried += d.basis;
         carriedGas += d.gas;
         carriedGasNative += d.gasNative;
@@ -1005,6 +1066,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           carriedGasNative / unIn.length,
           carriedUsdMissing,
         );
+        p.trade({
+          txHash: g.txHash,
+          at: at.toISOString(),
+          kind: 'swap_in',
+          qty: m.amount,
+          usd: carriedUsdMissing ? null : share,
+          native: basisNative / unIn.length,
+          costBasisUsd: null,
+          pnlUsd: null,
+          pnlNative: null,
+          gasUsd: feeUsd / (unIn.length + unOut.length),
+        });
         legUsd.set(m, share);
       }
       for (const m of [...unIn, ...unOut])
@@ -1059,6 +1132,9 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       linkedTo: funder
         ? { chain: funder.pair.group.chain, txHash: funder.pair.group.txHash }
         : null,
+      ...(funder?.others && funder.others.length > 1
+        ? { linkedTxs: funder.others.map((o) => ({ chain: o.chain, txHash: o.txHash })) }
+        : {}),
       linkSource: funder?.source ?? null,
       linkSide: funder ? 'in' : null,
       legs,
@@ -1100,6 +1176,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       firstAt: p.firstAt.toISOString(),
       lastAt: p.lastAt.toISOString(),
       items: p.trips.map(toNftItem).sort(newestFirst).slice(0, MAX_ITEMS_PER_COLLECTION),
+      trades: [...p.trades].reverse().slice(0, MAX_ITEMS_PER_COLLECTION),
     };
     (row.kind === 'nft' ? collections : tokens).push(row);
   }
@@ -1333,6 +1410,8 @@ export interface BridgeRole {
   /** Money that paid for (or came from) assets moved in the paired tx, rather than money moving between wallets. */
   funds?: boolean;
   trade?: 'purchase' | 'sale';
+  /** Every tx on the other side of the trade (`pair` is the first) — one payment can cover several transfers. */
+  others?: TxGroup[];
 }
 
 const MINUTE = 60_000;
@@ -1488,46 +1567,104 @@ export function matchLinkedTrades(
     noMoney(g) && an(g).unOut.length > 0 && an(g).unIn.length === 0;
   const free = (g: TxGroup) => !roles.has(g) && !funded.has(g);
 
+  /** How many items an asset tx moved — the basis for splitting one payment across several txs. */
+  const itemsIn = (g: TxGroup, trade: 'purchase' | 'sale') =>
+    (trade === 'purchase' ? an(g).unIn : an(g).unOut).reduce(
+      (n, m) => n + (m.asset.kind === 'nft' ? m.amount : 1),
+      0,
+    );
+
+  /**
+   * One trade: the money txs paid for (or came from) the asset txs. The money
+   * is split across the asset txs by how many items each moved — one ETH
+   * transfer for three NFTs sent in three txs costs a third per tx.
+   */
+  const pairGroup = (
+    moneyTxs: TxGroup[],
+    assetTxs: TxGroup[],
+    trade: 'purchase' | 'sale',
+    source: CashflowLinkSource,
+  ) => {
+    const legsOf = (g: TxGroup) => (trade === 'purchase' ? an(g).pricedOut : an(g).pricedIn);
+    const legs = moneyTxs.flatMap(legsOf);
+    const weights = assetTxs.map((g) => Math.max(itemsIn(g, trade), 1));
+    const total = weights.reduce((a, b) => a + b, 0);
+    const [moneyDir, assetDir] =
+      trade === 'purchase' ? (['out', 'in'] as const) : (['in', 'out'] as const);
+    const firstAssets = bridgeSide(assetTxs[0], []);
+    for (const money of moneyTxs) {
+      roles.set(money, {
+        side: moneyDir,
+        self: bridgeSide(money, legsOf(money)),
+        pair: firstAssets,
+        source,
+        funds: true,
+        trade,
+        others: assetTxs,
+      });
+    }
+    assetTxs.forEach((assets, i) => {
+      const share = weights[i] / total;
+      const scaled = legs.map((l) => ({
+        movement: { ...l.movement, amount: l.movement.amount * share },
+        usd: l.usd === null ? null : l.usd * share,
+        native: l.native === null ? null : l.native * share,
+      }));
+      funded.set(assets, {
+        side: assetDir,
+        self: bridgeSide(assets, []),
+        pair: bridgeSide(moneyTxs[0], scaled),
+        source,
+        funds: true,
+        trade,
+        others: moneyTxs,
+      });
+    });
+  };
   const pairUp = (
     money: TxGroup,
     assets: TxGroup,
     trade: 'purchase' | 'sale',
     source: CashflowLinkSource,
-  ) => {
-    const legs = trade === 'purchase' ? an(money).pricedOut : an(money).pricedIn;
-    const moneySide = bridgeSide(money, legs);
-    const assetSide = bridgeSide(assets, []);
-    const [moneyDir, assetDir] =
-      trade === 'purchase' ? (['out', 'in'] as const) : (['in', 'out'] as const);
-    roles.set(money, {
-      side: moneyDir,
-      self: moneySide,
-      pair: assetSide,
-      source,
-      funds: true,
-      trade,
-    });
-    funded.set(assets, {
-      side: assetDir,
-      self: assetSide,
-      pair: moneySide,
-      source,
-      funds: true,
-      trade,
-    });
-  };
-  const tryPair = (money: TxGroup, assets: TxGroup, source: CashflowLinkSource) => {
-    if (payment(money) && unpaidAcquisition(assets)) pairUp(money, assets, 'purchase', source);
-    else if (receipt(money) && unpaidDisposal(assets)) pairUp(money, assets, 'sale', source);
-    return funded.has(assets);
-  };
+  ) => pairGroup([money], [assets], trade, source);
 
+  // Explicit links, grouped: every tx connected by links is one trade, so one
+  // payment can be linked to several NFT transfers (or several payments to one).
+  const parent = new Map<TxGroup, TxGroup>();
+  const find = (g: TxGroup): TxGroup => {
+    const p = parent.get(g) ?? g;
+    if (p === g) return g;
+    const root = find(p);
+    parent.set(g, root);
+    return root;
+  };
+  const linkSource = new Map<TxGroup, CashflowLinkSource>();
   for (const link of explicit) {
     const a = byKey.get(txKey(link.fromChain, link.fromTxHash));
     const b = byKey.get(txKey(link.toChain, link.toTxHash));
     if (!a || !b || a === b || !free(a) || !free(b)) continue;
-    // Either order: a link is just "these two belong together".
-    if (!tryPair(a, b, link.source)) tryPair(b, a, link.source);
+    if (!parent.has(a)) parent.set(a, a);
+    if (!parent.has(b)) parent.set(b, b);
+    parent.set(find(a), find(b));
+    if (!linkSource.has(a)) linkSource.set(a, link.source);
+    if (!linkSource.has(b)) linkSource.set(b, link.source);
+  }
+  const components = new Map<TxGroup, TxGroup[]>();
+  for (const g of parent.keys()) {
+    const root = find(g);
+    components.set(root, [...(components.get(root) ?? []), g]);
+  }
+  for (const members of components.values()) {
+    const sorted = [...members].sort((x, y) => x.timestamp.getTime() - y.timestamp.getTime());
+    const source = sorted.map((g) => linkSource.get(g)).find((s) => s) ?? 'manual';
+    const pays = sorted.filter(payment);
+    const gets = sorted.filter(receipt);
+    const acq = sorted.filter(unpaidAcquisition);
+    const disp = sorted.filter(unpaidDisposal);
+    if (pays.length + acq.length === sorted.length && pays.length > 0 && acq.length > 0)
+      pairGroup(pays, acq, 'purchase', source);
+    else if (gets.length + disp.length === sorted.length && gets.length > 0 && disp.length > 0)
+      pairGroup(gets, disp, 'sale', source);
   }
 
   const rejectedKeys = new Set(
@@ -1586,16 +1723,32 @@ export function matchLinkedTrades(
       (isPayment ? an(money).pricedOut : an(money).pricedIn).map((l) => l.movement),
     );
     if (!party) continue;
-    const best = closest(
-      money.timestamp.getTime(),
-      assetTxs,
-      (g, dt) =>
+    const t0 = money.timestamp.getTime();
+    const matches = (g: TxGroup, dt: number) =>
+      g.chain === money.chain &&
+      Math.abs(dt) <= OTC_WINDOW_MS &&
+      !isRejected(money, g) &&
+      (isPayment ? unpaidAcquisition(g) : unpaidDisposal(g)) &&
+      soleCounterparty(isPayment ? an(g).unIn : an(g).unOut) === party;
+    // The only payment to (or from) this person in the window covers everything
+    // they sent (or were sent) — e.g. one ETH transfer for NFTs sent in 3 txs.
+    // With more than one, pair each with its closest transfer instead.
+    const rivals = ordered.filter(
+      (g) =>
+        g !== money &&
+        free(g) &&
         g.chain === money.chain &&
-        Math.abs(dt) <= OTC_WINDOW_MS &&
-        !isRejected(money, g) &&
-        (isPayment ? unpaidAcquisition(g) : unpaidDisposal(g)) &&
-        soleCounterparty(isPayment ? an(g).unIn : an(g).unOut) === party,
+        Math.abs(g.timestamp.getTime() - t0) <= 2 * OTC_WINDOW_MS &&
+        (isPayment ? payment(g) : receipt(g)) &&
+        soleCounterparty((isPayment ? an(g).pricedOut : an(g).pricedIn).map((l) => l.movement)) ===
+          party,
     );
+    const all = assetTxs.filter((g) => free(g) && matches(g, g.timestamp.getTime() - t0));
+    if (rivals.length === 0 && all.length > 1) {
+      pairGroup([money], all, isPayment ? 'purchase' : 'sale', 'auto');
+      continue;
+    }
+    const best = closest(t0, assetTxs, matches);
     if (best) pairUp(money, best, isPayment ? 'purchase' : 'sale', 'auto');
   }
   return funded;

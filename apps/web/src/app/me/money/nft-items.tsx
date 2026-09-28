@@ -1,12 +1,15 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import type {
+  CashflowActivity,
   CashflowNftAcquiredVia,
   CashflowNftDisposedVia,
   CashflowNftItem,
   CashflowPosition,
+  CashflowReport,
 } from '@nexus/types';
+import { LinkPicker } from './activity-list';
 import { cn } from '@/lib/utils';
 import { explorerName, nativeAmount, pnlClass, txExplorerUrl, usd, usdSigned } from './format';
 import { Dual } from './ui';
@@ -78,8 +81,52 @@ function PnlText({ item, symbol }: { item: CashflowNftItem; symbol: string }) {
   );
 }
 
+/**
+ * The activity row for an NFT's acquire/dispose tx, for linking it to its
+ * payment. The activity list is capped, so an older tx gets a minimal stand-in.
+ */
+function activityFor(
+  report: CashflowReport,
+  chain: string,
+  txHash: string,
+  type: 'received_asset' | 'sent_asset',
+  at: string | null,
+): CashflowActivity {
+  const found = report.activity.find(
+    (a) => a.chain === chain && a.txHash.toLowerCase() === txHash.toLowerCase(),
+  );
+  return (
+    found ?? {
+      chain,
+      txHash,
+      timestamp: at ?? new Date().toISOString(),
+      wallet: '',
+      type,
+      label: '',
+      inUsd: 0,
+      outUsd: 0,
+      feeUsd: 0,
+      realizedPnlUsd: null,
+      counterparty: null,
+      exchange: null,
+      linkedTo: null,
+      linkSource: null,
+      linkSide: null,
+      legs: [],
+    }
+  );
+}
+
 /** One row per NFT (or per round trip when the same token was flipped more than once). */
-export function NftItemsTable({ position }: { position: CashflowPosition }) {
+export function NftItemsTable({
+  position,
+  report,
+}: {
+  position: CashflowPosition;
+  /** For linking an NFT that arrived (or left) with no money to its OTC/cross-chain payment. */
+  report?: CashflowReport;
+}) {
+  const [linking, setLinking] = useState<{ key: string; source: CashflowActivity } | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [sort, setSort] = useState<Sort>('recent');
   const [limit, setLimit] = useState(PAGE);
@@ -245,91 +292,149 @@ export function NftItemsTable({ position }: { position: CashflowPosition }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/60">
-            {rows.slice(0, limit).map((i, idx) => (
-              <tr
-                key={`${i.tokenId}:${i.acquireTxHash ?? 'x'}:${i.disposeTxHash ?? 'open'}:${idx}`}
-                className="align-top"
-              >
-                <td className="py-1.5 pr-3 font-mono text-gray-200">
-                  #
-                  {i.tokenId.length > 12
-                    ? `${i.tokenId.slice(0, 6)}…${i.tokenId.slice(-4)}`
-                    : i.tokenId}
-                  {i.qty !== 1 && <span className="ml-1 text-gray-500">×{i.qty}</span>}
-                </td>
-                <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
-                  <TxLink chain={position.chain} hash={i.acquireTxHash}>
-                    {ACQUIRED_LABELS[i.acquiredVia]}
-                    {i.acquiredAt && (
-                      <span className="text-gray-500"> · {shortDate(i.acquiredAt)}</span>
-                    )}
-                  </TxLink>
-                </td>
-                <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
-                  {i.acquiredVia === 'unknown' ? (
-                    '—'
-                  ) : i.acquiredVia === 'free_mint' || i.acquiredVia === 'received' ? (
-                    // Nothing paid — but minting still cost gas, so show it.
-                    <span className="text-gray-500">
-                      free
-                      {i.buyGasUsd > 0 && <div className="text-[11px]">gas {usd(i.buyGasUsd)}</div>}
-                    </span>
-                  ) : (
-                    <Dual usd={i.costUsd} native={i.costNative} symbol={sym} />
-                  )}
-                </td>
-                <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
-                  {i.disposedVia && i.disposedAt ? (
-                    <TxLink chain={position.chain} hash={i.disposeTxHash}>
-                      {DISPOSED_LABELS[i.disposedVia]}
-                      <span className="text-gray-500"> · {shortDate(i.disposedAt)}</span>
-                    </TxLink>
-                  ) : (
-                    <span className="text-gray-500">Still held</span>
-                  )}
-                </td>
-                <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
-                  <Dual usd={i.proceedsUsd} native={i.proceedsNative} symbol={sym} />
-                </td>
-                <td className="py-1.5 pr-3 text-right tabular-nums">
-                  <Dual usd={i.realizedPnlUsd} native={i.realizedPnlNative} symbol={sym} signed />
-                  {i.usdPriceMissing && (
-                    <div
-                      className="cursor-help text-gray-500"
-                      title={`No USD price was available for the ${i.costUsd === null ? 'buy' : 'sale'} day, so this is shown in ${sym} only.`}
+            {rows.slice(0, limit).map((i, idx) => {
+              const rowKey = `${i.tokenId}:${i.acquireTxHash ?? 'x'}:${i.disposeTxHash ?? 'open'}:${idx}`;
+              // Arrived or left with no money in the same tx: maybe an OTC deal or a cross-chain mint.
+              const unpaid =
+                report &&
+                i.acquireTxHash &&
+                (i.acquiredVia === 'free_mint' || i.acquiredVia === 'received');
+              const unsold = report && i.disposeTxHash && i.disposedVia === 'sent';
+              const pick = (
+                hash: string,
+                type: 'received_asset' | 'sent_asset',
+                at: string | null,
+              ) => {
+                const key = `${rowKey}:${type}`;
+                setLinking(
+                  linking?.key === key
+                    ? null
+                    : { key, source: activityFor(report!, position.chain, hash, type, at) },
+                );
+              };
+              return (
+                <Fragment key={rowKey}>
+                  <tr className="align-top">
+                    <td className="py-1.5 pr-3 font-mono text-gray-200">
+                      #
+                      {i.tokenId.length > 12
+                        ? `${i.tokenId.slice(0, 6)}…${i.tokenId.slice(-4)}`
+                        : i.tokenId}
+                      {i.qty !== 1 && <span className="ml-1 text-gray-500">×{i.qty}</span>}
+                    </td>
+                    <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
+                      <TxLink chain={position.chain} hash={i.acquireTxHash}>
+                        {ACQUIRED_LABELS[i.acquiredVia]}
+                        {i.acquiredAt && (
+                          <span className="text-gray-500"> · {shortDate(i.acquiredAt)}</span>
+                        )}
+                      </TxLink>
+                      {unpaid && (
+                        <button
+                          type="button"
+                          onClick={() => pick(i.acquireTxHash!, 'received_asset', i.acquiredAt)}
+                          className="block text-[11px] text-purple-300 hover:text-purple-200"
+                        >
+                          {linking?.key === `${rowKey}:received_asset` ? 'Cancel' : 'Link payment…'}
+                        </button>
+                      )}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
+                      {i.acquiredVia === 'unknown' ? (
+                        '—'
+                      ) : i.acquiredVia === 'free_mint' || i.acquiredVia === 'received' ? (
+                        // Nothing paid — but minting still cost gas, so show it.
+                        <span className="text-gray-500">
+                          free
+                          {i.buyGasUsd > 0 && (
+                            <div className="text-[11px]">gas {usd(i.buyGasUsd)}</div>
+                          )}
+                        </span>
+                      ) : (
+                        <Dual usd={i.costUsd} native={i.costNative} symbol={sym} />
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
+                      {i.disposedVia && i.disposedAt ? (
+                        <TxLink chain={position.chain} hash={i.disposeTxHash}>
+                          {DISPOSED_LABELS[i.disposedVia]}
+                          <span className="text-gray-500"> · {shortDate(i.disposedAt)}</span>
+                        </TxLink>
+                      ) : (
+                        <span className="text-gray-500">Still held</span>
+                      )}
+                      {unsold && (
+                        <button
+                          type="button"
+                          onClick={() => pick(i.disposeTxHash!, 'sent_asset', i.disposedAt)}
+                          className="block text-[11px] text-purple-300 hover:text-purple-200"
+                        >
+                          {linking?.key === `${rowKey}:sent_asset`
+                            ? 'Cancel'
+                            : 'Link payment received…'}
+                        </button>
+                      )}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
+                      <Dual usd={i.proceedsUsd} native={i.proceedsNative} symbol={sym} />
+                    </td>
+                    <td className="py-1.5 pr-3 text-right tabular-nums">
+                      <Dual
+                        usd={i.realizedPnlUsd}
+                        native={i.realizedPnlNative}
+                        symbol={sym}
+                        signed
+                      />
+                      {i.usdPriceMissing && (
+                        <div
+                          className="cursor-help text-gray-500"
+                          title={`No USD price was available for the ${i.costUsd === null ? 'buy' : 'sale'} day, so this is shown in ${sym} only.`}
+                        >
+                          no USD price
+                        </div>
+                      )}
+                      {i.acquiredVia === 'unknown' && i.realizedPnlUsd !== null && (
+                        <span
+                          className="cursor-help text-yellow-500"
+                          title="Purchase not found in your history — counted at $0 cost."
+                        >
+                          * $0 cost
+                        </span>
+                      )}
+                    </td>
+                    <td
+                      className="py-1.5 pr-3 text-right tabular-nums"
+                      title={`Gas: ${usd(i.buyGasUsd)} (${nativeAmount(i.buyGasNative, sym, false)}) to acquire, ${usd(i.sellGasUsd)} (${nativeAmount(i.sellGasNative, sym, false)}) to ${i.disposedVia === 'sale' ? 'sell' : 'move'}`}
                     >
-                      no USD price
-                    </div>
+                      <Dual
+                        usd={i.realizedPnlAfterGasUsd}
+                        native={i.realizedPnlAfterGasNative}
+                        symbol={sym}
+                        signed
+                      />
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums text-gray-400">
+                      {i.disposedAt
+                        ? formatHold(i.holdSeconds)
+                        : i.acquiredAt
+                          ? formatHold((Date.now() - Date.parse(i.acquiredAt)) / 1000)
+                          : '—'}
+                    </td>
+                  </tr>
+                  {report && linking?.key.startsWith(`${rowKey}:`) && (
+                    <tr>
+                      <td colSpan={8} className="pb-3">
+                        <LinkPicker
+                          source={linking.source}
+                          report={report}
+                          onDone={() => setLinking(null)}
+                        />
+                      </td>
+                    </tr>
                   )}
-                  {i.acquiredVia === 'unknown' && i.realizedPnlUsd !== null && (
-                    <span
-                      className="cursor-help text-yellow-500"
-                      title="Purchase not found in your history — counted at $0 cost."
-                    >
-                      * $0 cost
-                    </span>
-                  )}
-                </td>
-                <td
-                  className="py-1.5 pr-3 text-right tabular-nums"
-                  title={`Gas: ${usd(i.buyGasUsd)} (${nativeAmount(i.buyGasNative, sym, false)}) to acquire, ${usd(i.sellGasUsd)} (${nativeAmount(i.sellGasNative, sym, false)}) to ${i.disposedVia === 'sale' ? 'sell' : 'move'}`}
-                >
-                  <Dual
-                    usd={i.realizedPnlAfterGasUsd}
-                    native={i.realizedPnlAfterGasNative}
-                    symbol={sym}
-                    signed
-                  />
-                </td>
-                <td className="py-1.5 text-right tabular-nums text-gray-400">
-                  {i.disposedAt
-                    ? formatHold(i.holdSeconds)
-                    : i.acquiredAt
-                      ? formatHold((Date.now() - Date.parse(i.acquiredAt)) / 1000)
-                      : '—'}
-                </td>
-              </tr>
-            ))}
+                </Fragment>
+              );
+            })}
             {rows.length === 0 && (
               <tr>
                 <td colSpan={8} className="py-4 text-center text-gray-500">

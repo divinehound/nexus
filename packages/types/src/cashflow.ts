@@ -121,6 +121,37 @@ export interface CashflowPosition {
   lastAt: string;
   /** NFTs only: one row per token held — or per round trip, if bought and sold more than once. Newest first. */
   items: CashflowNftItem[];
+  /** Tokens only: every buy, sale and other move of this token. Newest first. */
+  trades: CashflowTokenTrade[];
+}
+
+export type CashflowTokenTradeKind =
+  | 'buy'
+  | 'sell'
+  | 'received'
+  | 'sent'
+  | 'burned'
+  | 'swap_in'
+  | 'swap_out';
+
+/** One buy, sale or move of a fungible token. */
+export interface CashflowTokenTrade {
+  txHash: string;
+  at: string;
+  kind: CashflowTokenTradeKind;
+  qty: number;
+  /**
+   * What was paid (buys; for swaps in, the cost carried over) or received
+   * (sales). null when the day has no USD price; 0 for plain moves.
+   */
+  usd: number | null;
+  native: number | null;
+  /** Average cost of the units sold/sent (average-cost basis). */
+  costBasisUsd: number | null;
+  /** Sales only. */
+  pnlUsd: number | null;
+  pnlNative: number | null;
+  gasUsd: number;
 }
 
 export type CashflowNftAcquiredVia = 'purchase' | 'mint' | 'free_mint' | 'received' | 'swap' | 'unknown';
@@ -212,6 +243,8 @@ export interface CashflowActivity {
   exchange: string | null;
   /** For bridges: the other half of the move, and how the pair was established. */
   linkedTo: { chain: string; txHash: string } | null;
+  /** Every tx on the other side of a trade when there's more than one (linkedTo is the first). */
+  linkedTxs?: Array<{ chain: string; txHash: string }>;
   linkSource: CashflowLinkSource | null;
   /** Whether this row is where the money left ('out') or arrived ('in'). */
   linkSide: 'out' | 'in' | null;
