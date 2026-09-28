@@ -915,3 +915,157 @@ describe('buildCashflowReport', () => {
     expect(r.activityTotal).toBe(1);
   });
 });
+
+describe('cross-chain purchases (paid on one chain, delivered on another)', () => {
+  const RELAY_RECEIVER = '0xa5f565650890fba1824ee0f21ebbbf660a179934';
+  const payees = new Set([`evm:${RELAY_RECEIVER}`]);
+  const ABS_ETH: LedgerAsset = { ...ETH, key: 'abstract:native', chain: 'abstract' };
+  const OTTERS: LedgerAsset = { ...PUNKS, key: 'abstract:otters', chain: 'abstract', contract: 'otters', name: 'Lost Otters' };
+  const t = (min: number) => new Date(Date.UTC(2024, 0, 10) + min * 60_000).toISOString();
+  // Relay's solver mints 6 Otters on Abstract straight to the wallet: nothing paid there, no gas.
+  const otterMint = (min: number) =>
+    [710, 711, 712, 713, 714, 715].map((id) =>
+      mv('0xabs', t(min), 'in', OTTERS, 1, '', { chain: 'abstract', tokenId: String(id) }),
+    );
+  const pay = mv('0xeth', t(0), 'out', ETH, 0.0152, RELAY_RECEIVER);
+  const buildWith = (movements: LedgerMovement[], fees: LedgerFee[] = [], opts: object = {}) =>
+    buildCashflowReport({
+      movements,
+      fees,
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      crossChainPayees: payees,
+      ...opts,
+    });
+
+  it('books ETH paid to Relay on Ethereum as the cost of the mint Relay delivered on Abstract', () => {
+    const r = buildWith([pay, ...otterMint(1)], [fee('0xeth', t(0), 0.0005)]);
+    const mint = r.activity.find((a) => a.chain === 'abstract')!;
+    expect(mint.type).toBe('nft_mint');
+    expect(mint.outUsd).toBeCloseTo(30.4); // 0.0152 ETH × $2000
+    expect(mint.linkedTo).toEqual({ chain: 'ethereum', txHash: '0xeth' });
+    const payment = r.activity.find((a) => a.chain === 'ethereum')!;
+    expect(payment.type).toBe('trade_payment');
+    expect(payment.label).toBe('Paid 0.0152 ETH for a purchase on Abstract');
+    expect(payment.outUsd).toBeCloseTo(1); // just its gas
+    // Counted once: the mint, plus gas — not also as money sent to Relay.
+    expect(r.outByCategory.nft_mint).toBeCloseTo(30.4);
+    expect(r.outByCategory.transfer_out).toBeUndefined();
+    expect(r.bridges.count).toBe(0);
+    const otters = r.collections.find((c) => c.name === 'Lost Otters')!;
+    expect(otters.items.map((i) => i.costUsd)).toEqual(Array(6).fill(expect.closeTo(30.4 / 6)));
+    expect(otters.items.every((i) => i.acquiredVia === 'mint')).toBe(true);
+  });
+
+  it("pairs from Relay's records (or the user's link) without knowing Relay's addresses", () => {
+    const r = buildWith([{ ...pay, counterparty: '0xsomewhere' }, ...otterMint(3)], [], {
+      crossChainPayees: new Set(),
+      explicitLinks: [{ fromChain: 'ethereum', fromTxHash: '0xeth', toChain: 'abstract', toTxHash: '0xabs', source: 'relay' }],
+    });
+    const mint = r.activity.find((a) => a.chain === 'abstract')!;
+    expect(mint.type).toBe('nft_mint');
+    expect(mint.linkSource).toBe('relay');
+    expect(r.outByCategory.nft_mint).toBeCloseTo(30.4);
+  });
+
+  it("doesn't pair a mint you paid gas for, one much later, one on the same chain, or a rejected pair", () => {
+    const paidGas = buildWith([pay, ...otterMint(1)], [fee('0xabs', t(1), 0.0001, ME, 'abstract')]);
+    expect(paidGas.activity.find((a) => a.chain === 'abstract')!.linkedTo).toBeNull();
+    const late = buildWith([pay, ...otterMint(45)]);
+    expect(late.activity.find((a) => a.chain === 'abstract')!.linkedTo).toBeNull();
+    const rejected = buildWith([pay, ...otterMint(1)], [], {
+      rejectedLinks: [{ fromChain: 'ethereum', fromTxHash: '0xeth', toChain: 'abstract', toTxHash: '0xabs' }],
+    });
+    expect(rejected.activity.find((a) => a.chain === 'abstract')!.linkedTo).toBeNull();
+    expect(rejected.outByCategory.transfer_out).toBeCloseTo(30.4);
+  });
+
+  it('still treats a plain Relay bridge (money arrives on the other side) as a bridge', () => {
+    const r = buildWith([pay, mv('0xabs', t(1), 'in', ABS_ETH, 0.015, '0xsolver', { chain: 'abstract' })]);
+    expect(r.activity.map((a) => a.type)).toEqual(['bridge', 'bridge']);
+    expect(r.bridges.count).toBe(1);
+  });
+});
+
+describe('OTC deals (money and NFTs sent as separate transfers)', () => {
+  const SELLER = '0xse11e40000000000000000000000000000000005';
+  const BUYER = '0xb4ye400000000000000000000000000000000006';
+  const DUCKS: LedgerAsset = { ...PUNKS, key: 'ethereum:ducks', contract: 'ducks', name: 'Yucky Ducks' };
+  const h = (hours: number) => new Date(Date.UTC(2024, 0, 10) + hours * 3_600_000).toISOString();
+  const duck = (tx: string, at: string, dir: 'in' | 'out', id: string, party: string) =>
+    mv(tx, at, dir, DUCKS, 1, party, { tokenId: id });
+  const buy = [
+    mv('0xpay', h(0), 'out', ETH, 0.04, SELLER),
+    duck('0xducks', h(2), 'in', '1', SELLER),
+    duck('0xducks', h(2), 'in', '2', SELLER),
+    duck('0xducks', h(2), 'in', '3', SELLER),
+  ];
+
+  it('pairs ETH sent to someone with the NFTs they sent back as one purchase', () => {
+    const r = build(buy, [fee('0xpay', h(0), 0.0005)]);
+    const ducks = r.activity.find((a) => a.txHash === '0xducks')!;
+    expect(ducks.type).toBe('nft_purchase');
+    expect(ducks.outUsd).toBeCloseTo(80); // 0.04 ETH × $2000
+    expect(ducks.linkedTo).toEqual({ chain: 'ethereum', txHash: '0xpay' });
+    expect(ducks.linkSource).toBe('auto');
+    const pay = r.activity.find((a) => a.txHash === '0xpay')!;
+    expect(pay.type).toBe('trade_payment');
+    expect(pay.label).toBe('Paid 0.04 ETH for assets received separately (OTC purchase)');
+    expect(r.outByCategory.nft_purchase).toBeCloseTo(80);
+    expect(r.outByCategory.transfer_out).toBeUndefined();
+    const pos = r.collections.find((c) => c.name === 'Yucky Ducks')!;
+    expect(pos.items.map((i) => i.costUsd)).toEqual(Array(3).fill(expect.closeTo(80 / 3)));
+  });
+
+  it('pairs NFTs sent to a buyer with the ETH they paid as a sale, with P/L', () => {
+    const r = build([
+      ...buy,
+      duck('0xsend', h(24), 'out', '2', BUYER),
+      mv('0xgot', h(30), 'in', ETH, 0.05, BUYER),
+    ]);
+    const sale = r.activity.find((a) => a.txHash === '0xsend')!;
+    expect(sale.type).toBe('nft_sale');
+    expect(sale.realizedPnlUsd).toBeCloseTo(100 - 80 / 3); // got 0.05 ETH, cost 0.04/3
+    expect(r.activity.find((a) => a.txHash === '0xgot')!.label).toBe(
+      'Received 0.05 ETH for assets sent separately (OTC sale)',
+    );
+    expect(r.inByCategory.nft_sale).toBeCloseTo(100);
+    expect(r.inByCategory.transfer_in).toBeUndefined();
+  });
+
+  it('pairs different people only when linked by hand, and never pairs a rejected link', () => {
+    const other = [mv('0xpay', h(0), 'out', ETH, 0.04, BUYER), ...buy.slice(1)];
+    expect(build(other).activity.find((a) => a.txHash === '0xducks')!.type).toBe('received_asset');
+    const linked = buildCashflowReport({
+      movements: other,
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      // The UI may send the pair either way round.
+      explicitLinks: [{ fromChain: 'ethereum', fromTxHash: '0xducks', toChain: 'ethereum', toTxHash: '0xpay', source: 'manual' }],
+    });
+    expect(linked.activity.find((a) => a.txHash === '0xducks')!.type).toBe('nft_purchase');
+    const rejected = buildCashflowReport({
+      movements: buy,
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      rejectedLinks: [{ fromChain: 'ethereum', fromTxHash: '0xpay', toChain: 'ethereum', toTxHash: '0xducks' }],
+    });
+    expect(rejected.activity.find((a) => a.txHash === '0xducks')!.type).toBe('received_asset');
+  });
+
+  it('leaves transfers to the same person days apart alone', () => {
+    const late = [mv('0xpay', h(0), 'out', ETH, 0.04, SELLER), duck('0xducks', h(24 * 5), 'in', '1', SELLER)];
+    expect(build(late).activity.find((a) => a.txHash === '0xducks')!.type).toBe('received_asset');
+  });
+});

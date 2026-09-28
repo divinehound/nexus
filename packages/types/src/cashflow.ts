@@ -35,7 +35,9 @@ export type CashflowTxType =
   | 'sent_asset'
   | 'own_wallet_transfer'
   | 'bridge'
-  | 'contract_interaction';
+  | 'contract_interaction'
+  /** The money half of a trade whose NFTs/tokens moved in a separate tx (cross-chain mint, OTC deal). */
+  | 'trade_payment';
 
 export interface CashflowTotals {
   inUsd: number;

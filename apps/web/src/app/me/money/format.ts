@@ -109,6 +109,7 @@ export const TX_TYPE_LABELS: Record<CashflowTxType, string> = {
   own_wallet_transfer: 'Own wallets',
   bridge: 'Bridge',
   contract_interaction: 'Gas only',
+  trade_payment: 'Payment',
 };
 
 export const CHAIN_LABELS: Record<string, string> = {
