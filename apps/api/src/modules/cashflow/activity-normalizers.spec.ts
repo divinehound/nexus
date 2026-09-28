@@ -168,3 +168,111 @@ describe('hidden payments (balance-change probe)', () => {
     expect(out[1].rawContract.address).toBeNull();
   });
 });
+
+describe('Solana history (Helius)', () => {
+  const { SolanaActivityFetcher, normalizeSolanaTx, heliusResumeSignature } = jest.requireActual('./solana-activity.fetcher');
+  const { buildCashflowReport } = jest.requireActual('./cashflow-ledger');
+  const W = 'AHu9YFzhgCxDscBEEMJwzJG3GnKgWHrB8P214LgGQn8c';
+  const SELLER = 'SeLLer1111111111111111111111111111111111111';
+  const ESCROW = 'Escrow111111111111111111111111111111111111';
+  // Valid base58 (no 0/O/I/l), signature-length.
+  const sig = (n: number) => `${'5'.repeat(80)}${String(n).padStart(8, '0').replace(/0/g, 'A')}`;
+  const tx = (n: number, extra: object = {}) => ({ signature: sig(n), timestamp: 1_700_000_000 + n, feePayer: 'someoneElse', ...extra });
+  afterEach(() => jest.restoreAllMocks());
+
+  function mockHelius(pages: (cursor: string | null) => unknown[]) {
+    const cursors: Array<string | null> = [];
+    jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.helius.xyz') {
+        const cursor = url.searchParams.get('before-signature');
+        cursors.push(cursor);
+        return new Response(JSON.stringify(pages(cursor)), { status: 200 });
+      }
+      return new Response(JSON.stringify({ result: [] }), { status: 200 }); // DAS
+    });
+    return cursors;
+  }
+
+  it('pages with before-signature through the whole history', async () => {
+    const all = Array.from({ length: 250 }, (_, i) => tx(250 - i));
+    const cursors = mockHelius((cursor) => {
+      const start = cursor ? all.findIndex((t) => t.signature === cursor) + 1 : 0;
+      return all.slice(start, start + 100);
+    });
+    const r = await new SolanaActivityFetcher('key').fetch(W, new Map());
+    expect(r.transfers).toBe(250);
+    expect(r.truncated).toBe(false);
+    expect(cursors).toEqual([null, sig(151), sig(51), sig(1)]);
+  });
+
+  it('stops instead of re-reading the same page if the cursor is ignored', async () => {
+    const page = Array.from({ length: 100 }, (_, i) => tx(100 - i));
+    const cursors = mockHelius(() => page);
+    const r = await new SolanaActivityFetcher('key').fetch(W, new Map());
+    expect(cursors).toHaveLength(2);
+    expect(r.transfers).toBe(100); // not 100 × 300 duplicates
+    expect(r.notes.join(' ')).toMatch(/stopped early/);
+  });
+
+  it('reads compressed NFTs / Core assets from the NFT event when tokenTransfers has none', () => {
+    const { movements } = normalizeSolanaTx(
+      W,
+      tx(1, { type: 'COMPRESSED_NFT_MINT', events: { nft: { type: 'COMPRESSED_NFT_MINT', buyer: W, seller: '', amount: 0, nfts: [{ mint: 'cNFTasset1111' }] } } }),
+      new Map(),
+      new Map(),
+    );
+    expect(movements).toHaveLength(1);
+    expect(movements[0]).toMatchObject({ direction: 'in', tokenId: 'cNFTasset1111', counterparty: '', amount: 1 });
+    expect(movements[0].asset.kind).toBe('nft');
+  });
+
+  it('charges a bid filled from escrow once: the bid parks SOL (own move), the fill is the purchase', () => {
+    const bid = tx(1, { type: 'NFT_BID', feePayer: W, fee: 5000, nativeTransfers: [{ fromUserAccount: W, toUserAccount: ESCROW, amount: 2e9 }] });
+    const fill = tx(2, {
+      type: 'NFT_SALE',
+      tokenTransfers: [{ fromUserAccount: SELLER, toUserAccount: W, tokenAmount: 1, mint: 'MintA', tokenStandard: 'ProgrammableNonFungible' }],
+      events: { nft: { type: 'NFT_SALE', buyer: W, seller: SELLER, amount: 2e9, nfts: [{ mint: 'MintA' }] } },
+    });
+    const assets = new Map();
+    const legs = [bid, fill].flatMap((t) => normalizeSolanaTx(W, t, new Map(), assets).movements);
+    expect(legs[0]).toMatchObject({ direction: 'out', counterparty: W }); // escrow deposit → own
+    const pay = legs.find((m: { inferred?: boolean }) => m.inferred);
+    expect(pay).toMatchObject({ direction: 'out', amount: 2, inferred: true });
+
+    const report = buildCashflowReport({
+      movements: legs,
+      fees: [],
+      wallets: [{ chain: 'solana', address: W }],
+      pricer: { usdPerUnit: () => 100 },
+      coverage: [],
+      notes: [],
+      now: new Date(),
+    });
+    expect(report.totals.outUsd).toBe(200); // spent once, not twice
+    expect(report.outByCategory.transfer_out).toBeUndefined();
+    expect(report.collections[0]).toMatchObject({ buyCount: 1, spentUsd: 200 });
+  });
+
+  it('does not invent a payment when the wallet paid the price itself', () => {
+    const { movements } = normalizeSolanaTx(
+      W,
+      tx(1, {
+        type: 'NFT_SALE',
+        nativeTransfers: [{ fromUserAccount: W, toUserAccount: SELLER, amount: 1.9e9 }, { fromUserAccount: W, toUserAccount: 'Fees', amount: 0.1e9 }],
+        tokenTransfers: [{ fromUserAccount: SELLER, toUserAccount: W, tokenAmount: 1, mint: 'MintA', tokenStandard: 'NonFungible' }],
+        events: { nft: { type: 'NFT_SALE', buyer: W, seller: SELLER, amount: 2e9, nfts: [{ mint: 'MintA' }] } },
+      }),
+      new Map(),
+      new Map(),
+    );
+    expect(movements.some((m: { inferred?: boolean }) => m.inferred)).toBe(false);
+    expect(movements.filter((m: { tokenId: string | null }) => m.tokenId === 'MintA')).toHaveLength(1); // not doubled by the event
+  });
+
+  it('extracts Helius\' resume signature from its error message', () => {
+    const s = sig(7);
+    expect(heliusResumeSignature(`Helius address transactions failed (HTTP 404): {"error":"Failed to find events within the search period. To continue search, query the API again with the \`before-signature\` parameter set to ${s}."}`)).toBe(s);
+    expect(heliusResumeSignature('HTTP 500')).toBeNull();
+  });
+});
