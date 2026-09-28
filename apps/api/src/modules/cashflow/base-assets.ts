@@ -66,6 +66,11 @@ const KNOWN_ASSETS: Record<string, Record<string, KnownAsset>> = {
     '0x4300000000000000000000000000000000000004': { symbol: 'WETH', price: ETH },
     '0x4300000000000000000000000000000000000003': { symbol: 'USDB', price: USD },
   },
+  robinhood: {
+    '0x0bd7d308f8e1639fab988df18a8011f41eacad73': { symbol: 'WETH', price: ETH },
+    // Global Dollar (Paxos) — the chain's main stablecoin; Relay routes NFT buys through it.
+    '0x5fc5360d0400a0fd4f2af552add042d716f1d168': { symbol: 'USDG', price: USD },
+  },
   linea: {
     '0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f': { symbol: 'WETH', price: ETH },
     '0x176211869ca2b568f2a7d4ee941e073a821ee1ff': { symbol: 'USDC', price: USD },

@@ -1,6 +1,7 @@
 import type { CashflowWalletCoverage } from '@nexus/types';
 import type { LedgerAsset, LedgerFee, LedgerMovement } from './cashflow-ledger';
 import type { ChainFetchResult } from './evm-activity.fetcher';
+import { knownAsset } from './base-assets';
 
 /**
  * JSON form of one wallet's scan on one chain, as kept in `cashflow_scans`.
@@ -113,7 +114,10 @@ export function fromSaved(
   coverage: CashflowWalletCoverage;
   notes: string[];
 } {
-  for (const a of saved.assets) {
+  for (const stored of saved.assets) {
+    // Tokens added to the priced list after this scan was saved get their price now.
+    const known = stored.kind === 'fungible' && stored.contract ? knownAsset(stored.chain, stored.contract) : null;
+    const a = known ? { ...stored, symbol: known.symbol, name: known.symbol, price: known.price } : stored;
     const existing = assets.get(a.key);
     // A later scan may have found a better name (e.g. collection metadata that failed before).
     if (existing) Object.assign(existing, a);
