@@ -251,12 +251,44 @@ export interface CashflowWalletCoverage {
   error: string | null;
   /** What the scanner found, for diagnosing gaps (e.g. nftLegs, tokenLegs, eventNfts, probes, inferred). */
   stats?: Record<string, number>;
+  /** When this wallet+chain was last scanned (scans are saved; page loads don't rescan). */
+  scannedAt?: string | null;
+  /** The network isn't enabled on the Alchemy app, so it couldn't be scanned. */
+  disabled?: boolean;
+}
+
+/** Which chains are scanned for one linked address. */
+export interface CashflowWalletChains {
+  address: string;
+  family: 'evm' | 'solana';
+  chains: string[];
+  /** false = the default (every supported EVM chain). */
+  custom: boolean;
+}
+
+/** A transaction the user marked as read wrong or missing. */
+export interface CashflowFlag {
+  id: string;
+  chain: string;
+  txHash: string;
+  note: string | null;
+  createdAt: string;
+  /** Last time just this transaction was re-read from the chain. */
+  reimportedAt: string | null;
 }
 
 export interface CashflowReport {
   generatedAt: string;
   /** Set when the report covers only one linked wallet (?wallet=…). */
   walletFilter: string | null;
+  /** Set when the report covers only one chain (?chain=…). */
+  chainFilter: string | null;
+  /** Chains scanned per linked address, and the EVM chains that can be chosen. */
+  walletChains: CashflowWalletChains[];
+  availableChains: string[];
+  /** Every saved wallet+chain scan, whatever the wallet/chain filter (coverage is filtered). */
+  scans: CashflowWalletCoverage[];
+  flags: CashflowFlag[];
   wallets: Array<{ chain: string; address: string }>;
   firstActivityAt: string | null;
   lastActivityAt: string | null;

@@ -276,6 +276,31 @@ export class SolanaActivityFetcher {
     if (truncated) {
       notes.push(`Solana ${shortAddress(address)}: only the newest ${txs.length.toLocaleString()} transactions were scanned.`);
     }
+    return this.process(address, txs, truncated, notes, assets);
+  }
+
+  /** Re-read only the given transactions for `address` — the re-import of flagged transactions. */
+  async fetchTxs(address: string, signatures: string[], assets: Map<string, LedgerAsset>): Promise<ChainFetchResult> {
+    const txs: HeliusEnhancedTx[] = [];
+    for (const batch of chunk(signatures, 100)) {
+      const url = `https://api.helius.xyz/v0/transactions?api-key=${this.apiKey}`;
+      const rows = await fetchJsonWithRetry<HeliusEnhancedTx[]>(
+        url,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ transactions: batch }) },
+        'Helius parse transactions',
+      );
+      if (Array.isArray(rows)) txs.push(...rows.filter((tx) => tx?.signature));
+    }
+    return this.process(address, txs, false, [], assets);
+  }
+
+  private async process(
+    address: string,
+    txs: HeliusEnhancedTx[],
+    truncated: boolean,
+    notes: string[],
+    assets: Map<string, LedgerAsset>,
+  ): Promise<ChainFetchResult> {
 
     const mints = new Set<string>();
     for (const tx of txs) {
