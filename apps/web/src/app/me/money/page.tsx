@@ -22,7 +22,7 @@ import { FlagsPanel } from './flags';
 import { ScanPanel } from './scan-panel';
 import { NftItemsTable } from './nft-items';
 import { TokenTradesTable } from './token-trades';
-import { AfterGas, Dual, Stat } from './ui';
+import { AfterGas, Dual, ExplorerIcon, Stat } from './ui';
 import {
   CATEGORY_LABELS,
   CHAIN_LABELS,
@@ -689,32 +689,11 @@ function DetailTabs({ report }: { report: CashflowReport }) {
 function ContractLink({ chain, contract }: { chain: string; contract: string }) {
   const url = contract ? addressExplorerUrl(chain, contract) : null;
   if (!url) return null;
-  const label = `View ${chain === 'solana' ? 'collection' : 'contract'} on ${explorerName(chain)}`;
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      title={label}
-      aria-label={label}
-      className="inline-flex shrink-0 text-gray-500 hover:text-purple-300"
-    >
-      <svg
-        viewBox="0 0 16 16"
-        width="12"
-        height="12"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        aria-hidden="true"
-      >
-        <path
-          d="M6.5 3.5H3.75a.75.75 0 0 0-.75.75v8c0 .41.34.75.75.75h8c.41 0 .75-.34.75-.75V9.5"
-          strokeLinecap="round"
-        />
-        <path d="M9.5 2.75h3.75v3.75M13 3 7.5 8.5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    </a>
+    <ExplorerIcon
+      url={url}
+      label={`View ${chain === 'solana' ? 'collection' : 'contract'} on ${explorerName(chain)}`}
+    />
   );
 }
 

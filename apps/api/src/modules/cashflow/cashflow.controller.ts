@@ -9,6 +9,7 @@ import {
   IsIn,
   IsOptional,
   IsString,
+  IsUUID,
   Length,
   Matches,
   MaxLength,
@@ -115,6 +116,41 @@ export class ContactLabelDto {
   @IsString()
   @Length(1, 100)
   label!: string;
+}
+
+export class ContactTargetDto {
+  @IsIn(['address', 'tx'])
+  kind!: 'address' | 'tx';
+
+  @IsIn(CHAINS)
+  chain!: string;
+
+  @IsString()
+  @Length(10, 128)
+  @Matches(HASH_OR_ADDRESS)
+  ref!: string;
+}
+
+/** One name on many addresses/transfers at once. */
+export class ContactLabelBatchDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(500)
+  @ValidateNested({ each: true })
+  @Type(() => ContactTargetDto)
+  targets!: ContactTargetDto[];
+
+  @IsString()
+  @Length(1, 100)
+  label!: string;
+}
+
+export class ContactLabelRemoveDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(500)
+  @IsUUID('all', { each: true })
+  ids!: string[];
 }
 
 export class TxNoteDto {
@@ -287,6 +323,28 @@ export class CashflowController {
     @Query('chain') chain?: string,
   ): Promise<CashflowResponse> {
     return this.cashflowService.addContactLabel(req.user.sub, body, view(wallet, chain));
+  }
+
+  @Post('contact-labels/batch')
+  @ApiOperation({ summary: 'Give many addresses/transfers the same person name' })
+  addContactLabels(
+    @Req() req: AuthRequest,
+    @Body() body: ContactLabelBatchDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.addContactLabels(req.user.sub, body.targets, body.label, view(wallet, chain));
+  }
+
+  @Post('contact-labels/remove')
+  @ApiOperation({ summary: 'Remove several person names at once' })
+  removeContactLabels(
+    @Req() req: AuthRequest,
+    @Body() body: ContactLabelRemoveDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.removeContactLabels(req.user.sub, body.ids, view(wallet, chain));
   }
 
   @Delete('contact-labels/:id')

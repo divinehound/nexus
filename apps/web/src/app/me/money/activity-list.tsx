@@ -10,11 +10,23 @@ import type {
   CashflowResponse,
   CashflowTxType,
 } from '@nexus/types';
-import { addCashflowLink } from '@/lib/api';
+import { addCashflowLink, removeCashflowContactLabel } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { useCashflowActions } from './actions';
 import { FlagControl, flagKey, flagsByTx } from './flags';
-import { TxNoteControl, notesByTx } from './labels';
+import {
+  BulkNameBar,
+  ContactChip,
+  ContactNameEditor,
+  ContactNameOptions,
+  NoteEditor,
+  RowMenu,
+  TxNoteControl,
+  contactMenuItems,
+  findContactLabel,
+  notesByTx,
+  type MenuItem,
+} from './labels';
 import {
   CHAIN_LABELS,
   TX_TYPE_LABELS,
@@ -26,6 +38,16 @@ import {
   usd,
   usdSigned,
 } from './format';
+
+/** Money sent to or received from another address — the transfers a person can be named on. */
+const PERSON_TYPES: CashflowTxType[] = [
+  'transfer_in',
+  'transfer_out',
+  'exchange_deposit',
+  'exchange_withdrawal',
+];
+const nameable = (a: CashflowActivity) =>
+  PERSON_TYPES.includes(a.type) && !!a.counterparty && a.counterparty !== 'contract';
 
 /** A mint or receive where no payment from the user's wallets was found. */
 const isFreeMint = (a: CashflowActivity) =>
@@ -86,6 +108,15 @@ export function ActivityList({ report }: { report: CashflowReport }) {
   const multiWallet = new Set(report.wallets.map((w) => w.address.toLowerCase())).size > 1;
   const flags = useMemo(() => flagsByTx(report), [report]);
   const notes = useMemo(() => notesByTx(report), [report]);
+  // Transfers selected to name together.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggleSelected = (key: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   const rows = useMemo(() => {
     // "All" skips unsolicited airdrops (no money, no gas) — they're still under Transfers.
@@ -146,6 +177,16 @@ export function ActivityList({ report }: { report: CashflowReport }) {
         {report.activityTotal > report.activity.length &&
           ` Showing the most recent ${report.activity.length.toLocaleString()} of ${report.activityTotal.toLocaleString()} transactions.`}
       </p>
+      <ContactNameOptions report={report} />
+      {selected.size > 0 && (
+        <BulkNameBar
+          targets={report.activity
+            .filter((a) => selected.has(flagKey(a.chain, a.txHash)))
+            .map((a) => ({ kind: 'tx' as const, chain: a.chain, ref: a.txHash }))}
+          report={report}
+          onDone={() => setSelected(new Set())}
+        />
+      )}
       <ul className="divide-y divide-gray-800/70">
         {rows.slice(0, limit).map((a) => {
           const key = `${a.chain}:${a.txHash}`;
@@ -155,6 +196,10 @@ export function ActivityList({ report }: { report: CashflowReport }) {
               <ActivityRow
                 a={a}
                 flagged={flags.has(flagKey(a.chain, a.txHash))}
+                report={report}
+                note={note}
+                selected={selected.has(flagKey(a.chain, a.txHash))}
+                onSelect={() => toggleSelected(flagKey(a.chain, a.txHash))}
                 showWallet={multiWallet}
                 onLink={() => setLinking(linking === key ? null : key)}
                 linkOpen={linking === key}
@@ -162,7 +207,7 @@ export function ActivityList({ report }: { report: CashflowReport }) {
                 onDetails={() => setOpen(open === key ? null : key)}
               />
               {note && open !== key && (
-                <p className="ml-28 mt-1 whitespace-pre-wrap text-xs italic text-amber-200/90">
+                <p className="ml-36 mt-1 whitespace-pre-wrap text-xs italic text-amber-200/90">
                   📝 {note.note}
                 </p>
               )}
@@ -216,6 +261,10 @@ function ExplorerLink({
 function ActivityRow({
   a,
   flagged,
+  report,
+  note,
+  selected,
+  onSelect,
   showWallet,
   onLink,
   linkOpen,
@@ -224,6 +273,10 @@ function ActivityRow({
 }: {
   a: CashflowActivity;
   flagged: boolean;
+  report: CashflowReport;
+  note: CashflowTxNote | undefined;
+  selected: boolean;
+  onSelect: () => void;
   showWallet: boolean;
   onLink: () => void;
   linkOpen: boolean;
@@ -271,89 +324,177 @@ function ActivityRow({
     });
   };
 
+  // Naming the person on the other side: this transfer, or everything with its address.
+  const [editing, setEditing] = useState<'name' | 'addressName' | 'note' | null>(null);
+  const personal = nameable(a);
+  const own = personal ? findContactLabel(report, 'tx', a.chain, a.txHash) : undefined;
+  const sharedExchangeWallet =
+    personal &&
+    report.counterparties.some(
+      (c) =>
+        c.exchangeSource === 'known' &&
+        c.chain === a.chain &&
+        c.address.toLowerCase() === a.counterparty!.toLowerCase(),
+    );
+  const addressLabel =
+    personal && !sharedExchangeWallet
+      ? findContactLabel(report, 'address', a.chain, a.counterparty!)
+      : undefined;
+  const removeName = (id: string) =>
+    void run('Name removed', (token, view) => removeCashflowContactLabel(token, id, view));
+  const menu: MenuItem[] = personal
+    ? [
+        ...contactMenuItems(own, 'tx', () => setEditing('name'), removeName, addressLabel?.label),
+        // An exchange's public wallet is shared by all its customers: only single transfers get a name.
+        ...(sharedExchangeWallet
+          ? []
+          : [
+              addressLabel
+                ? {
+                    label: `Rename the address’s “${addressLabel.label}”…`,
+                    onSelect: () => setEditing('addressName'),
+                  }
+                : {
+                    label: 'Name who this address is…',
+                    title: 'Applies to every transfer with this address',
+                    onSelect: () => setEditing('addressName'),
+                  },
+            ]),
+        { label: note ? 'Edit note…' : 'Add note…', onSelect: () => setEditing('note') },
+      ]
+    : [];
+
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-      <div className="w-24 shrink-0 text-xs text-gray-500">
-        {new Date(a.timestamp).toLocaleDateString()}
-        <div>{CHAIN_LABELS[a.chain] ?? a.chain}</div>
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[11px] text-gray-300">
-            {isFreeMint(a) ? 'Free mint' : TX_TYPE_LABELS[a.type]}
-          </span>
-          <span className="truncate text-sm text-gray-200">{a.label}</span>
-          {flagged && (
-            <span className="text-[11px] text-yellow-400" title="You flagged this as wrong">
-              ⚑ flagged
+    <div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <div className="w-4 shrink-0 self-start pt-0.5">
+          {personal && (
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onSelect}
+              aria-label="Select to name with others"
+            />
+          )}
+        </div>
+        <div className="w-24 shrink-0 text-xs text-gray-500">
+          {new Date(a.timestamp).toLocaleDateString()}
+          <div>{CHAIN_LABELS[a.chain] ?? a.chain}</div>
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[11px] text-gray-300">
+              {isFreeMint(a) ? 'Free mint' : TX_TYPE_LABELS[a.type]}
             </span>
-          )}
-        </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-gray-500">
-          {showWallet && <span>wallet {truncateAddress(a.wallet)}</span>}
-          {a.counterparty && a.counterparty !== 'contract' && (
-            <span className="font-mono">↔ {truncateAddress(a.counterparty)}</span>
-          )}
-          <ExplorerLink chain={a.chain} hash={a.txHash} />
-          {linked.map((l, i) => (
-            <ExplorerLink key={`${l.chain}:${l.txHash}`} chain={l.chain} hash={l.txHash}>
-              {isBridge
-                ? `${a.linkSide === 'out' ? 'Arrival' : 'Departure'} on ${CHAIN_LABELS[l.chain] ?? l.chain}`
-                : `Linked tx${linked.length > 1 ? ` ${i + 1}` : ''}${l.chain !== a.chain ? ` on ${CHAIN_LABELS[l.chain] ?? l.chain}` : ''}`}
-            </ExplorerLink>
-          ))}
-          <button
-            type="button"
-            onClick={onDetails}
-            aria-expanded={detailsOpen}
-            className="text-gray-400 underline-offset-2 hover:text-white hover:underline"
-          >
-            {detailsOpen ? 'Hide details' : 'Details'}
-          </button>
-          {a.linkSource && <span>{LINK_SOURCE_LABELS[a.linkSource]}</span>}
-          {linked.length > 0 && (isBridge || a.linkSource) && (
+            <span className="truncate text-sm text-gray-200">{a.label}</span>
+            {flagged && (
+              <span className="text-[11px] text-yellow-400" title="You flagged this as wrong">
+                ⚑ flagged
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-gray-500">
+            {showWallet && <span>wallet {truncateAddress(a.wallet)}</span>}
+            {a.counterparty && a.counterparty !== 'contract' && (
+              <span className="font-mono">↔ {truncateAddress(a.counterparty)}</span>
+            )}
+            {own ? (
+              <ContactChip name={own.label} />
+            ) : addressLabel ? (
+              <ContactChip name={addressLabel.label} inherited />
+            ) : null}
+            <ExplorerLink chain={a.chain} hash={a.txHash} />
+            {linked.map((l, i) => (
+              <ExplorerLink key={`${l.chain}:${l.txHash}`} chain={l.chain} hash={l.txHash}>
+                {isBridge
+                  ? `${a.linkSide === 'out' ? 'Arrival' : 'Departure'} on ${CHAIN_LABELS[l.chain] ?? l.chain}`
+                  : `Linked tx${linked.length > 1 ? ` ${i + 1}` : ''}${l.chain !== a.chain ? ` on ${CHAIN_LABELS[l.chain] ?? l.chain}` : ''}`}
+              </ExplorerLink>
+            ))}
             <button
               type="button"
-              disabled={busy}
-              onClick={unlink}
-              className="text-gray-400 underline-offset-2 hover:text-white hover:underline disabled:opacity-50"
+              onClick={onDetails}
+              aria-expanded={detailsOpen}
+              className="text-gray-400 underline-offset-2 hover:text-white hover:underline"
             >
-              {linked.length > 1 ? `Unlink all ${linked.length}` : 'Unlink'}
+              {detailsOpen ? 'Hide details' : 'Details'}
             </button>
+            {a.linkSource && <span>{LINK_SOURCE_LABELS[a.linkSource]}</span>}
+            {linked.length > 0 && (isBridge || a.linkSource) && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={unlink}
+                className="text-gray-400 underline-offset-2 hover:text-white hover:underline disabled:opacity-50"
+              >
+                {linked.length > 1 ? `Unlink all ${linked.length}` : 'Unlink'}
+              </button>
+            )}
+            {linkable && (
+              <button
+                type="button"
+                onClick={onLink}
+                aria-expanded={linkOpen}
+                className="text-purple-300 underline-offset-2 hover:text-purple-200 hover:underline"
+              >
+                {linkOpen
+                  ? 'Cancel'
+                  : unpaid
+                    ? 'Link to its payment…'
+                    : unsold
+                      ? 'Link to what you were paid…'
+                      : tradePayment
+                        ? 'Link more transfers…'
+                        : 'Link…'}
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="text-right text-sm tabular-nums">
+          {(a.inUsd > 0 || a.outUsd > 0) && <div className={pnlClass(net)}>{usdSigned(net)}</div>}
+          {a.realizedPnlUsd !== null && (
+            <div className={cn('text-xs', pnlClass(a.realizedPnlUsd))}>
+              P/L {usdSigned(a.realizedPnlUsd)}
+            </div>
           )}
-          {linkable && (
-            <button
-              type="button"
-              onClick={onLink}
-              aria-expanded={linkOpen}
-              className="text-purple-300 underline-offset-2 hover:text-purple-200 hover:underline"
-            >
-              {linkOpen
-                ? 'Cancel'
-                : unpaid
-                  ? 'Link to its payment…'
-                  : unsold
-                    ? 'Link to what you were paid…'
-                    : tradePayment
-                      ? 'Link more transfers…'
-                      : 'Link…'}
-            </button>
+          {a.feeUsd > 0 && (
+            <div className="text-xs text-gray-500">
+              {a.type === 'bridge' ? 'fees' : 'gas'} {usd(a.feeUsd)}
+            </div>
           )}
         </div>
+        <div className="w-6 shrink-0 self-start text-right">
+          <RowMenu items={menu} label="Transfer actions" />
+        </div>
       </div>
-      <div className="text-right text-sm tabular-nums">
-        {(a.inUsd > 0 || a.outUsd > 0) && <div className={pnlClass(net)}>{usdSigned(net)}</div>}
-        {a.realizedPnlUsd !== null && (
-          <div className={cn('text-xs', pnlClass(a.realizedPnlUsd))}>
-            P/L {usdSigned(a.realizedPnlUsd)}
-          </div>
-        )}
-        {a.feeUsd > 0 && (
-          <div className="text-xs text-gray-500">
-            {a.type === 'bridge' ? 'fees' : 'gas'} {usd(a.feeUsd)}
-          </div>
-        )}
-      </div>
+      {editing && (
+        <div className="ml-36">
+          {editing === 'note' ? (
+            <NoteEditor
+              chain={a.chain}
+              txHash={a.txHash}
+              initial={note?.note ?? ''}
+              onDone={() => setEditing(null)}
+            />
+          ) : editing === 'name' ? (
+            <ContactNameEditor
+              kind="tx"
+              chain={a.chain}
+              refValue={a.txHash}
+              initial={own?.label ?? addressLabel?.label ?? ''}
+              onDone={() => setEditing(null)}
+            />
+          ) : (
+            <ContactNameEditor
+              kind="address"
+              chain={a.chain}
+              refValue={a.counterparty!}
+              initial={addressLabel?.label ?? ''}
+              onDone={() => setEditing(null)}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
