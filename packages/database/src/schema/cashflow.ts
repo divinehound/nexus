@@ -130,3 +130,45 @@ export const cashflowFlags = pgTable(
   },
   (table) => [uniqueIndex('cashflow_flags_unique').on(table.userId, table.chain, table.txHash)],
 );
+
+/**
+ * Names the user gave the people behind transfers, so money sent/received can
+ * be totalled per person across all their wallets and exchange accounts.
+ * kind 'address': every transfer with an address (`scope` = chain family
+ * 'evm' | 'solana', `ref` = address, EVM lowercased). kind 'tx': one transfer
+ * (`scope` = chain, `ref` = tx hash, EVM lowercased) — overrides the address's
+ * name, e.g. Bob paying from a shared exchange wallet.
+ */
+export const cashflowContactLabels = pgTable(
+  'cashflow_contact_labels',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    kind: varchar('kind', { length: 8 }).notNull(),
+    scope: varchar('scope', { length: 32 }).notNull(),
+    ref: varchar('ref', { length: 255 }).notNull(),
+    label: varchar('label', { length: 100 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('cashflow_contact_labels_unique').on(table.userId, table.kind, table.scope, table.ref),
+  ],
+);
+
+/** The user's own note on a transaction (EVM hashes lowercased). */
+export const cashflowTxNotes = pgTable(
+  'cashflow_tx_notes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    chain: varchar('chain', { length: 32 }).notNull(),
+    txHash: varchar('tx_hash', { length: 128 }).notNull(),
+    note: text('note').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex('cashflow_tx_notes_unique').on(table.userId, table.chain, table.txHash)],
+);

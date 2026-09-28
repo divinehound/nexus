@@ -139,13 +139,13 @@ describe('wallet filter', () => {
     chain: 'ethereum', txHash: tx, timestamp: new Date('2025-01-01T00:00:00Z'), wallet: wallet.toLowerCase(), direction, asset: ETH, tokenId: null, amount, counterparty,
   });
 
-  function service(watchB = false) {
+  function service(watchB = false, rows = new Map<unknown, unknown[]>()) {
     const linked = [{ chain: 'ethereum', address: A }, { chain: 'ethereum', address: B }];
     const verified = watchB ? linked.slice(0, 1) : linked;
     const watched = watchB ? [{ family: 'evm', address: B.toLowerCase() }] : [];
     const db = {
       query: { wallets: { findMany: async () => verified }, watchedWallets: { findMany: async () => watched } },
-      select: () => ({ from: () => ({ where: async () => [] }) }),
+      select: () => ({ from: (table: unknown) => ({ where: async () => rows.get(table) ?? [] }) }),
     };
     const svc = new CashflowService(db as never, { get: () => '' } as never, {} as never);
     const scan = {
@@ -201,6 +201,32 @@ describe('wallet filter', () => {
     const onlyB = await svc.getReport('u', false, { wallet: B });
     expect(onlyB.report.outByCategory.transfer_out).toBe(2000);
     expect(onlyB.report.ownWalletTransfers.count).toBe(1); // A → B is still a move between your wallets
+  });
+
+  it('applies your names for people and your notes on transactions', async () => {
+    const { cashflowContactLabels, cashflowTxNotes } = jest.requireActual('@nexus/database');
+    const svc = service(
+      false,
+      new Map<unknown, unknown[]>([
+        [
+          cashflowContactLabels,
+          [
+            { id: 'l1', kind: 'address', scope: 'evm', ref: '0xfriend', label: 'Bob' },
+            { id: 'l2', kind: 'tx', scope: 'ethereum', ref: '0x2', label: 'Alice' },
+          ],
+        ],
+        [cashflowTxNotes, [{ id: 'n1', chain: 'ethereum', txHash: '0x1', note: 'rent', updatedAt: new Date('2025-02-01T00:00:00Z') }]],
+      ]),
+    );
+    const { report } = await svc.rebuild('u');
+    expect(report.contacts.map((c: { name: string; sentUsd: number }) => [c.name, c.sentUsd])).toEqual([
+      ['Alice', 2000],
+      ['Bob', 1000],
+    ]);
+    expect(report.contactLabels).toHaveLength(2);
+    expect(report.txNotes).toEqual([
+      { id: 'n1', chain: 'ethereum', txHash: '0x1', note: 'rent', updatedAt: '2025-02-01T00:00:00.000Z' },
+    ]);
   });
 
   it('rejects a wallet that is not linked', async () => {

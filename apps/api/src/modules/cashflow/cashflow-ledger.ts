@@ -3,6 +3,7 @@ import type {
   CashflowActivityLeg,
   CashflowCategory,
   CashflowChainFees,
+  CashflowContact,
   CashflowCounterparty,
   CashflowExchangeSource,
   CashflowExchangeSummary,
@@ -122,6 +123,14 @@ export interface BuildReportInput {
    * another chain is paired with it as that mint's cost.
    */
   crossChainPayees?: Set<string>;
+  /**
+   * Names the user gave the people behind addresses (by `addressIdentity`)
+   * and behind single transfers (by `txKey`). A named transfer isn't counted
+   * as your own exchange account — it was that person's money — unless only
+   * the address is named and it's an exchange's shared public wallet.
+   */
+  addressContacts?: Map<string, string>;
+  txContacts?: Map<string, string>;
 }
 
 export interface TxPair {
@@ -592,6 +601,19 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
 
   const exchangeOf = (chain: string, addr: string) =>
     addr ? (input.exchangeAddresses?.get(addressIdentity(chain, addr)) ?? null) : null;
+  const addressContact = (chain: string, addr: string) =>
+    addr ? (input.addressContacts?.get(addressIdentity(chain, addr)) ?? null) : null;
+  /** Who a transfer was with, per the user's labels: the transfer's own name beats its address's. */
+  const contactOf = (chain: string, txHash: string, addr: string) =>
+    input.txContacts?.get(txKey(chain, txHash)) ?? addressContact(chain, addr);
+  /** The exchange a transfer counts as a deposit to / withdrawal from, if any. */
+  const transferExchange = (chain: string, txHash: string, addr: string) => {
+    const ex = exchangeOf(chain, addr);
+    if (!ex) return null;
+    if (input.txContacts?.has(txKey(chain, txHash))) return null;
+    if (ex.source !== 'known' && addressContact(chain, addr)) return null;
+    return ex;
+  };
   const exchangeTotals = new Map<string, CashflowExchangeSummary>();
 
   const bookRealized = (d: Date, usd: number, afterGasUsd: number) => {
@@ -614,6 +636,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
   };
 
   const counterparties = new Map<string, CashflowCounterparty>();
+  const contacts = new Map<string, CashflowContact>();
   const counterpartyFor = (chain: string, address: string, at: Date) => {
     const key = addressIdentity(chain, address) + `@${chain}`;
     let c = counterparties.get(key);
@@ -629,6 +652,8 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         sentCount: 0,
         receivedCount: 0,
         lastAt: at.toISOString(),
+        contact: addressContact(chain, address),
+        transfers: [],
       };
       counterparties.set(key, c);
     }
@@ -650,7 +675,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     const bookTransfers = (legs: PricedLeg[], dir: 'in' | 'out') => {
       for (const l of legs) {
         const usd = l.usd ?? 0;
-        const ex = exchangeOf(g.chain, l.movement.counterparty);
+        const ex = transferExchange(g.chain, g.txHash, l.movement.counterparty);
         const category: CashflowCategory = ex
           ? dir === 'in'
             ? 'exchange_withdrawal'
@@ -678,6 +703,42 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         } else {
           c.sentUsd += usd;
           c.sentCount++;
+        }
+        const contact = contactOf(g.chain, g.txHash, l.movement.counterparty);
+        c.transfers.push({
+          chain: g.chain,
+          txHash: g.txHash,
+          at: at.toISOString(),
+          direction: dir,
+          amount: l.movement.amount,
+          symbol: l.movement.asset.symbol,
+          usd,
+          exchange: ex?.exchange ?? null,
+          contact,
+        });
+        if (contact) {
+          // Names match ignoring case and spacing, keeping the first spelling seen.
+          const k = contact.trim().toLowerCase();
+          const p = contacts.get(k) ?? {
+            name: contact.trim(),
+            sentUsd: 0,
+            receivedUsd: 0,
+            sentCount: 0,
+            receivedCount: 0,
+            lastAt: at.toISOString(),
+            addresses: [],
+          };
+          if (dir === 'in') {
+            p.receivedUsd += usd;
+            p.receivedCount++;
+          } else {
+            p.sentUsd += usd;
+            p.sentCount++;
+          }
+          if (at.toISOString() > p.lastAt) p.lastAt = at.toISOString();
+          if (!p.addresses.some((a) => a.chain === c.chain && a.address === c.address))
+            p.addresses.push({ chain: c.chain, address: c.address });
+          contacts.set(k, p);
         }
       }
     };
@@ -1237,13 +1298,15 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       bookTransfers(pricedOut, 'out');
       txOut += moneyOut;
       counterparty = pricedOut[0].movement.counterparty || null;
-      exchange = exchangeOf(g.chain, pricedOut[0].movement.counterparty)?.exchange ?? null;
+      exchange =
+        transferExchange(g.chain, g.txHash, pricedOut[0].movement.counterparty)?.exchange ?? null;
       type = exchange ? 'exchange_deposit' : 'transfer_out';
     } else if (pricedIn.length > 0) {
       bookTransfers(pricedIn, 'in');
       txIn += moneyIn;
       counterparty = pricedIn[0].movement.counterparty || null;
-      exchange = exchangeOf(g.chain, pricedIn[0].movement.counterparty)?.exchange ?? null;
+      exchange =
+        transferExchange(g.chain, g.txHash, pricedIn[0].movement.counterparty)?.exchange ?? null;
       type = exchange ? 'exchange_withdrawal' : 'transfer_in';
     } else {
       type = hadOwnMove ? 'own_wallet_transfer' : 'contract_interaction';
@@ -1387,9 +1450,16 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     months: monthRows,
     collections,
     tokens,
+    // The biggest 250, plus any with a named person (their transfers make up the per-person view).
     counterparties: [...counterparties.values()]
       .sort((a, b) => b.sentUsd + b.receivedUsd - (a.sentUsd + a.receivedUsd))
-      .slice(0, 250),
+      .filter((c, i) => i < 250 || c.contact || c.transfers.some((t) => t.contact))
+      .map((c) => ({ ...c, transfers: c.transfers.reverse() })),
+    contacts: [...contacts.values()].sort(
+      (a, b) => b.sentUsd + b.receivedUsd - (a.sentUsd + a.receivedUsd),
+    ),
+    contactLabels: [],
+    txNotes: [],
     fees: [...feesByChain.values()].sort((a, b) => b.feesUsd - a.feesUsd),
     ownWalletTransfers: ownTransfers,
     bridges,

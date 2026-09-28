@@ -670,6 +670,72 @@ describe('buildCashflowReport', () => {
     });
   });
 
+  describe('people', () => {
+    const COINBASE_HOT = '0xc0ffee0000000000000000000000000000000001';
+    const BOB_1 = '0xb0b0000000000000000000000000000000000001';
+    const BOB_2 = '0xb0b0000000000000000000000000000000000002';
+    const run = (txContacts = new Map<string, string>()) =>
+      buildCashflowReport({
+        movements: [
+          mv('0x1', '2024-01-01T00:00:00Z', 'in', USDC, 1000, BOB_1),
+          mv('0x2', '2024-01-02T00:00:00Z', 'in', USDC, 500, BOB_1),
+          mv('0x3', '2024-01-03T00:00:00Z', 'in', USDC, 250, BOB_2.toUpperCase().replace('0X', '0x')),
+          mv('0x4', '2024-01-04T00:00:00Z', 'in', USDC, 4000, COINBASE_HOT),
+          mv('0x5', '2024-01-05T00:00:00Z', 'out', USDC, 100, BOB_2),
+          mv('0x6', '2024-01-06T00:00:00Z', 'in', USDC, 50, FRIEND),
+        ],
+        fees: [],
+        wallets: [{ chain: 'ethereum', address: ME }],
+        pricer,
+        coverage: [],
+        notes: [],
+        now: new Date(),
+        exchangeAddresses: new Map([
+          ['evm:' + COINBASE_HOT, { exchange: 'Coinbase', source: 'known' as const }],
+          // Bob's Coinbase deposit address, mistaken for yours.
+          ['evm:' + BOB_2, { exchange: 'Coinbase', source: 'detected' as const }],
+        ]),
+        addressContacts: new Map([
+          ['evm:' + BOB_1, 'Bob'],
+          ['evm:' + BOB_2, 'bob '],
+          // A name on an exchange's shared wallet doesn't make every withdrawal Bob's.
+          ['evm:' + COINBASE_HOT, 'Bob'],
+        ]),
+        txContacts,
+      });
+
+    it('lists each transfer per address and totals a person across their addresses', () => {
+      const r = run();
+      const bob1 = r.counterparties.find((c) => c.address === BOB_1)!;
+      expect(bob1.contact).toBe('Bob');
+      expect(bob1.transfers.map((t) => [t.txHash, t.direction, t.usd, t.symbol])).toEqual([
+        ['0x2', 'in', 500, 'USDC'],
+        ['0x1', 'in', 1000, 'USDC'],
+      ]);
+      const bob = r.contacts.find((c) => c.name === 'Bob')!;
+      // Named on its own, the Coinbase hot wallet still reads as Bob's, but it
+      // stays your exchange withdrawal.
+      expect(bob).toMatchObject({ receivedUsd: 5750, receivedCount: 4, sentUsd: 100, sentCount: 1 });
+      expect(r.contacts).toHaveLength(1);
+      expect(bob.addresses.map((a) => a.address.toLowerCase()).sort()).toEqual([BOB_1, BOB_2, COINBASE_HOT].sort());
+      // A named deposit address is Bob's, not your exchange account.
+      expect(r.inByCategory.transfer_in).toBe(1800);
+      expect(r.outByCategory.transfer_out).toBe(100);
+      expect(r.inByCategory.exchange_withdrawal).toBe(4000);
+      expect(r.activity.find((a) => a.txHash === '0x5')!.type).toBe('transfer_out');
+    });
+
+    it("names one exchange withdrawal as the person's money, not yours", () => {
+      const r = run(new Map([['ethereum:0x4', 'Alice']]));
+      expect(r.inByCategory.exchange_withdrawal ?? 0).toBe(0);
+      expect(r.activity.find((a) => a.txHash === '0x4')!.type).toBe('transfer_in');
+      expect(r.contacts.find((c) => c.name === 'Alice')).toMatchObject({ receivedUsd: 4000 });
+      const hot = r.counterparties.find((c) => c.address === COINBASE_HOT)!;
+      expect(hot.transfers[0]).toMatchObject({ contact: 'Alice', exchange: null });
+      expect(r.totals.onRampUsd).toBe(0);
+    });
+  });
+
   describe('P/L in the native coin', () => {
     // ETH $4000 in January, $3000 in February.
     const ethDrop: UsdPricer = {

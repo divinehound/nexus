@@ -98,6 +98,40 @@ export class WalletChainsDto {
   chains!: string[];
 }
 
+export class ContactLabelDto {
+  /** 'address' names everyone behind an address; 'tx' names just one transfer. */
+  @IsIn(['address', 'tx'])
+  kind!: 'address' | 'tx';
+
+  @IsIn(CHAINS)
+  chain!: string;
+
+  /** The address, or the tx hash for kind 'tx'. */
+  @IsString()
+  @Length(10, 128)
+  @Matches(HASH_OR_ADDRESS)
+  ref!: string;
+
+  @IsString()
+  @Length(1, 100)
+  label!: string;
+}
+
+export class TxNoteDto {
+  @IsIn(CHAINS)
+  chain!: string;
+
+  @IsString()
+  @Length(10, 128)
+  @Matches(HASH_OR_ADDRESS)
+  txHash!: string;
+
+  /** Empty removes the note. */
+  @IsString()
+  @MaxLength(2000)
+  note!: string;
+}
+
 export class FlagDto {
   @IsIn(CHAINS)
   chain!: string;
@@ -231,6 +265,39 @@ export class CashflowController {
     @Query('chain') chain?: string,
   ): Promise<CashflowResponse> {
     return this.cashflowService.addAddressTag(req.user.sub, body, view(wallet, chain));
+  }
+
+  @Put('tx-notes')
+  @ApiOperation({ summary: 'Set (or clear, with an empty note) your note on a transaction' })
+  setTxNote(
+    @Req() req: AuthRequest,
+    @Body() body: TxNoteDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.setTxNote(req.user.sub, body, view(wallet, chain));
+  }
+
+  @Post('contact-labels')
+  @ApiOperation({ summary: 'Name the person behind an address or one transfer' })
+  addContactLabel(
+    @Req() req: AuthRequest,
+    @Body() body: ContactLabelDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.addContactLabel(req.user.sub, body, view(wallet, chain));
+  }
+
+  @Delete('contact-labels/:id')
+  @ApiOperation({ summary: 'Remove a person name from an address or transfer' })
+  removeContactLabel(
+    @Req() req: AuthRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.removeContactLabel(req.user.sub, id, view(wallet, chain));
   }
 
   @Delete('address-tags/:id')

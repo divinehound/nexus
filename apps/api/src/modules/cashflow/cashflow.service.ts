@@ -4,10 +4,12 @@ import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
   cashflowAddressTags,
+  cashflowContactLabels,
   cashflowFlags,
   cashflowScanState,
   cashflowScans,
   cashflowTxLinks,
+  cashflowTxNotes,
   cashflowWalletChains,
   collections,
   wallets,
@@ -16,10 +18,12 @@ import {
 } from '@nexus/database';
 import type {
   CashflowAddressTag,
+  CashflowContactLabel,
   CashflowExchangeSource,
   CashflowReport,
   CashflowResponse,
   CashflowTxLink,
+  CashflowTxNote,
   CashflowWalletChains,
   CashflowWalletCoverage,
 } from '@nexus/types';
@@ -139,6 +143,19 @@ export interface AddressTagInput {
   chain: string;
   address: string;
   exchange: string;
+}
+
+export interface ContactLabelInput {
+  kind: 'address' | 'tx';
+  chain: string;
+  ref: string;
+  label: string;
+}
+
+export interface TxNoteInput {
+  chain: string;
+  txHash: string;
+  note: string;
 }
 
 export interface FlagInput {
@@ -518,6 +535,60 @@ export class CashflowService {
     return this.rebuild(userId, view);
   }
 
+  async addContactLabel(userId: string, input: ContactLabelInput, view: ReportView = {}): Promise<CashflowResponse> {
+    const label = input.label.trim().replace(/\s+/g, ' ');
+    if (!label) throw new BadRequestException('Enter a name');
+    const evm = input.chain !== 'solana';
+    const scope = input.kind === 'address' ? (evm ? 'evm' : 'solana') : input.chain;
+    const ref = evm ? input.ref.toLowerCase() : input.ref;
+    await this.db
+      .insert(cashflowContactLabels)
+      .values({ userId, kind: input.kind, scope, ref, label })
+      .onConflictDoUpdate({
+        target: [
+          cashflowContactLabels.userId,
+          cashflowContactLabels.kind,
+          cashflowContactLabels.scope,
+          cashflowContactLabels.ref,
+        ],
+        set: { label },
+      });
+    return this.rebuild(userId, view);
+  }
+
+  async removeContactLabel(userId: string, id: string, view: ReportView = {}): Promise<CashflowResponse> {
+    await this.db
+      .delete(cashflowContactLabels)
+      .where(and(eq(cashflowContactLabels.userId, userId), eq(cashflowContactLabels.id, id)));
+    return this.rebuild(userId, view);
+  }
+
+  /** Save the user's note on a transaction; an empty note removes it. */
+  async setTxNote(userId: string, input: TxNoteInput, view: ReportView = {}): Promise<CashflowResponse> {
+    const txHash = input.chain === 'solana' ? input.txHash : input.txHash.toLowerCase();
+    const note = input.note.trim();
+    if (note) {
+      await this.db
+        .insert(cashflowTxNotes)
+        .values({ userId, chain: input.chain, txHash, note })
+        .onConflictDoUpdate({
+          target: [cashflowTxNotes.userId, cashflowTxNotes.chain, cashflowTxNotes.txHash],
+          set: { note, updatedAt: new Date() },
+        });
+    } else {
+      await this.db
+        .delete(cashflowTxNotes)
+        .where(
+          and(
+            eq(cashflowTxNotes.userId, userId),
+            eq(cashflowTxNotes.chain, input.chain),
+            eq(cashflowTxNotes.txHash, txHash),
+          ),
+        );
+    }
+    return this.rebuild(userId, view);
+  }
+
   async removeAddressTag(userId: string, id: string, view: ReportView = {}): Promise<CashflowResponse> {
     await this.db
       .delete(cashflowAddressTags)
@@ -527,11 +598,26 @@ export class CashflowService {
 
   private async buildFromScan(userId: string, scan: ScanData, view: ReportView = {}): Promise<CashflowReport> {
     const { wallet, chain } = view;
-    const [linkRows, tagRows, flagRows] = await Promise.all([
+    const [linkRows, tagRows, flagRows, labelRows, noteRows] = await Promise.all([
       this.db.select().from(cashflowTxLinks).where(eq(cashflowTxLinks.userId, userId)),
       this.db.select().from(cashflowAddressTags).where(eq(cashflowAddressTags.userId, userId)),
       this.db.select().from(cashflowFlags).where(eq(cashflowFlags.userId, userId)),
+      this.db.select().from(cashflowContactLabels).where(eq(cashflowContactLabels.userId, userId)),
+      this.db.select().from(cashflowTxNotes).where(eq(cashflowTxNotes.userId, userId)),
     ]);
+    const contactLabels: CashflowContactLabel[] = labelRows.map((r) => ({
+      id: r.id,
+      kind: r.kind === 'tx' ? 'tx' : 'address',
+      scope: r.scope,
+      ref: r.ref,
+      label: r.label,
+    }));
+    const addressContacts = new Map<string, string>();
+    const txContacts = new Map<string, string>();
+    for (const l of contactLabels) {
+      if (l.kind === 'tx') txContacts.set(txKey(l.scope, l.ref), l.label);
+      else addressContacts.set(addressIdentity(l.scope === 'solana' ? 'solana' : 'ethereum', l.ref), l.label);
+    }
     const links: CashflowTxLink[] = linkRows.map((r) => ({
       id: r.id,
       kind: r.kind === 'unlink' ? 'unlink' : 'link',
@@ -593,6 +679,8 @@ export class CashflowService {
       explicitLinks,
       rejectedLinks: rejected,
       exchangeAddresses,
+      addressContacts,
+      txContacts,
       chainScope: chain ? (c) => c === chain : undefined,
       crossChainPayees: new Set(RELAY_PAYEES.map((p) => addressIdentity(p.chain, p.address))),
     });
@@ -616,6 +704,16 @@ export class CashflowService {
     }));
     report.links = links;
     report.addressTags = addressTags;
+    report.contactLabels = contactLabels;
+    report.txNotes = noteRows.map(
+      (r): CashflowTxNote => ({
+        id: r.id,
+        chain: r.chain,
+        txHash: r.txHash,
+        note: r.note,
+        updatedAt: r.updatedAt.toISOString(),
+      }),
+    );
     report.exchangeNames = EXCHANGE_NAMES;
     return report;
   }

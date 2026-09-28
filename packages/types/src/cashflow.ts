@@ -203,6 +203,57 @@ export interface CashflowCounterparty {
   sentCount: number;
   receivedCount: number;
   lastAt: string;
+  /** Your name for whoever is behind this address (an address label), if any. */
+  contact: string | null;
+  /** Every money transfer with this address, newest first. */
+  transfers: CashflowCounterpartyTransfer[];
+}
+
+/** One money transfer (ETH/SOL/stablecoin…) to or from another address. */
+export interface CashflowCounterpartyTransfer {
+  chain: string;
+  txHash: string;
+  at: string;
+  direction: 'in' | 'out';
+  amount: number;
+  symbol: string | null;
+  usd: number;
+  /** Counted as a deposit to/withdrawal from your account at this exchange. */
+  exchange: string | null;
+  /** Who this transfer was with: the transfer's own label, else the address's. */
+  contact: string | null;
+}
+
+/** Money sent to / received from one person, across every address and exchange they used. */
+export interface CashflowContact {
+  name: string;
+  sentUsd: number;
+  receivedUsd: number;
+  sentCount: number;
+  receivedCount: number;
+  lastAt: string;
+  addresses: Array<{ chain: string; address: string }>;
+}
+
+/** A name on an address (every transfer with it) or on one transfer. */
+export interface CashflowContactLabel {
+  id: string;
+  kind: 'address' | 'tx';
+  /** Chain family ('evm' | 'solana') for an address label, the chain for a tx label. */
+  scope: string;
+  /** The address (EVM lowercased) or tx hash (EVM lowercased). */
+  ref: string;
+  label: string;
+}
+
+/** Your own note on a transaction. */
+export interface CashflowTxNote {
+  id: string;
+  chain: string;
+  /** EVM hashes lowercased. */
+  txHash: string;
+  note: string;
+  updatedAt: string;
 }
 
 export interface CashflowChainFees {
@@ -335,6 +386,10 @@ export interface CashflowReport {
   collections: CashflowPosition[];
   tokens: CashflowPosition[];
   counterparties: CashflowCounterparty[];
+  /** Totals per person you named, across all their addresses. */
+  contacts: CashflowContact[];
+  contactLabels: CashflowContactLabel[];
+  txNotes: CashflowTxNote[];
   fees: CashflowChainFees[];
   /** Same-chain moves between linked wallets — excluded from in/out. */
   ownWalletTransfers: { count: number; usd: number };
