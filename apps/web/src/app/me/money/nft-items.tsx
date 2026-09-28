@@ -8,7 +8,7 @@ import type {
   CashflowPosition,
 } from '@nexus/types';
 import { cn } from '@/lib/utils';
-import { nativeAmount, pnlClass, txExplorerUrl, usd, usdSigned } from './format';
+import { explorerName, nativeAmount, pnlClass, txExplorerUrl, usd, usdSigned } from './format';
 import { Dual } from './ui';
 
 const ACQUIRED_LABELS: Record<CashflowNftAcquiredVia, string> = {
@@ -28,7 +28,7 @@ const DISPOSED_LABELS: Record<CashflowNftDisposedVia, string> = {
 };
 
 type Filter = 'all' | 'sold' | 'held';
-type Sort = 'recent' | 'best' | 'worst' | 'best_native' | 'worst_native' | 'longest';
+type Sort = 'recent' | 'oldest' | 'best' | 'worst' | 'best_native' | 'worst_native' | 'longest';
 const PAGE = 50;
 
 function formatHold(seconds: number | null): string {
@@ -52,8 +52,14 @@ function TxLink({
 }) {
   const url = hash ? txExplorerUrl(chain, hash) : null;
   return url ? (
-    <a href={url} target="_blank" rel="noopener noreferrer" className="hover:text-purple-300">
-      {children}
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={`Open this transaction on ${explorerName(chain)}`}
+      className="underline decoration-gray-600 underline-offset-2 hover:text-purple-300 hover:decoration-purple-400"
+    >
+      {children} <span aria-hidden="true">↗</span>
     </a>
   ) : (
     <>{children}</>
@@ -115,6 +121,10 @@ export function NftItemsTable({ position }: { position: CashflowPosition }) {
           : true,
     );
     if (sort === 'recent') return filtered; // already newest first from the API
+    if (sort === 'oldest') {
+      const started = (i: CashflowNftItem) => i.acquiredAt ?? i.disposedAt ?? '';
+      return [...filtered].sort((a, b) => started(a).localeCompare(started(b)));
+    }
     if (sort === 'longest')
       return [...filtered].sort((a, b) => (b.holdSeconds ?? -1) - (a.holdSeconds ?? -1));
     const byNative = sort === 'best_native' || sort === 'worst_native';
@@ -211,6 +221,7 @@ export function NftItemsTable({ position }: { position: CashflowPosition }) {
           className="ml-auto rounded-md border border-gray-700 bg-gray-900 px-2 py-0.5 text-xs text-gray-200"
         >
           <option value="recent">Most recent</option>
+          <option value="oldest">Oldest first</option>
           <option value="best">Biggest profit ($)</option>
           <option value="worst">Biggest loss ($)</option>
           <option value="best_native">Biggest profit ({sym})</option>
@@ -257,6 +268,12 @@ export function NftItemsTable({ position }: { position: CashflowPosition }) {
                 <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
                   {i.acquiredVia === 'unknown' ? (
                     '—'
+                  ) : i.acquiredVia === 'free_mint' || i.acquiredVia === 'received' ? (
+                    // Nothing paid — but minting still cost gas, so show it.
+                    <span className="text-gray-500">
+                      free
+                      {i.buyGasUsd > 0 && <div className="text-[11px]">gas {usd(i.buyGasUsd)}</div>}
+                    </span>
                   ) : (
                     <Dual usd={i.costUsd} native={i.costNative} symbol={sym} />
                   )}

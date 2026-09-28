@@ -4,7 +4,10 @@ import { createContext, useCallback, useContext, useState } from 'react';
 import { toast } from 'sonner';
 import type { CashflowResponse } from '@nexus/types';
 
-type Run = (label: string, fn: (token: string) => Promise<CashflowResponse>) => Promise<boolean>;
+type Run = (
+  label: string,
+  fn: (token: string, wallet: string | null) => Promise<CashflowResponse>,
+) => Promise<boolean>;
 
 const ActionsContext = createContext<{ run: Run; busy: boolean } | null>(null);
 
@@ -14,10 +17,13 @@ const ActionsContext = createContext<{ run: Run; busy: boolean } | null>(null);
  */
 export function CashflowActionsProvider({
   token,
+  wallet,
   onResponse,
   children,
 }: {
   token: string | null;
+  /** Wallet filter in effect, so the rebuilt report comes back filtered the same way. */
+  wallet: string | null;
   onResponse: (r: CashflowResponse) => void;
   children: React.ReactNode;
 }) {
@@ -27,7 +33,7 @@ export function CashflowActionsProvider({
       if (!token) return false;
       setBusy(true);
       try {
-        onResponse(await fn(token));
+        onResponse(await fn(token, wallet));
         toast.success(label);
         return true;
       } catch (err) {
@@ -37,7 +43,7 @@ export function CashflowActionsProvider({
         setBusy(false);
       }
     },
-    [token, onResponse],
+    [token, wallet, onResponse],
   );
   return <ActionsContext.Provider value={{ run, busy }}>{children}</ActionsContext.Provider>;
 }

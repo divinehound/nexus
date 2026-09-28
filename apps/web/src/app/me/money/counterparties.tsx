@@ -161,7 +161,9 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
               type="button"
               disabled={busy}
               onClick={() =>
-                void run('Tag removed', (token) => removeCashflowAddressTag(token, tag.id))
+                void run('Tag removed', (token, wallet) =>
+                  removeCashflowAddressTag(token, tag.id, wallet),
+                )
               }
               className="text-gray-400 hover:text-white disabled:opacity-50"
             >
@@ -186,8 +188,12 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
             className="mt-2 flex flex-wrap items-center gap-2"
             onSubmit={(e) => {
               e.preventDefault();
-              void run(`Marked as your ${exchange} account`, (token) =>
-                addCashflowAddressTag(token, { chain: c.chain, address: c.address, exchange }),
+              void run(`Marked as your ${exchange} account`, (token, wallet) =>
+                addCashflowAddressTag(
+                  token,
+                  { chain: c.chain, address: c.address, exchange },
+                  wallet,
+                ),
               ).then((ok) => ok && setTagging(false));
             }}
           >

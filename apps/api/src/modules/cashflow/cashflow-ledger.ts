@@ -61,6 +61,12 @@ export interface LedgerMovement {
   amount: number;
   /** The other side of the transfer; '' for the zero address (mint/burn). */
   counterparty: string;
+  /**
+   * Not in the transfer index: reconstructed from the wallet's balance change
+   * around the tx (ETH moved inside a contract call on chains without
+   * internal-transfer tracing, or by a smart-contract wallet).
+   */
+  inferred?: boolean;
 }
 
 export interface LedgerFee {
@@ -1077,7 +1083,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     }
   }
 
-  const limit = input.activityLimit ?? 1000;
+  const limit = input.activityLimit ?? 5000;
   activity.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
   return {
@@ -1117,10 +1123,12 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     exchanges: [...exchangeTotals.values()].sort(
       (a, b) => b.depositedUsd + b.withdrawnUsd - (a.depositedUsd + a.withdrawnUsd),
     ),
+    walletFilter: null,
     links: [],
     addressTags: [],
     exchangeNames: [],
     activity: activity.slice(0, limit),
+    activityTotal: activity.length,
     coverage: input.coverage,
     notes: input.notes,
   };
@@ -1468,6 +1476,8 @@ function toLeg(m: LedgerMovement, usd: number | null): CashflowActivityLeg {
     amount: m.amount,
     tokenId: m.tokenId,
     usd,
+    inferred: m.inferred === true,
+    counterparty: m.counterparty,
   };
 }
 

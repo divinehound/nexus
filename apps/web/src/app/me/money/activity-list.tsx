@@ -1,30 +1,63 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import type { CashflowActivity, CashflowReport, CashflowTxType } from '@nexus/types';
+import type {
+  CashflowActivity,
+  CashflowActivityLeg,
+  CashflowReport,
+  CashflowTxType,
+} from '@nexus/types';
 import { addCashflowLink } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { useCashflowActions } from './actions';
-import { CHAIN_LABELS, TX_TYPE_LABELS, pnlClass, txExplorerUrl, usd, usdSigned } from './format';
+import {
+  CHAIN_LABELS,
+  TX_TYPE_LABELS,
+  addressExplorerUrl,
+  explorerName,
+  pnlClass,
+  qty,
+  txExplorerUrl,
+  usd,
+  usdSigned,
+} from './format';
 
-const ACTIVITY_FILTERS: Array<{ id: string; label: string; types: CashflowTxType[] | null }> = [
-  { id: 'all', label: 'All', types: null },
-  { id: 'buys', label: 'Buys & mints', types: ['nft_purchase', 'nft_mint', 'token_purchase'] },
-  { id: 'sales', label: 'Sales', types: ['nft_sale', 'token_sale'] },
+/** A mint or receive where no payment from the user's wallets was found. */
+const isFreeMint = (a: CashflowActivity) =>
+  a.type === 'received_asset' && a.legs.some((l) => l.direction === 'in' && l.counterparty === '');
+
+const ACTIVITY_FILTERS: Array<{
+  id: string;
+  label: string;
+  match: ((a: CashflowActivity) => boolean) | null;
+}> = [
+  { id: 'all', label: 'All', match: null },
+  {
+    id: 'buys',
+    label: 'Buys & mints',
+    match: (a) => ['nft_purchase', 'nft_mint', 'token_purchase'].includes(a.type),
+  },
+  { id: 'free', label: 'Free mints', match: isFreeMint },
+  { id: 'sales', label: 'Sales', match: (a) => ['nft_sale', 'token_sale'].includes(a.type) },
   {
     id: 'transfers',
     label: 'Transfers',
-    types: [
-      'transfer_in',
-      'transfer_out',
-      'sent_asset',
-      'received_asset',
-      'own_wallet_transfer',
-      'bridge',
-    ],
+    match: (a) =>
+      [
+        'transfer_in',
+        'transfer_out',
+        'sent_asset',
+        'received_asset',
+        'own_wallet_transfer',
+        'bridge',
+      ].includes(a.type),
   },
-  { id: 'exchanges', label: 'Exchanges', types: ['exchange_deposit', 'exchange_withdrawal'] },
-  { id: 'swaps', label: 'Swaps', types: ['swap'] },
+  {
+    id: 'exchanges',
+    label: 'Exchanges',
+    match: (a) => a.type === 'exchange_deposit' || a.type === 'exchange_withdrawal',
+  },
+  { id: 'swaps', label: 'Swaps', match: (a) => a.type === 'swap' },
 ];
 const PAGE = 50;
 
@@ -38,42 +71,69 @@ const LINK_SOURCE_LABELS = {
 
 export function ActivityList({ report }: { report: CashflowReport }) {
   const [filter, setFilter] = useState('all');
+  const [order, setOrder] = useState<'newest' | 'oldest'>('newest');
   const [limit, setLimit] = useState(PAGE);
   const [linking, setLinking] = useState<string | null>(null);
-  const types = ACTIVITY_FILTERS.find((f) => f.id === filter)?.types;
-  // "All" skips unsolicited airdrops (no money, no gas) — they're still under Transfers.
-  const rows = types
-    ? report.activity.filter((a) => types.includes(a.type))
-    : report.activity.filter(
-        (a) => !(a.type === 'received_asset' && a.inUsd === 0 && a.outUsd === 0),
-      );
+  const [open, setOpen] = useState<string | null>(null);
+  const match = ACTIVITY_FILTERS.find((f) => f.id === filter)?.match;
+  const multiWallet = new Set(report.wallets.map((w) => w.address.toLowerCase())).size > 1;
+
+  const rows = useMemo(() => {
+    // "All" skips unsolicited airdrops (no money, no gas) — they're still under Transfers.
+    const filtered = match
+      ? report.activity.filter(match)
+      : report.activity.filter(
+          (a) =>
+            !(a.type === 'received_asset' && a.inUsd === 0 && a.outUsd === 0 && !isFreeMint(a)),
+        );
+    // The API sends newest first.
+    return order === 'newest' ? filtered : [...filtered].reverse();
+  }, [report.activity, match, order]);
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Activity type">
-        {ACTIVITY_FILTERS.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            aria-pressed={filter === f.id}
-            onClick={() => {
-              setFilter(f.id);
-              setLimit(PAGE);
-            }}
-            className={cn(
-              'rounded-lg px-3 py-1 text-xs transition-colors',
-              filter === f.id
-                ? 'bg-purple-500/15 text-purple-300'
-                : 'text-gray-400 hover:bg-gray-800 hover:text-white',
-            )}
-          >
-            {f.label}
-          </button>
-        ))}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap gap-2" role="group" aria-label="Activity type">
+          {ACTIVITY_FILTERS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              aria-pressed={filter === f.id}
+              onClick={() => {
+                setFilter(f.id);
+                setLimit(PAGE);
+              }}
+              className={cn(
+                'rounded-lg px-3 py-1 text-xs transition-colors',
+                filter === f.id
+                  ? 'bg-purple-500/15 text-purple-300'
+                  : 'text-gray-400 hover:bg-gray-800 hover:text-white',
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <select
+          value={order}
+          onChange={(e) => {
+            setOrder(e.target.value as 'newest' | 'oldest');
+            setLimit(PAGE);
+          }}
+          aria-label="Sort by date"
+          className="ml-auto rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200"
+        >
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+        </select>
       </div>
       <p className="mb-3 text-xs text-gray-500">
         Money that left one of your wallets and reappeared in another (a bridge, SimpleSwap, an
-        exchange round-trip) can be linked so it isn&apos;t counted as spending.
+        exchange round-trip) can be linked so it isn&apos;t counted as spending. Open{' '}
+        <span className="text-gray-400">Details</span> on any row to see exactly what was found in
+        that transaction.
+        {report.activityTotal > report.activity.length &&
+          ` Showing the most recent ${report.activity.length.toLocaleString()} of ${report.activityTotal.toLocaleString()} transactions.`}
       </p>
       <ul className="divide-y divide-gray-800/70">
         {rows.slice(0, limit).map((a) => {
@@ -82,9 +142,13 @@ export function ActivityList({ report }: { report: CashflowReport }) {
             <li key={key} className="py-3">
               <ActivityRow
                 a={a}
+                showWallet={multiWallet}
                 onLink={() => setLinking(linking === key ? null : key)}
                 linkOpen={linking === key}
+                detailsOpen={open === key}
+                onDetails={() => setOpen(open === key ? null : key)}
               />
+              {open === key && <TxDetails a={a} />}
               {linking === key && (
                 <LinkPicker source={a} report={report} onDone={() => setLinking(null)} />
               )}
@@ -106,17 +170,45 @@ export function ActivityList({ report }: { report: CashflowReport }) {
   );
 }
 
+function ExplorerLink({
+  chain,
+  hash,
+  children,
+}: {
+  chain: string;
+  hash: string;
+  children?: React.ReactNode;
+}) {
+  const url = txExplorerUrl(chain, hash);
+  if (!url) return null;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-purple-300 underline-offset-2 hover:text-purple-200 hover:underline"
+    >
+      {children ?? `View on ${explorerName(chain)}`} ↗
+    </a>
+  );
+}
+
 function ActivityRow({
   a,
+  showWallet,
   onLink,
   linkOpen,
+  detailsOpen,
+  onDetails,
 }: {
   a: CashflowActivity;
+  showWallet: boolean;
   onLink: () => void;
   linkOpen: boolean;
+  detailsOpen: boolean;
+  onDetails: () => void;
 }) {
   const { run, busy } = useCashflowActions();
-  const url = txExplorerUrl(a.chain, a.txHash);
   const net = a.inUsd - a.outUsd;
   const linkable = OUTGOING.includes(a.type) || INCOMING.includes(a.type);
 
@@ -139,8 +231,8 @@ function ActivityRow({
     // Always record a rejection (the API drops any manual link for the pair
     // first). Just deleting a manual link would let the automatic matcher
     // pair the same two transactions straight back up.
-    void run('Unlinked — counted as separate transfers again', (token) =>
-      addCashflowLink(token, { kind: 'unlink', ...pair }),
+    void run('Unlinked — counted as separate transfers again', (token, wallet) =>
+      addCashflowLink(token, { kind: 'unlink', ...pair }, wallet),
     );
   };
 
@@ -153,23 +245,30 @@ function ActivityRow({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[11px] text-gray-300">
-            {TX_TYPE_LABELS[a.type]}
+            {isFreeMint(a) ? 'Free mint' : TX_TYPE_LABELS[a.type]}
           </span>
-          {url ? (
-            <a
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="truncate text-sm text-gray-200 hover:text-purple-300"
-            >
-              {a.label}
-            </a>
-          ) : (
-            <span className="truncate text-sm text-gray-200">{a.label}</span>
-          )}
+          <span className="truncate text-sm text-gray-200">{a.label}</span>
         </div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-gray-500">
-          {a.counterparty && <span className="font-mono">{truncateAddress(a.counterparty)}</span>}
+          {showWallet && <span>wallet {truncateAddress(a.wallet)}</span>}
+          {a.counterparty && a.counterparty !== 'contract' && (
+            <span className="font-mono">↔ {truncateAddress(a.counterparty)}</span>
+          )}
+          <ExplorerLink chain={a.chain} hash={a.txHash} />
+          {a.linkedTo && (
+            <ExplorerLink chain={a.linkedTo.chain} hash={a.linkedTo.txHash}>
+              {a.linkSide === 'out' ? 'Arrival' : 'Departure'} on{' '}
+              {CHAIN_LABELS[a.linkedTo.chain] ?? a.linkedTo.chain}
+            </ExplorerLink>
+          )}
+          <button
+            type="button"
+            onClick={onDetails}
+            aria-expanded={detailsOpen}
+            className="text-gray-400 underline-offset-2 hover:text-white hover:underline"
+          >
+            {detailsOpen ? 'Hide details' : 'Details'}
+          </button>
           {a.linkSource && <span>{LINK_SOURCE_LABELS[a.linkSource]}</span>}
           {a.type === 'bridge' && (
             <button
@@ -206,6 +305,102 @@ function ActivityRow({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function legAsset(l: CashflowActivityLeg): string {
+  if (l.kind === 'nft')
+    return `${l.name}${l.tokenId ? ` #${l.tokenId.length > 12 ? `${l.tokenId.slice(0, 6)}…` : l.tokenId}` : ''}${l.amount !== 1 ? ` ×${qty(l.amount)}` : ''}`;
+  return `${qty(l.amount)} ${l.symbol ?? l.name}`;
+}
+
+function Counterparty({ chain, address }: { chain: string; address: string }) {
+  if (address === '') return <span>mint / burn (0x0)</span>;
+  if (address === 'contract') return <span>a contract call</span>;
+  const url = addressExplorerUrl(chain, address);
+  const text = address.length > 16 ? truncateAddress(address) : address;
+  return url ? (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-mono hover:text-purple-300"
+    >
+      {text}
+    </a>
+  ) : (
+    <span className="font-mono">{text}</span>
+  );
+}
+
+/** Everything the scanner found in one transaction, for checking it against the explorer. */
+function TxDetails({ a }: { a: CashflowActivity }) {
+  return (
+    <div className="mt-2 rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-xs">
+      <div className="mb-2 flex flex-wrap items-center gap-x-3 text-gray-400">
+        <span>
+          {new Date(a.timestamp).toLocaleString()} · {CHAIN_LABELS[a.chain] ?? a.chain}
+        </span>
+        <span className="font-mono text-gray-500">{truncateAddress(a.txHash, 8)}</span>
+        <ExplorerLink chain={a.chain} hash={a.txHash} />
+      </div>
+      {a.legs.length > 0 ? (
+        <table className="w-full">
+          <thead className="text-left text-gray-500">
+            <tr>
+              <th className="py-1 pr-3 font-medium">Direction</th>
+              <th className="py-1 pr-3 font-medium">What</th>
+              <th className="py-1 pr-3 font-medium">From / to</th>
+              <th className="py-1 text-right font-medium">USD</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-800/60">
+            {a.legs.map((l, i) => (
+              <tr key={i}>
+                <td
+                  className={cn(
+                    'py-1 pr-3',
+                    l.direction === 'in' ? 'text-sky-300' : 'text-orange-300',
+                  )}
+                >
+                  {l.direction === 'in' ? '← In' : '→ Out'}
+                </td>
+                <td className="py-1 pr-3 text-gray-200">
+                  {legAsset(l)}
+                  {l.inferred && (
+                    <span
+                      className="ml-1 cursor-help text-gray-500"
+                      title="Not in the transfer index — worked out from your wallet's balance change around this transaction (ETH moved inside a contract call, or by a smart-contract wallet)."
+                    >
+                      (from balance change)
+                    </span>
+                  )}
+                </td>
+                <td className="py-1 pr-3 text-gray-400">
+                  {l.direction === 'in' ? 'from ' : 'to '}
+                  <Counterparty chain={a.chain} address={l.counterparty} />
+                </td>
+                <td className="py-1 text-right tabular-nums text-gray-300">
+                  {l.usd === null ? '—' : usd(l.usd)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="text-gray-500">No asset or money moved for your wallets — only gas.</p>
+      )}
+      {a.feeUsd > 0 && <p className="mt-2 text-gray-500">Gas / fees: {usd(a.feeUsd)}</p>}
+      {isFreeMint(a) && (
+        <p className="mt-2 text-yellow-500/90">
+          No payment from your linked wallets was found in this transaction. If you did pay, the
+          money most likely came from a wallet you haven&apos;t linked, from another chain (e.g. a
+          Relay cross-chain mint), or in a token we don&apos;t price. Check the transaction on{' '}
+          {explorerName(a.chain)} — if the payer is another wallet of yours, link it on your
+          profile.
+        </p>
+      )}
     </div>
   );
 }
@@ -254,8 +449,8 @@ function LinkPicker({
     const pair = sourceIsOut
       ? { fromChain: source.chain, fromTxHash: source.txHash, toChain: chain, toTxHash: txHash }
       : { fromChain: chain, fromTxHash: txHash, toChain: source.chain, toTxHash: source.txHash };
-    void run('Linked — counted as a move between your wallets', (token) =>
-      addCashflowLink(token, { kind: 'link', ...pair }),
+    void run('Linked — counted as a move between your wallets', (token, wallet) =>
+      addCashflowLink(token, { kind: 'link', ...pair }, wallet),
     ).then((ok) => ok && onDone());
   };
 

@@ -877,4 +877,16 @@ describe('buildCashflowReport', () => {
       expect(punks.usdPriceMissing).toBe(2);
     });
   });
+
+  it('treats a payment recovered from the balance change as a real mint payment', () => {
+    const r = build([
+      { ...mv('0xm', '2024-01-05T00:00:00Z', 'out', ETH, 0.08, 'contract'), inferred: true },
+      mv('0xm', '2024-01-05T00:00:00Z', 'in', PUNKS, 1, '', { tokenId: '1' }),
+    ]);
+    const act = r.activity[0];
+    expect(act.type).toBe('nft_mint');
+    expect(act.legs.find((l) => l.kind === 'native')).toMatchObject({ inferred: true, counterparty: 'contract' });
+    expect(r.collections[0].items[0]).toMatchObject({ acquiredVia: 'mint', costUsd: 160 });
+    expect(r.activityTotal).toBe(1);
+  });
 });

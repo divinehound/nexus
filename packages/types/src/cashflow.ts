@@ -188,6 +188,10 @@ export interface CashflowActivityLeg {
   amount: number;
   tokenId: string | null;
   usd: number | null;
+  /** Reconstructed from the wallet's balance change (the transfer index didn't show it). */
+  inferred: boolean;
+  /** The other side of this leg ('' = mint/burn). */
+  counterparty: string;
 }
 
 export interface CashflowActivity {
@@ -249,6 +253,8 @@ export interface CashflowWalletCoverage {
 
 export interface CashflowReport {
   generatedAt: string;
+  /** Set when the report covers only one linked wallet (?wallet=…). */
+  walletFilter: string | null;
   wallets: Array<{ chain: string; address: string }>;
   firstActivityAt: string | null;
   lastActivityAt: string | null;
@@ -270,8 +276,10 @@ export interface CashflowReport {
   addressTags: CashflowAddressTag[];
   /** Exchange names offered when tagging an address. */
   exchangeNames: string[];
-  /** Most recent classified transactions, newest first (capped). */
+  /** Most recent classified transactions, newest first (capped — see activityTotal). */
   activity: CashflowActivity[];
+  /** How many transactions were classified in total, before the cap on `activity`. */
+  activityTotal: number;
   coverage: CashflowWalletCoverage[];
   notes: string[];
 }

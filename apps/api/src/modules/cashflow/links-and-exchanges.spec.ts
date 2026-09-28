@@ -134,3 +134,64 @@ describe('EVM history paging', () => {
     expect(r.truncated).toBe(true);
   });
 });
+
+describe('wallet filter', () => {
+  const { CashflowService, sameWallet } = jest.requireActual('./cashflow.service');
+  const A = '0xAAAA000000000000000000000000000000000001';
+  const B = '0xbbbb000000000000000000000000000000000002';
+  const ETH = { key: 'ethereum:native', chain: 'ethereum', kind: 'native', contract: '', name: 'Ether', symbol: 'ETH', price: { kind: 'native', symbol: 'ETH' } };
+  const mv = (tx: string, wallet: string, direction: 'in' | 'out', counterparty: string, amount: number) => ({
+    chain: 'ethereum', txHash: tx, timestamp: new Date('2025-01-01T00:00:00Z'), wallet: wallet.toLowerCase(), direction, asset: ETH, tokenId: null, amount, counterparty,
+  });
+
+  function service() {
+    const linked = [{ chain: 'ethereum', address: A }, { chain: 'ethereum', address: B }];
+    const db = {
+      query: { wallets: { findMany: async () => linked } },
+      select: () => ({ from: () => ({ where: async () => [] }) }),
+    };
+    const svc = new CashflowService(db as never, { get: () => '' } as never, {} as never);
+    const scan = {
+      wallets: linked,
+      movements: [
+        mv('0x1', A, 'out', '0xfriend', 1), // A sends 1 ETH to a friend
+        mv('0x2', B, 'out', '0xfriend', 2), // B sends 2 ETH to a friend
+        mv('0x3', A, 'out', B.toLowerCase(), 5), // A → B (own)
+        mv('0x3', B, 'in', A.toLowerCase(), 5),
+      ],
+      fees: [],
+      pricer: { usdPerUnit: () => 1000 },
+      coverage: [],
+      notes: [],
+      relayLinks: [],
+      detectedExchanges: new Map(),
+    };
+    const signature = linked.map((w) => `${w.chain}:${w.address}`).sort().join('|');
+    (svc as never as { entries: Map<string, unknown> }).entries.set('u', {
+      status: 'ready', startedAt: new Date(), progress: '', report: null, error: null, walletsSignature: signature, scan,
+    });
+    return svc;
+  }
+
+  it('reports one wallet at a time; moves to your other wallets are still not spending', async () => {
+    const svc = service();
+    const all = await svc.rebuild('u'); // builds the cached all-wallets report from the scan
+    expect(all.report.walletFilter).toBeNull();
+    expect(all.report.outByCategory.transfer_out).toBe(3000);
+
+    const onlyA = await svc.getReport('u', false, A.toLowerCase());
+    expect(onlyA.report.walletFilter).toBe(A.toLowerCase());
+    expect(onlyA.report.outByCategory.transfer_out).toBe(1000);
+    expect(onlyA.report.ownWalletTransfers.count).toBe(1);
+    expect(onlyA.report.wallets).toHaveLength(2); // dropdown still lists every wallet
+  });
+
+  it('rejects a wallet that is not linked', async () => {
+    await expect(service().getReport('u', false, '0xdead000000000000000000000000000000000000')).rejects.toThrow('not linked');
+  });
+
+  it('compares EVM addresses case-insensitively, Solana exactly', () => {
+    expect(sameWallet(A, A.toLowerCase())).toBe(true);
+    expect(sameWallet('SoLabc', 'solabc')).toBe(false);
+  });
+});
