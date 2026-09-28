@@ -385,7 +385,17 @@ export class SolanaActivityFetcher {
 
   constructor(private readonly apiKey: string) {}
 
-  async fetch(address: string, assets: Map<string, LedgerAsset>): Promise<ChainFetchResult> {
+  /**
+   * @param opts.sinceTime Only transactions at or after this block time (s) —
+   *   "fetch new" rather than the whole history.
+   * @param opts.coreHeld Core NFTs the wallet already holds (from the saved scan)
+   *   when only new transactions are read.
+   */
+  async fetch(
+    address: string,
+    assets: Map<string, LedgerAsset>,
+    opts: { sinceTime?: number; coreHeld?: Set<string> } = {},
+  ): Promise<ChainFetchResult> {
     const txs: HeliusEnhancedTx[] = [];
     const seen = new Set<string>();
     const notes: string[] = [];
@@ -398,6 +408,7 @@ export class SolanaActivityFetcher {
       // Helius' pagination cursor is `before-signature` (a plain `before` is ignored,
       // which silently returns the newest page over and over).
       if (before) url.searchParams.set('before-signature', before);
+      if (opts.sinceTime !== undefined) url.searchParams.set('gte-time', String(Math.floor(opts.sinceTime)));
       let batch: HeliusEnhancedTx[];
       try {
         batch = await fetchJsonWithRetry<HeliusEnhancedTx[]>(url.toString(), { headers: { accept: 'application/json' } }, 'Helius address transactions');
@@ -429,7 +440,9 @@ export class SolanaActivityFetcher {
     if (truncated) {
       notes.push(`Solana ${shortAddress(address)}: only the newest ${txs.length.toLocaleString()} transactions were scanned.`);
     }
-    return this.process(address, txs, truncated, notes, assets);
+    const r = await this.process(address, txs, truncated, notes, assets, opts.coreHeld);
+    const newest = txs.reduce((max, tx) => Math.max(max, tx.timestamp || 0), opts.sinceTime ?? 0);
+    return { ...r, cursor: newest > 0 ? { time: newest } : undefined };
   }
 
   /** Re-read only the given transactions for `address` — the re-import of flagged transactions. */

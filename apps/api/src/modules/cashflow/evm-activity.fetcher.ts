@@ -78,6 +78,11 @@ export interface ChainFetchResult {
   notes: string[];
   /** Diagnostic counters surfaced on the page (see CashflowWalletCoverage.stats). */
   stats?: Record<string, number>;
+  /**
+   * Where this read stopped, so the next "fetch new" starts there: the chain
+   * head (hex block) when an EVM scan began, or the newest Solana tx time (s).
+   */
+  cursor?: { block?: string; time?: number };
 }
 
 /** Resolve (and share) the asset for a transfer so later name enrichment updates every movement. */
@@ -182,12 +187,50 @@ export class EvmActivityFetcher {
     const network = ALCHEMY_NETWORK[chain];
     if (!network) throw new Error(`Unsupported EVM chain ${chain}`);
     const endpoint = `https://${network}.g.alchemy.com/v2/${this.apiKey}`;
-    const categories = this.categoriesFor(chain);
+    return this.fetchRange(endpoint, chain, address, '0x0', assets);
+  }
 
-    const outgoing = await this.pageTransfers(endpoint, chain, { fromAddress: address }, categories);
-    const incoming = await this.pageTransfers(endpoint, chain, { toAddress: address }, categories);
+  /**
+   * Only what happened after `sinceBlock` (the chain head when the last scan
+   * began) — "fetch new" instead of re-reading the whole history.
+   */
+  async fetchSince(chain: string, address: string, sinceBlock: string, assets: Map<string, LedgerAsset>): Promise<ChainFetchResult> {
+    const network = ALCHEMY_NETWORK[chain];
+    if (!network) throw new Error(`Unsupported EVM chain ${chain}`);
+    const endpoint = `https://${network}.g.alchemy.com/v2/${this.apiKey}`;
+    const from = `0x${(BigInt(sinceBlock) + 1n).toString(16)}`;
+    return this.fetchRange(endpoint, chain, address, from, assets);
+  }
+
+  private async fetchRange(
+    endpoint: string,
+    chain: string,
+    address: string,
+    fromBlock: string,
+    assets: Map<string, LedgerAsset>,
+  ): Promise<ChainFetchResult> {
+    // The head before paging: anything after it is picked up by the next "fetch new".
+    const head = await this.blockNumber(endpoint, chain);
+    const categories = this.categoriesFor(chain);
+    const outgoing = await this.pageTransfers(endpoint, chain, { fromBlock, fromAddress: address }, categories);
+    const incoming = await this.pageTransfers(endpoint, chain, { fromBlock, toAddress: address }, categories);
     const truncated = outgoing.truncated || incoming.truncated;
-    return this.process(endpoint, chain, address, outgoing.transfers, incoming.transfers, truncated, assets);
+    const r = await this.process(endpoint, chain, address, outgoing.transfers, incoming.transfers, truncated, assets);
+    return { ...r, cursor: head ? { block: head } : undefined };
+  }
+
+  private async blockNumber(endpoint: string, chain: string): Promise<string | null> {
+    try {
+      const json = await fetchJsonWithRetry<{ result?: string }>(
+        endpoint,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] }) },
+        `eth_blockNumber (${chain})`,
+        { retries: 2 },
+      );
+      return json.result && /^0x[0-9a-f]+$/i.test(json.result) ? json.result : null;
+    } catch {
+      return null;
+    }
   }
 
   /**

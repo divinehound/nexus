@@ -712,16 +712,20 @@ export function getMyCashflow(token: string, refresh = false, view: CashflowView
   return apiFetch<CashflowResponse>(`/me/cashflow${cashflowQuery({ ...view, refresh })}`, { token });
 }
 
-/** Rescan some wallet+chain pairs (all when `targets` is omitted); the rest stays as saved. */
+/**
+ * Rescan some wallet+chain pairs (all when `targets` is omitted); the rest stays as saved.
+ * `mode: 'new'` only fetches activity since each one's last scan; 'full' re-reads its whole history.
+ */
 export function refreshCashflow(
   token: string,
   targets: Array<{ chain: string; address: string }> | undefined,
   view: CashflowView = {},
+  mode: 'full' | 'new' = 'full',
 ) {
   return apiFetch<CashflowResponse>(`/me/cashflow/refresh${cashflowQuery(view)}`, {
     method: 'POST',
     token,
-    body: JSON.stringify(targets ? { targets } : {}),
+    body: JSON.stringify({ ...(targets ? { targets } : {}), mode }),
   });
 }
 

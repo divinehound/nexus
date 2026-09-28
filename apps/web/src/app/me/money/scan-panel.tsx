@@ -33,17 +33,27 @@ export function ScanPanel({
     });
   const disabled = busy || computing;
 
-  const rescan = (targets: Array<{ chain: string; address: string }> | undefined) =>
-    void run(
-      targets
-        ? `Rescanning ${targets.length} wallet/chain${targets.length === 1 ? '' : 's'}…`
-        : 'Rescanning everything…',
-      (t, view) => refreshCashflow(t, targets, view),
+  const rescan = (
+    targets: Array<{ chain: string; address: string }> | undefined,
+    mode: 'full' | 'new',
+  ) => {
+    const what = targets
+      ? `${targets.length} wallet/chain${targets.length === 1 ? '' : 's'}`
+      : 'everything';
+    return void run(
+      mode === 'new' ? `Fetching new activity for ${what}…` : `Rescanning ${what} from scratch…`,
+      (t, view) => refreshCashflow(t, targets, view, mode),
     ).then((ok) => {
       if (ok) {
         setSelected(new Set());
         onClose();
       }
+    });
+  };
+  const selectedTargets = () =>
+    [...selected].map((k) => {
+      const i = k.indexOf(':');
+      return { chain: k.slice(0, i), address: k.slice(i + 1) };
     });
 
   return (
@@ -51,8 +61,9 @@ export function ScanPanel({
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <h2 className="font-semibold text-gray-200">Scans</h2>
         <span className="text-xs text-gray-500">
-          Scans are saved — reloading the page doesn&apos;t rescan. Pick what to rescan, or which
-          chains each wallet is scanned on.
+          Scans are saved — reloading the page doesn&apos;t rescan. <b>Fetch new</b> reads only what
+          happened since each one&apos;s last scan; <b>Full rescan</b> re-reads its whole history
+          (use it after a fix, or if something looks missing).
         </span>
         <button
           type="button"
@@ -75,20 +86,31 @@ export function ScanPanel({
         ))}
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2">
+        <span className="text-xs text-gray-500">Selected ({selected.size}):</span>
         <button
           type="button"
           disabled={disabled || selected.size === 0}
-          onClick={() =>
-            rescan(
-              [...selected].map((k) => {
-                const i = k.indexOf(':');
-                return { chain: k.slice(0, i), address: k.slice(i + 1) };
-              }),
-            )
-          }
+          onClick={() => rescan(selectedTargets(), 'new')}
           className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Rescan selected ({selected.size})
+          Fetch new
+        </button>
+        <button
+          type="button"
+          disabled={disabled || selected.size === 0}
+          onClick={() => rescan(selectedTargets(), 'full')}
+          className="rounded-lg border border-purple-600/60 px-3 py-1.5 text-xs font-medium text-purple-200 hover:bg-purple-600/20 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Full rescan
+        </button>
+        <span className="ml-2 text-xs text-gray-500">Everything:</span>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => rescan(undefined, 'new')}
+          className="rounded-lg px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50"
+        >
+          Fetch new
         </button>
         <button
           type="button"
@@ -96,14 +118,14 @@ export function ScanPanel({
           onClick={() => {
             if (
               window.confirm(
-                'Rescan every wallet on every chain? Active wallets can take several minutes.',
+                'Re-read every wallet on every chain from scratch? Active wallets can take several minutes.',
               )
             )
-              rescan(undefined);
+              rescan(undefined, 'full');
           }}
           className="rounded-lg px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-50"
         >
-          Rescan everything
+          Full rescan
         </button>
         {computing && <span className="text-xs text-gray-500">A scan is running…</span>}
       </div>
