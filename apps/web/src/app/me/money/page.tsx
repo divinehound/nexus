@@ -217,7 +217,7 @@ function walletOptions(report: CashflowReport): Array<{ address: string; label: 
     if (seen.has(key)) continue;
     seen.set(key, {
       address: key,
-      label: `${truncateAddress(w.address)} · ${evm ? 'EVM' : 'Solana'}`,
+      label: `${truncateAddress(w.address)} · ${evm ? 'EVM' : 'Solana'}${w.watchOnly ? ' · watch-only' : ''}`,
     });
   }
   return [...seen.values()];

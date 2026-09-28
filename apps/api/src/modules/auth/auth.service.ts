@@ -11,6 +11,7 @@ import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, users, wallets } from '@nexus/database';
 import { CHAIN_META } from '@nexus/types';
 import { HoldingsService } from '../holdings/holdings.service';
+import { releaseWatchedWallet } from '../../common/watched-wallets';
 
 // Compiled bytecode of the ERC-6492 ValidateSigOffchain contract.
 // Deploys a UniversalSigValidator in-memory via eth_call to verify any
@@ -222,6 +223,8 @@ export class AuthService {
 
   private async findOrCreateUser(address: string, chain: string) {
     const normalizedAddress = chain === 'solana' ? address.trim() : address.toLowerCase();
+    // Signing in proves ownership: watch-only copies on any account go.
+    await releaseWatchedWallet(this.db, chain, normalizedAddress);
 
     const existingWallet = await this.db.query.wallets.findFirst({
       where: and(eq(wallets.address, normalizedAddress), eq(wallets.chain, chain as any)),

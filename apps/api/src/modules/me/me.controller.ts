@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -112,6 +113,29 @@ export class MeController {
   @ApiOperation({ summary: 'Delete linked wallet (cannot remove final wallet)' })
   deleteWallet(@Req() req: AuthRequest, @Param('id') id: string) {
     return this.meService.deleteWallet(req.user.sub, id);
+  }
+
+  @Get('watched-wallets')
+  @ApiOperation({ summary: 'List watch-only wallets (added without verifying; Money dashboard only)' })
+  getWatchedWallets(@Req() req: AuthRequest) {
+    return this.meService.listWatchedWallets(req.user.sub);
+  }
+
+  @Post('watched-wallets')
+  @ApiOperation({
+    summary: 'Add a wallet without verifying it — counted on the Money dashboard, never used to sign in',
+  })
+  addWatchedWallet(
+    @Req() req: AuthRequest,
+    @Body() body: { family?: string; address?: string; label?: string | null },
+  ) {
+    return this.meService.addWatchedWallet(req.user.sub, body);
+  }
+
+  @Delete('watched-wallets/:id')
+  @ApiOperation({ summary: 'Remove a watch-only wallet' })
+  removeWatchedWallet(@Req() req: AuthRequest, @Param('id', ParseUUIDPipe) id: string) {
+    return this.meService.removeWatchedWallet(req.user.sub, id);
   }
 
   @Get('nicknames')

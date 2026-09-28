@@ -52,6 +52,32 @@ export const wallets = pgTable(
   ],
 );
 
+/**
+ * Addresses a user added without proving they own them ("watch-only"), e.g.
+ * old burner wallets, so the Money dashboard can count their history. They
+ * are never used to sign in and don't count as the user's wallets anywhere
+ * else. Per user (not globally unique): anyone can watch an address nobody
+ * has verified; once someone verifies it, every watch-only copy is removed.
+ * `family` is 'evm' (one address across all EVM chains) or 'solana'.
+ */
+export const watchedWallets = pgTable(
+  'watched_wallets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    family: varchar('family', { length: 16 }).notNull(),
+    address: varchar('address', { length: 255 }).notNull(),
+    label: varchar('label', { length: 100 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex('watched_wallets_user_address_unique').on(table.userId, table.family, table.address),
+    index('watched_wallets_address_idx').on(table.family, table.address),
+  ],
+);
+
 export const walletChallengePurposeEnum = pgEnum('wallet_challenge_purpose', [
   'link_wallet',
   'move_wallet',

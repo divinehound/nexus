@@ -145,10 +145,12 @@ describe('wallet filter', () => {
     chain: 'ethereum', txHash: tx, timestamp: new Date('2025-01-01T00:00:00Z'), wallet: wallet.toLowerCase(), direction, asset: ETH, tokenId: null, amount, counterparty,
   });
 
-  function service() {
+  function service(watchB = false) {
     const linked = [{ chain: 'ethereum', address: A }, { chain: 'ethereum', address: B }];
+    const verified = watchB ? linked.slice(0, 1) : linked;
+    const watched = watchB ? [{ family: 'evm', address: B.toLowerCase() }] : [];
     const db = {
-      query: { wallets: { findMany: async () => linked } },
+      query: { wallets: { findMany: async () => verified }, watchedWallets: { findMany: async () => watched } },
       select: () => ({ from: () => ({ where: async () => [] }) }),
     };
     const svc = new CashflowService(db as never, { get: () => '' } as never, {} as never);
@@ -197,6 +199,14 @@ describe('wallet filter', () => {
     expect(base.report.chainFilter).toBe('base');
     expect(base.report.activity).toHaveLength(0);
     await expect(svc.getReport('u', false, { chain: 'dogechain' })).rejects.toThrow('Unknown chain');
+  });
+
+  it('counts a watch-only wallet as your own and lets you filter to it', async () => {
+    const svc = service(true);
+    await svc.rebuild('u');
+    const onlyB = await svc.getReport('u', false, { wallet: B });
+    expect(onlyB.report.outByCategory.transfer_out).toBe(2000);
+    expect(onlyB.report.ownWalletTransfers.count).toBe(1); // A → B is still a move between your wallets
   });
 
   it('rejects a wallet that is not linked', async () => {

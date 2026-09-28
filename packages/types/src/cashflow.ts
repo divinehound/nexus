@@ -289,7 +289,8 @@ export interface CashflowReport {
   /** Every saved wallet+chain scan, whatever the wallet/chain filter (coverage is filtered). */
   scans: CashflowWalletCoverage[];
   flags: CashflowFlag[];
-  wallets: Array<{ chain: string; address: string }>;
+  /** Linked wallets; `watchOnly` = added without verifying (counted here, never used to sign in). */
+  wallets: Array<{ chain: string; address: string; watchOnly?: boolean }>;
   firstActivityAt: string | null;
   lastActivityAt: string | null;
   totals: CashflowTotals;
