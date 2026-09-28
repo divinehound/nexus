@@ -220,9 +220,11 @@ function ActivityRow({
 }) {
   const { run, busy } = useCashflowActions();
   const net = a.inUsd - a.outUsd;
-  // An NFT/token that arrived with nothing paid may have been paid for on another chain (Relay).
+  // NFTs/tokens that moved with no money in the same tx may be one half of a
+  // trade: paid on another chain (Relay), or an OTC deal paid separately.
   const unpaid = a.type === 'received_asset';
-  const linkable = OUTGOING.includes(a.type) || INCOMING.includes(a.type) || unpaid;
+  const unsold = a.type === 'sent_asset';
+  const linkable = OUTGOING.includes(a.type) || INCOMING.includes(a.type) || unpaid || unsold;
 
   const unlink = () => {
     if (!a.linkedTo) return;
@@ -304,7 +306,13 @@ function ActivityRow({
               aria-expanded={linkOpen}
               className="text-purple-300 underline-offset-2 hover:text-purple-200 hover:underline"
             >
-              {linkOpen ? 'Cancel' : unpaid ? 'Link to its payment…' : 'Link to my other wallet…'}
+              {linkOpen
+                ? 'Cancel'
+                : unpaid
+                  ? 'Link to its payment…'
+                  : unsold
+                    ? 'Link to what you were paid…'
+                    : 'Link…'}
             </button>
           )}
         </div>
@@ -438,34 +446,51 @@ function LinkPicker({
 }) {
   const { run, busy } = useCashflowActions();
   const sourceIsOut = OUTGOING.includes(source.type);
-  const [manualChain, setManualChain] = useState(source.chain === 'solana' ? 'ethereum' : 'solana');
+  const assetSource = source.type === 'received_asset' || source.type === 'sent_asset';
+  const [manualChain, setManualChain] = useState(
+    assetSource ? source.chain : source.chain === 'solana' ? 'ethereum' : 'solana',
+  );
   const [manualHash, setManualHash] = useState('');
 
-  // Likely other halves: opposite direction, within a week, closest in value first.
+  // Likely other halves within a week: same person first, then closest in value, then in time.
   const candidates = useMemo(() => {
+    // What the other half can be: money for assets and assets for money (a
+    // trade — OTC or cross-chain), or money going the other way (a bridge).
+    const partnerTypes: CashflowTxType[] =
+      source.type === 'received_asset'
+        ? OUTGOING
+        : source.type === 'sent_asset'
+          ? INCOMING
+          : sourceIsOut
+            ? [...INCOMING, 'received_asset']
+            : [...OUTGOING, 'sent_asset'];
     const t0 = new Date(source.timestamp).getTime();
     const value = moneyOf(source);
+    const party = source.counterparty?.toLowerCase() ?? null;
     return report.activity
-      .filter(
-        (b) =>
-          (sourceIsOut ? [...INCOMING, 'received_asset'] : OUTGOING).includes(b.type) &&
-          b !== source,
-      )
+      .filter((b) => partnerTypes.includes(b.type) && b !== source)
       .map((b) => ({
         b,
         dt: new Date(b.timestamp).getTime() - t0,
         ratio: value > 0 ? moneyOf(b) / value : 0,
+        samePerson: !!party && b.counterparty?.toLowerCase() === party,
       }))
-      .filter(({ dt }) =>
-        sourceIsOut
-          ? dt > -10 * 60_000 && dt < 7 * 86_400_000
-          : dt < 10 * 60_000 && dt > -7 * 86_400_000,
+      .filter(({ b, dt }) =>
+        // Trades can come in either order; a bridge arrives after it leaves.
+        assetSource || b.type === 'received_asset' || b.type === 'sent_asset'
+          ? Math.abs(dt) < 7 * 86_400_000
+          : sourceIsOut
+            ? dt > -10 * 60_000 && dt < 7 * 86_400_000
+            : dt < 10 * 60_000 && dt > -7 * 86_400_000,
       )
       .sort(
-        (x, y) => Math.abs(1 - x.ratio) - Math.abs(1 - y.ratio) || Math.abs(x.dt) - Math.abs(y.dt),
+        (x, y) =>
+          Number(y.samePerson) - Number(x.samePerson) ||
+          Math.abs(1 - x.ratio) - Math.abs(1 - y.ratio) ||
+          Math.abs(x.dt) - Math.abs(y.dt),
       )
       .slice(0, 8);
-  }, [report.activity, source, sourceIsOut]);
+  }, [report.activity, source, sourceIsOut, assetSource]);
 
   const link = (chain: string, txHash: string) => {
     const pair = sourceIsOut
@@ -473,8 +498,10 @@ function LinkPicker({
       : { fromChain: chain, fromTxHash: txHash, toChain: source.chain, toTxHash: source.txHash };
     void run(
       source.type === 'received_asset'
-        ? 'Linked — that payment now counts as the cost of this'
-        : 'Linked — counted as a move between your wallets',
+        ? 'Linked — that payment now counts as what you paid for this'
+        : source.type === 'sent_asset'
+          ? 'Linked — counted as a sale for that payment'
+          : 'Linked',
       (token, view) => addCashflowLink(token, { kind: 'link', ...pair }, view),
     ).then((ok) => ok && onDone());
   };
@@ -483,11 +510,12 @@ function LinkPicker({
     <div className="mt-3 rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-sm">
       <div className="mb-2 text-xs text-gray-400">
         {source.type === 'received_asset'
-          ? 'Paid for on another chain (e.g. a Relay cross-chain mint)? Pick the payment.'
-          : sourceIsOut
-            ? 'Where did this money arrive — or what did it buy on another chain?'
-            : 'Where did this money come from?'}{' '}
-        Pick the matching transaction in your other wallet.
+          ? 'Paid for separately — an OTC deal, or a cross-chain (Relay) mint? Pick the payment.'
+          : source.type === 'sent_asset'
+            ? 'Sold this in an OTC deal? Pick the payment you received for it.'
+            : sourceIsOut
+              ? 'Where did this money arrive — or what did it pay for (OTC deal, cross-chain mint)?'
+              : 'Where did this money come from — or what did you sell for it?'}
       </div>
       {candidates.length > 0 ? (
         <ul className="space-y-1">
