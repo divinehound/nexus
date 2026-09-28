@@ -212,6 +212,8 @@ export interface CashflowActivity {
   exchange: string | null;
   /** For bridges: the other half of the move, and how the pair was established. */
   linkedTo: { chain: string; txHash: string } | null;
+  /** Every tx on the other side of a trade when there's more than one (linkedTo is the first). */
+  linkedTxs?: Array<{ chain: string; txHash: string }>;
   linkSource: CashflowLinkSource | null;
   /** Whether this row is where the money left ('out') or arrived ('in'). */
   linkSide: 'out' | 'in' | null;

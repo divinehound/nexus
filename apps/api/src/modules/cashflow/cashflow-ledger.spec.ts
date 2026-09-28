@@ -1069,3 +1069,95 @@ describe('OTC deals (money and NFTs sent as separate transfers)', () => {
     expect(build(late).activity.find((a) => a.txHash === '0xducks')!.type).toBe('received_asset');
   });
 });
+
+describe('one payment for NFTs sent in several transactions', () => {
+  const SELLER = '0xse11e40000000000000000000000000000000007';
+  const DUCKS: LedgerAsset = { ...PUNKS, key: 'ethereum:ducks2', contract: 'ducks2', name: 'Yucky Ducks' };
+  const h = (hours: number) => new Date(Date.UTC(2024, 0, 10) + hours * 3_600_000).toISOString();
+  const duck = (tx: string, at: string, id: string, party = SELLER, dir: 'in' | 'out' = 'in') =>
+    mv(tx, at, dir, DUCKS, 1, party, { tokenId: id });
+  // 0.04 ETH, and the ducks arrive in three txs — the last one carrying two.
+  const movements = [
+    mv('0xpay', h(0), 'out', ETH, 0.04, SELLER),
+    duck('0xd1', h(1), '1'),
+    duck('0xd2', h(2), '2'),
+    duck('0xd3', h(3), '3'),
+    duck('0xd3', h(3), '4'),
+  ];
+  const withLinks = (ms: LedgerMovement[], links: Array<[string, string]>) =>
+    buildCashflowReport({
+      movements: ms,
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      explicitLinks: links.map(([a, b]) => ({
+        fromChain: 'ethereum',
+        fromTxHash: a,
+        toChain: 'ethereum',
+        toTxHash: b,
+        source: 'manual' as const,
+      })),
+    });
+
+  it('splits a linked payment across the linked transfers by how many NFTs each moved', () => {
+    // A different sender, so only the manual links can pair them.
+    const other = movements.map((m) => (m.txHash === '0xpay' ? { ...m, counterparty: '0xsomeoneelse' } : m));
+    const r = withLinks(other, [
+      ['0xpay', '0xd1'],
+      ['0xpay', '0xd2'],
+      ['0xd3', '0xpay'],
+    ]);
+    const cost = (tx: string) => r.activity.find((a) => a.txHash === tx)!.outUsd;
+    expect(cost('0xd1')).toBeCloseTo(20); // 0.01 ETH × $2000
+    expect(cost('0xd2')).toBeCloseTo(20);
+    expect(cost('0xd3')).toBeCloseTo(40); // two ducks
+    expect(r.outByCategory.nft_purchase).toBeCloseTo(80);
+    const pay = r.activity.find((a) => a.txHash === '0xpay')!;
+    expect(pay.label).toBe('Paid 0.04 ETH for assets received separately in 3 transactions (OTC purchase)');
+    expect(pay.linkedTxs?.map((l) => l.txHash)).toEqual(['0xd1', '0xd2', '0xd3']);
+    const pos = r.collections.find((c) => c.name === 'Yucky Ducks')!;
+    expect(pos.items.map((i) => i.costUsd)).toEqual(Array(4).fill(expect.closeTo(20)));
+    // Counted once, not once per linked transfer: $80 out in total, the items'
+    // costs add up to exactly the payment, and the payment row has no cost of its own.
+    expect(r.totals.outUsd).toBeCloseTo(80);
+    expect(r.outByCategory.transfer_out).toBeUndefined();
+    expect(pay.outUsd).toBe(0);
+    expect(pos.spentUsd).toBeCloseTo(80);
+    expect(pos.items.reduce((n, i) => n + i.costNative, 0)).toBeCloseTo(0.04);
+    expect(r.totals.openCostBasisUsd).toBeCloseTo(80);
+  });
+
+  it('groups them automatically when it is the only payment to that person', () => {
+    const r = build(movements);
+    expect(r.activity.filter((a) => a.type === 'nft_purchase')).toHaveLength(3);
+    expect(r.outByCategory.nft_purchase).toBeCloseTo(80);
+    expect(r.totals.outUsd).toBeCloseTo(80);
+  });
+
+  it('pairs each payment with its closest transfer when there were several deals', () => {
+    const r = build([
+      mv('0xpayA', h(0), 'out', ETH, 0.01, SELLER),
+      duck('0xd1', h(1), '1'),
+      mv('0xpayB', h(10), 'out', ETH, 0.02, SELLER),
+      duck('0xd2', h(11), '2'),
+    ]);
+    expect(r.activity.find((a) => a.txHash === '0xd1')!.linkedTo?.txHash).toBe('0xpayA');
+    expect(r.activity.find((a) => a.txHash === '0xd2')!.linkedTo?.txHash).toBe('0xpayB');
+  });
+
+  it('works for sales too: two NFTs sent to a buyer in two txs, paid once', () => {
+    const BUYER = '0xb4ye400000000000000000000000000000000008';
+    const r = build([
+      ...movements,
+      duck('0xs1', h(30), '1', BUYER, 'out'),
+      duck('0xs2', h(31), '2', BUYER, 'out'),
+      mv('0xgot', h(32), 'in', ETH, 0.06, BUYER),
+    ]);
+    const sales = r.activity.filter((a) => a.type === 'nft_sale');
+    expect(sales.map((a) => a.inUsd)).toEqual([expect.closeTo(60), expect.closeTo(60)]);
+    expect(r.totals.realizedPnlUsd).toBeCloseTo(120 - 40);
+  });
+});

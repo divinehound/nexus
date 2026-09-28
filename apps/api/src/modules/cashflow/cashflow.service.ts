@@ -486,9 +486,7 @@ export class CashflowService {
     const pair = normalizePair(input);
     // Linking and rejecting the same pair are mutually exclusive; the latest word wins.
     await this.db.delete(cashflowTxLinks).where(samePairCondition(userId, pair));
-    // A tx can only be half of one manual link.
-    if (input.kind === 'link')
-      await this.db.delete(cashflowTxLinks).where(sharesTxLinkCondition(userId, pair));
+    // A tx may be in several links: one payment linked to NFTs sent in several txs is one trade.
     await this.db
       .insert(cashflowTxLinks)
       .values({ userId, kind: input.kind, ...pair })
@@ -1111,18 +1109,6 @@ export function samePairCondition(userId: string, p: TxPairFields): SQL {
         txIs(t.fromChain, t.fromTxHash, p.toChain, p.toTxHash),
         txIs(t.toChain, t.toTxHash, p.fromChain, p.fromTxHash),
       ),
-    ),
-  )!;
-}
-
-/** This user's manual links that already use either side of the pair. */
-export function sharesTxLinkCondition(userId: string, p: TxPairFields): SQL {
-  return and(
-    eq(t.userId, userId),
-    eq(t.kind, 'link'),
-    or(
-      txIs(t.fromChain, t.fromTxHash, p.fromChain, p.fromTxHash),
-      txIs(t.toChain, t.toTxHash, p.toChain, p.toTxHash),
     ),
   )!;
 }

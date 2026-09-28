@@ -669,8 +669,12 @@ function DetailTabs({ report }: { report: CashflowReport }) {
         ))}
       </div>
       <div className="p-4 md:p-6">
-        {tab === 'collections' && <PositionsTable rows={report.collections} kind="nft" />}
-        {tab === 'tokens' && <PositionsTable rows={report.tokens} kind="fungible" />}
+        {tab === 'collections' && (
+          <PositionsTable rows={report.collections} kind="nft" report={report} />
+        )}
+        {tab === 'tokens' && (
+          <PositionsTable rows={report.tokens} kind="fungible" report={report} />
+        )}
         {tab === 'counterparties' && <CounterpartiesTable report={report} />}
         {tab === 'fees' && <FeesTable report={report} />}
         {tab === 'activity' && <ActivityList report={report} />}
@@ -708,7 +712,15 @@ function perSymbol(
   return parts.length ? parts.join(' · ') : '';
 }
 
-function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' | 'fungible' }) {
+function PositionsTable({
+  rows,
+  kind,
+  report,
+}: {
+  rows: CashflowPosition[];
+  kind: 'nft' | 'fungible';
+  report: CashflowReport;
+}) {
   const [showAll, setShowAll] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (key: string) =>
@@ -978,7 +990,7 @@ function PositionsTable({ rows, kind }: { rows: CashflowPosition[]; kind: 'nft' 
                 {expanded.has(r.key) && (
                   <tr>
                     <td colSpan={8} className="pb-4">
-                      <NftItemsTable position={r} />
+                      <NftItemsTable position={r} report={report} />
                     </td>
                   </tr>
                 )}
