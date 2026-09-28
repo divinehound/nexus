@@ -222,4 +222,40 @@ describe('Robinhood Chain', () => {
     expect(evmAssetFor('robinhood', { category: 'external' }, new Map()).price).toEqual({ kind: 'native', symbol: 'ETH' });
     expect(RELAY_CHAIN_IDS[4663]).toBe('robinhood');
   });
+
+  it('prices WETH and USDG, so an NFT sold for USDG is a sale, not a swap', () => {
+    const { buildCashflowReport } = jest.requireActual('./cashflow-ledger');
+    const { fromSaved } = jest.requireActual('./scan-store');
+    const me = '0xa000000000000000000000000000000000000001';
+    const usdg = '0x5fc5360d0400a0fd4f2af552add042d716f1d168';
+    const weth = '0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73';
+    expect(evmAssetFor('robinhood', { category: 'erc20', rawContract: { address: weth } }, new Map()).price).toEqual({ kind: 'native', symbol: 'ETH' });
+    // A scan saved before USDG was priced still gets its price on load.
+    const saved = {
+      assets: [
+        { key: `robinhood:${usdg}`, chain: 'robinhood', kind: 'fungible', contract: usdg, name: 'USDG', symbol: 'USDG', price: null },
+        { key: 'robinhood:0xnft', chain: 'robinhood', kind: 'nft', contract: '0xnft', name: 'Button Presser', symbol: null, price: null },
+      ],
+      movements: [
+        { h: '0xsale', t: Date.parse('2026-08-28T14:24:25Z'), d: 'out', a: 'robinhood:0xnft', i: '3821', n: 1, p: '0xbuyer' },
+        { h: '0xsale', t: Date.parse('2026-08-28T14:24:25Z'), d: 'in', a: `robinhood:${usdg}`, n: 90, p: '0xrelayrouter' },
+      ],
+      fees: [],
+      transfers: 2,
+      truncated: false,
+      notes: [],
+    };
+    const loaded = fromSaved(saved, 'robinhood', me, new Date(), new Map());
+    const r = buildCashflowReport({
+      movements: loaded.movements,
+      fees: [],
+      wallets: [{ chain: 'robinhood', address: me }],
+      pricer: { usdPerUnit: (ref: { kind: string }) => (ref.kind === 'usd' ? 1 : 2700) },
+      coverage: [],
+      notes: [],
+      now: new Date('2026-09-01T00:00:00Z'),
+    });
+    expect(r.activity[0].type).toBe('nft_sale');
+    expect(r.inByCategory.nft_sale).toBeCloseTo(90);
+  });
 });
