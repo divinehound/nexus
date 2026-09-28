@@ -11,6 +11,7 @@ import type {
   CashflowNftAcquiredVia,
   CashflowNftDisposedVia,
   CashflowNftItem,
+  CashflowTokenTrade,
   CashflowPosition,
   CashflowReport,
   CashflowTxType,
@@ -180,6 +181,8 @@ interface NftTrip {
 
 class Position {
   readonly lots = new Map<string, Lot>();
+  /** Tokens only: every buy, sale and move, in the order they happened. */
+  readonly trades: CashflowTokenTrade[] = [];
   /** NFTs only: every holding period, in the order they started. */
   readonly trips: NftTrip[] = [];
   private readonly openTrips = new Map<string, NftTrip[]>();
@@ -404,6 +407,11 @@ class Position {
     }
     if (open.length === 0) this.openTrips.delete(tokenId);
     return closed;
+  }
+
+  /** Tokens only (NFTs have per-item trips instead). */
+  trade(t: CashflowTokenTrade) {
+    if (this.asset.kind !== 'nft') this.trades.push(t);
   }
 
   get qtyHeld(): number {
@@ -828,6 +836,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           usdMissing,
         );
         p.gasUsd += gasShare;
+        p.trade({
+          txHash: g.txHash,
+          at: at.toISOString(),
+          kind: paid ? 'buy' : 'received',
+          qty: m.amount,
+          usd: paid ? (usdMissing ? null : share) : 0,
+          native: paid ? shareNative : 0,
+          costBasisUsd: null,
+          pnlUsd: null,
+          pnlNative: null,
+          gasUsd: gasShare,
+        });
         if (paid) {
           p.spentNative += shareNative;
           p.buyCount++;
@@ -897,6 +917,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
               shareNative - d.basisNative - d.gasNative - gasShareNative;
           }
           bookSplit(p, usdOk ? share - d.basis : null, pnlNative, saleRate);
+          p.trade({
+            txHash: g.txHash,
+            at: at.toISOString(),
+            kind: 'sell',
+            qty: m.amount,
+            usd: moneyUsdKnown ? share : null,
+            native: nativeKnown ? shareNative : null,
+            costBasisUsd: d.usdMissing > 0 ? null : d.basis,
+            pnlUsd: usdOk ? share - d.basis : null,
+            pnlNative,
+            gasUsd: gasShare,
+          });
           p.sellCount++;
           p.qtySold += m.amount;
           p.qtySoldWithoutBasis += d.missing;
@@ -924,8 +956,20 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         // ── Gave an asset away (gift, move to an unlinked wallet, burn) ──
         for (const m of unOut) {
           const p = positionFor(m.asset, at);
-          p.dispose(m.amount, m.tokenId);
+          const d = p.dispose(m.amount, m.tokenId);
           p.gasUsd += feeUsd / unOut.length;
+          p.trade({
+            txHash: g.txHash,
+            at: at.toISOString(),
+            kind: m.counterparty === '' ? 'burned' : 'sent',
+            qty: m.amount,
+            usd: 0,
+            native: 0,
+            costBasisUsd: d.usdMissing > 0 ? null : d.basis,
+            pnlUsd: null,
+            pnlNative: null,
+            gasUsd: feeUsd / unOut.length,
+          });
           for (const t of p.closeTrips(
             m.tokenId,
             m.amount,
@@ -958,6 +1002,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         const d = p.dispose(m.amount, m.tokenId);
         if (d.usdMissing > 0) carriedUsdMissing = true;
         p.closeTrips(m.tokenId, m.amount, at, 'swap', g.txHash);
+        p.trade({
+          txHash: g.txHash,
+          at: at.toISOString(),
+          kind: 'swap_out',
+          qty: m.amount,
+          usd: null,
+          native: null,
+          costBasisUsd: d.usdMissing > 0 ? null : d.basis,
+          pnlUsd: null,
+          pnlNative: null,
+          gasUsd: feeUsd / (unIn.length + unOut.length),
+        });
         carried += d.basis;
         carriedGas += d.gas;
         carriedGasNative += d.gasNative;
@@ -1010,6 +1066,18 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           carriedGasNative / unIn.length,
           carriedUsdMissing,
         );
+        p.trade({
+          txHash: g.txHash,
+          at: at.toISOString(),
+          kind: 'swap_in',
+          qty: m.amount,
+          usd: carriedUsdMissing ? null : share,
+          native: basisNative / unIn.length,
+          costBasisUsd: null,
+          pnlUsd: null,
+          pnlNative: null,
+          gasUsd: feeUsd / (unIn.length + unOut.length),
+        });
         legUsd.set(m, share);
       }
       for (const m of [...unIn, ...unOut])
@@ -1108,6 +1176,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       firstAt: p.firstAt.toISOString(),
       lastAt: p.lastAt.toISOString(),
       items: p.trips.map(toNftItem).sort(newestFirst).slice(0, MAX_ITEMS_PER_COLLECTION),
+      trades: [...p.trades].reverse().slice(0, MAX_ITEMS_PER_COLLECTION),
     };
     (row.kind === 'nft' ? collections : tokens).push(row);
   }

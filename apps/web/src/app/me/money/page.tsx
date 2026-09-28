@@ -21,6 +21,7 @@ import { CounterpartiesTable } from './counterparties';
 import { FlagsPanel } from './flags';
 import { ScanPanel } from './scan-panel';
 import { NftItemsTable } from './nft-items';
+import { TokenTradesTable } from './token-trades';
 import { AfterGas, Dual, Stat } from './ui';
 import {
   CATEGORY_LABELS,
@@ -860,7 +861,7 @@ function PositionsTable({
               <Fragment key={r.key}>
                 <tr className="align-top">
                   <td className="py-2 pr-4">
-                    {kind === 'nft' && r.items.length > 0 ? (
+                    {(kind === 'nft' ? r.items.length : r.trades.length) > 0 ? (
                       <button
                         type="button"
                         onClick={() => toggle(r.key)}
@@ -882,8 +883,13 @@ function PositionsTable({
                           </span>
                           <span className="block text-xs text-gray-500">
                             {CHAIN_LABELS[r.chain] ?? r.chain} ·{' '}
-                            {expanded.has(r.key) ? 'hide' : 'show'} {r.items.length} item
-                            {r.items.length === 1 ? '' : 's'}
+                            {r.symbol && kind === 'fungible' && r.symbol !== r.name
+                              ? `${r.symbol} · `
+                              : ''}
+                            {expanded.has(r.key) ? 'hide' : 'show'}{' '}
+                            {kind === 'nft'
+                              ? `${r.items.length} item${r.items.length === 1 ? '' : 's'}`
+                              : `${r.trades.length} trade${r.trades.length === 1 ? '' : 's'}`}
                           </span>
                         </span>
                       </button>
@@ -990,7 +996,11 @@ function PositionsTable({
                 {expanded.has(r.key) && (
                   <tr>
                     <td colSpan={8} className="pb-4">
-                      <NftItemsTable position={r} report={report} />
+                      {kind === 'nft' ? (
+                        <NftItemsTable position={r} report={report} />
+                      ) : (
+                        <TokenTradesTable position={r} />
+                      )}
                     </td>
                   </tr>
                 )}

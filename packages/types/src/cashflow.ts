@@ -121,6 +121,37 @@ export interface CashflowPosition {
   lastAt: string;
   /** NFTs only: one row per token held — or per round trip, if bought and sold more than once. Newest first. */
   items: CashflowNftItem[];
+  /** Tokens only: every buy, sale and other move of this token. Newest first. */
+  trades: CashflowTokenTrade[];
+}
+
+export type CashflowTokenTradeKind =
+  | 'buy'
+  | 'sell'
+  | 'received'
+  | 'sent'
+  | 'burned'
+  | 'swap_in'
+  | 'swap_out';
+
+/** One buy, sale or move of a fungible token. */
+export interface CashflowTokenTrade {
+  txHash: string;
+  at: string;
+  kind: CashflowTokenTradeKind;
+  qty: number;
+  /**
+   * What was paid (buys; for swaps in, the cost carried over) or received
+   * (sales). null when the day has no USD price; 0 for plain moves.
+   */
+  usd: number | null;
+  native: number | null;
+  /** Average cost of the units sold/sent (average-cost basis). */
+  costBasisUsd: number | null;
+  /** Sales only. */
+  pnlUsd: number | null;
+  pnlNative: number | null;
+  gasUsd: number;
 }
 
 export type CashflowNftAcquiredVia = 'purchase' | 'mint' | 'free_mint' | 'received' | 'swap' | 'unknown';

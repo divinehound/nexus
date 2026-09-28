@@ -1161,3 +1161,46 @@ describe('one payment for NFTs sent in several transactions', () => {
     expect(r.totals.realizedPnlUsd).toBeCloseTo(120 - 40);
   });
 });
+
+describe('token trades (the expandable list under each token)', () => {
+  it('lists buys, sales and moves newest first, with average-cost P/L on sales', () => {
+    const r = build([
+      mv('0xb1', '2024-01-05T00:00:00Z', 'out', ETH, 1, MARKET),
+      mv('0xb1', '2024-01-05T00:00:00Z', 'in', PEPE, 1000, MARKET),
+      mv('0xb2', '2024-01-06T00:00:00Z', 'out', ETH, 0.5, MARKET),
+      mv('0xb2', '2024-01-06T00:00:00Z', 'in', PEPE, 1000, MARKET),
+      mv('0xa1', '2024-01-07T00:00:00Z', 'in', PEPE, 500, FRIEND),
+      mv('0xs1', '2024-02-10T00:00:00Z', 'out', PEPE, 1000, MARKET),
+      mv('0xs1', '2024-02-10T00:00:00Z', 'in', ETH, 1, MARKET),
+    ]);
+    const pepe = r.tokens.find((t) => t.symbol === 'PEPE')!;
+    expect(pepe.trades.map((t) => [t.txHash, t.kind, t.qty])).toEqual([
+      ['0xs1', 'sell', 1000],
+      ['0xa1', 'received', 500],
+      ['0xb2', 'buy', 1000],
+      ['0xb1', 'buy', 1000],
+    ]);
+    const [sell, received, , firstBuy] = pepe.trades;
+    expect(firstBuy.usd).toBeCloseTo(2000); // 1 ETH × $2000
+    expect(received.usd).toBe(0);
+    // Average cost: $3000 for 2500 PEPE → $1.20 each; 1000 sold for 1 ETH at $3000.
+    expect(sell.usd).toBeCloseTo(3000);
+    expect(sell.costBasisUsd).toBeCloseTo(1200);
+    expect(sell.pnlUsd).toBeCloseTo(1800);
+    expect(sell.pnlUsd).toBeCloseTo(pepe.realizedPnlUsd);
+    expect(r.collections.every((c) => c.trades.length === 0)).toBe(true);
+  });
+
+  it('records a token-for-token swap on both tokens', () => {
+    const r = build([
+      mv('0xb1', '2024-01-05T00:00:00Z', 'out', ETH, 1, MARKET),
+      mv('0xb1', '2024-01-05T00:00:00Z', 'in', PEPE, 1000, MARKET),
+      mv('0xsw', '2024-01-08T00:00:00Z', 'out', PEPE, 1000, MARKET),
+      mv('0xsw', '2024-01-08T00:00:00Z', 'in', DOGE, 50, MARKET),
+    ]);
+    const pepe = r.tokens.find((t) => t.symbol === 'PEPE')!;
+    const doge = r.tokens.find((t) => t.symbol === 'DOGE')!;
+    expect(pepe.trades[0]).toMatchObject({ kind: 'swap_out', qty: 1000, costBasisUsd: expect.closeTo(2000) });
+    expect(doge.trades[0]).toMatchObject({ kind: 'swap_in', qty: 50, usd: expect.closeTo(2000) });
+  });
+});
