@@ -225,6 +225,13 @@
       "when": 1790750000000,
       "tag": "0031_watched_wallets",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790850000000,
+      "tag": "0032_cashflow_labels_and_notes",
+      "breakpoints": true
     }
   ]
 }

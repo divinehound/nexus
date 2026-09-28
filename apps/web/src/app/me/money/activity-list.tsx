@@ -5,6 +5,7 @@ import type {
   CashflowActivity,
   CashflowActivityLeg,
   CashflowFlag,
+  CashflowTxNote,
   CashflowReport,
   CashflowResponse,
   CashflowTxType,
@@ -13,6 +14,7 @@ import { addCashflowLink } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { useCashflowActions } from './actions';
 import { FlagControl, flagKey, flagsByTx } from './flags';
+import { TxNoteControl, notesByTx } from './labels';
 import {
   CHAIN_LABELS,
   TX_TYPE_LABELS,
@@ -83,6 +85,7 @@ export function ActivityList({ report }: { report: CashflowReport }) {
   const match = ACTIVITY_FILTERS.find((f) => f.id === filter)?.match;
   const multiWallet = new Set(report.wallets.map((w) => w.address.toLowerCase())).size > 1;
   const flags = useMemo(() => flagsByTx(report), [report]);
+  const notes = useMemo(() => notesByTx(report), [report]);
 
   const rows = useMemo(() => {
     // "All" skips unsolicited airdrops (no money, no gas) — they're still under Transfers.
@@ -146,6 +149,7 @@ export function ActivityList({ report }: { report: CashflowReport }) {
       <ul className="divide-y divide-gray-800/70">
         {rows.slice(0, limit).map((a) => {
           const key = `${a.chain}:${a.txHash}`;
+          const note = notes.get(flagKey(a.chain, a.txHash));
           return (
             <li key={key} className="py-3">
               <ActivityRow
@@ -157,7 +161,14 @@ export function ActivityList({ report }: { report: CashflowReport }) {
                 detailsOpen={open === key}
                 onDetails={() => setOpen(open === key ? null : key)}
               />
-              {open === key && <TxDetails a={a} flag={flags.get(flagKey(a.chain, a.txHash))} />}
+              {note && open !== key && (
+                <p className="ml-28 mt-1 whitespace-pre-wrap text-xs italic text-amber-200/90">
+                  📝 {note.note}
+                </p>
+              )}
+              {open === key && (
+                <TxDetails a={a} flag={flags.get(flagKey(a.chain, a.txHash))} note={note} />
+              )}
               {linking === key && (
                 <LinkPicker source={a} report={report} onDone={() => setLinking(null)} />
               )}
@@ -373,7 +384,15 @@ function Counterparty({ chain, address }: { chain: string; address: string }) {
 }
 
 /** Everything the scanner found in one transaction, for checking it against the explorer. */
-function TxDetails({ a, flag }: { a: CashflowActivity; flag: CashflowFlag | undefined }) {
+function TxDetails({
+  a,
+  flag,
+  note,
+}: {
+  a: CashflowActivity;
+  flag: CashflowFlag | undefined;
+  note: CashflowTxNote | undefined;
+}) {
   return (
     <div className="mt-2 rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-xs">
       <div className="mb-2 flex flex-wrap items-center gap-x-3 text-gray-400">
@@ -439,6 +458,14 @@ function TxDetails({ a, flag }: { a: CashflowActivity; flag: CashflowFlag | unde
           if you paid on another chain, use &ldquo;Link to its payment…&rdquo;.
         </p>
       )}
+      <div className="mt-2">
+        <TxNoteControl
+          key={note?.updatedAt ?? 'none'}
+          chain={a.chain}
+          txHash={a.txHash}
+          note={note}
+        />
+      </div>
       <FlagControl chain={a.chain} txHash={a.txHash} flag={flag} />
     </div>
   );

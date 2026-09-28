@@ -802,6 +802,38 @@ export function removeCashflowAddressTag(token: string, id: string, view: Cashfl
   });
 }
 
+export function addCashflowContactLabel(
+  token: string,
+  input: { kind: 'address' | 'tx'; chain: string; ref: string; label: string },
+  view: CashflowView = {},
+) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/contact-labels${cashflowQuery(view)}`, {
+    method: 'POST',
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
+export function removeCashflowContactLabel(token: string, id: string, view: CashflowView = {}) {
+  return apiFetch<CashflowResponse>(
+    `/me/cashflow/contact-labels/${encodeURIComponent(id)}${cashflowQuery(view)}`,
+    { method: 'DELETE', token },
+  );
+}
+
+/** Save your note on a transaction; an empty note removes it. */
+export function setCashflowTxNote(
+  token: string,
+  input: { chain: string; txHash: string; note: string },
+  view: CashflowView = {},
+) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/tx-notes${cashflowQuery(view)}`, {
+    method: 'PUT',
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
 export function getMyWallets(token: string) {
   return apiFetch<LinkedWallet[]>('/me/wallets', { token });
 }
