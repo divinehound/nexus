@@ -817,7 +817,12 @@ export class CashflowService {
         try {
           const assets = new Map<string, LedgerAsset>();
           const fresh = isSol
-            ? await new SolanaActivityFetcher(key).fetchTxs(t.address, hashes, assets)
+            ? await new SolanaActivityFetcher(key).fetchTxs(
+                t.address,
+                hashes,
+                assets,
+                nftsReceived(row.data as SavedChainScan, new Set(hashes)),
+              )
             : await new EvmActivityFetcher(key).fetchTxs(chain, t.address, hashes, assets);
           await this.enrichNftNames(assets, alchemyKey);
           const hashSet = new Set(isSol ? hashes : hashes.map((h) => h.toLowerCase()));
@@ -988,6 +993,19 @@ export class CashflowService {
       },
     };
   }
+}
+
+/**
+ * NFTs (by token id) the wallet received anywhere in a saved scan, outside the
+ * given txs — so re-reading a marketplace-settled sale knows the NFT was the
+ * wallet's to sell.
+ */
+export function nftsReceived(saved: SavedChainScan, except: Set<string>): Set<string> {
+  const nft = new Set(saved.assets.filter((a) => a.kind === 'nft').map((a) => a.key));
+  const held = new Set<string>();
+  for (const m of saved.movements)
+    if (m.d === 'in' && m.i && nft.has(m.a) && !except.has(m.h)) held.add(m.i);
+  return held;
 }
 
 export function normalizeTarget(t: ScanTarget): ScanTarget {

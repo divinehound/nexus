@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { PublicKey } from '@solana/web3.js';
 import { knownAsset } from './base-assets';
 import type { LedgerAsset, LedgerFee, LedgerMovement } from './cashflow-ledger';
 import type { ChainFetchResult } from './evm-activity.fetcher';
@@ -140,6 +141,8 @@ export function normalizeSolanaTx(
   tx: HeliusEnhancedTx,
   mintInfo: Map<string, MintInfo>,
   assets: Map<string, LedgerAsset>,
+  /** Core assets the wallet holds going into this tx (updated in place) — see coreAssetMoves. */
+  coreHeld: Set<string> = new Set(),
 ): { movements: LedgerMovement[]; fee: LedgerFee | null } {
   const timestamp = new Date(tx.timestamp * 1000);
   const fee: LedgerFee | null =
@@ -241,7 +244,7 @@ export function normalizeSolanaTx(
   }
   // Metaplex Core mints/transfers/burns, read from the instructions themselves
   // (Helius often has no event for them, and there's no token transfer).
-  for (const move of coreAssetMoves(tx, wallet)) {
+  for (const move of coreAssetMoves(tx, wallet, coreHeld)) {
     if (tokenMints.has(move.asset)) continue;
     tokenMints.add(move.asset);
     const info = mintInfo.get(move.asset) ?? {
@@ -275,15 +278,21 @@ export interface CoreAssetMove {
 
 /**
  * Metaplex Core asset moves for `wallet` in a tx — top-level or called by
- * another program (e.g. a launchpad or Candy Machine minting via CPI).
+ * another program (a launchpad minting, a marketplace settling a sale).
  * Account layouts follow mpl-core's MplAssetInstruction; an optional account
  * that isn't passed is filled with the program's own id.
+ *
+ * `held` is the set of Core assets the wallet owns going into the tx (updated
+ * in place; walk txs oldest first). A marketplace sale is signed by the
+ * marketplace — a transfer delegate or its escrow — so the seller isn't in
+ * the transfer's accounts; knowing the wallet held the asset is what makes it
+ * the seller's.
  */
-export function coreAssetMoves(tx: HeliusEnhancedTx, wallet: string): CoreAssetMove[] {
+export function coreAssetMoves(tx: HeliusEnhancedTx, wallet: string, held: Set<string> = new Set()): CoreAssetMove[] {
   const moves: CoreAssetMove[] = [];
   const visit = (ix: HeliusInstruction) => {
     if (ix.programId === MPL_CORE_PROGRAM && ix.accounts?.length) {
-      const move = coreMove(ix.accounts, firstByte(ix.data), wallet);
+      const move = coreMove(ix.accounts, firstByte(ix.data), wallet, held);
       if (move) moves.push(move);
     }
     for (const inner of ix.innerInstructions ?? []) visit(inner);
@@ -292,35 +301,64 @@ export function coreAssetMoves(tx: HeliusEnhancedTx, wallet: string): CoreAssetM
   return moves;
 }
 
-function coreMove(accounts: string[], variant: number | null, wallet: string): CoreAssetMove | null {
+function coreMove(accounts: string[], variant: number | null, wallet: string, held: Set<string>): CoreAssetMove | null {
   const opt = (i: number) => {
     const a = accounts[i];
     return a && a !== MPL_CORE_PROGRAM ? a : null;
   };
   const asset = accounts[0];
+  const collection = opt(1);
   if (variant === CORE_CREATE_V1 || variant === CORE_CREATE_V2) {
     // asset, collection?, authority?, payer, owner?, update_authority?, …
     // The program makes the owner: owner ?? update_authority ?? payer.
     const owner = opt(4) ?? opt(5) ?? opt(3);
     if (owner !== wallet) return null;
-    return { asset, collection: opt(1), direction: 'in', counterparty: '' };
+    held.add(asset);
+    return { asset, collection, direction: 'in', counterparty: '' };
   }
   if (variant === CORE_TRANSFER_V1) {
     // asset, collection?, payer, authority?, new_owner, …
+    // `authority` is the owner or a delegate (e.g. a marketplace); without one, the payer.
     const from = opt(3) ?? opt(2);
     const to = opt(4);
-    if (to === wallet && from !== wallet)
-      return { asset, collection: opt(1), direction: 'in', counterparty: from ?? '' };
-    if (from === wallet && to !== wallet)
-      return { asset, collection: opt(1), direction: 'out', counterparty: to ?? '' };
-    return null;
+    if (to === wallet) {
+      if (from === wallet) return null;
+      // Back from a listing escrow: it never stopped being the wallet's.
+      if (held.has(asset)) return { asset, collection, direction: 'in', counterparty: wallet };
+      held.add(asset);
+      return { asset, collection, direction: 'in', counterparty: from ?? '' };
+    }
+    if (from !== wallet && !held.has(asset)) return null;
+    // Into a program's escrow (an off-curve address, e.g. a marketplace
+    // listing): the wallet still owns it until it's sold.
+    if (to && isProgramAddress(to)) return { asset, collection, direction: 'out', counterparty: wallet };
+    held.delete(asset);
+    return { asset, collection, direction: 'out', counterparty: to ?? '' };
   }
   if (variant === CORE_BURN_V1) {
     // asset, collection?, payer, authority?, …
-    if ((opt(3) ?? opt(2)) !== wallet) return null;
-    return { asset, collection: opt(1), direction: 'out', counterparty: '' };
+    if ((opt(3) ?? opt(2)) !== wallet && !held.has(asset)) return null;
+    held.delete(asset);
+    return { asset, collection, direction: 'out', counterparty: '' };
   }
   return null;
+}
+
+/** A program-derived address (off the ed25519 curve) — an escrow or vault, never a person's wallet. */
+export function isProgramAddress(address: string): boolean {
+  try {
+    return !PublicKey.isOnCurve(new PublicKey(address).toBytes());
+  } catch {
+    return false;
+  }
+}
+
+/** Oldest first, so Core ownership can be followed through the history (Helius pages newest first). */
+function chronological(txs: HeliusEnhancedTx[]): HeliusEnhancedTx[] {
+  return txs
+    .map((tx, i) => ({ tx, i }))
+    .sort((a, b) => a.tx.timestamp - b.tx.timestamp || b.i - a.i)
+    .map((x) => x.tx);
 }
 
 const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -395,7 +433,13 @@ export class SolanaActivityFetcher {
   }
 
   /** Re-read only the given transactions for `address` — the re-import of flagged transactions. */
-  async fetchTxs(address: string, signatures: string[], assets: Map<string, LedgerAsset>): Promise<ChainFetchResult> {
+  async fetchTxs(
+    address: string,
+    signatures: string[],
+    assets: Map<string, LedgerAsset>,
+    /** NFTs the wallet held per the saved scan, so a marketplace-signed sale is still seen as the wallet's. */
+    coreHeld: Set<string> = new Set(),
+  ): Promise<ChainFetchResult> {
     const txs: HeliusEnhancedTx[] = [];
     for (const batch of chunk(signatures, 100)) {
       const url = `https://api.helius.xyz/v0/transactions?api-key=${this.apiKey}`;
@@ -406,7 +450,7 @@ export class SolanaActivityFetcher {
       );
       if (Array.isArray(rows)) txs.push(...rows.filter((tx) => tx?.signature));
     }
-    return this.process(address, txs, false, [], assets);
+    return this.process(address, txs, false, [], assets, coreHeld);
   }
 
   private async process(
@@ -415,13 +459,16 @@ export class SolanaActivityFetcher {
     truncated: boolean,
     notes: string[],
     assets: Map<string, LedgerAsset>,
+    coreHeld: Set<string> = new Set(),
   ): Promise<ChainFetchResult> {
+    txs = chronological(txs);
 
     const mints = new Set<string>();
+    const dasHeld = new Set(coreHeld); // a dry run of the ownership walk below
     for (const tx of txs) {
       for (const t of tx.tokenTransfers ?? []) if (t.mint && !knownAsset('solana', t.mint)) mints.add(t.mint);
       for (const n of tx.events?.nft?.nfts ?? []) if (n.mint) mints.add(n.mint);
-      for (const m of coreAssetMoves(tx, address)) mints.add(m.asset);
+      for (const m of coreAssetMoves(tx, address, dasHeld)) mints.add(m.asset);
     }
     const dasStats = { dasRequested: 0, dasResolved: 0, dasFailedBatches: 0 };
     const mintInfo = await this.fetchMintInfo([...mints], dasStats);
@@ -429,7 +476,7 @@ export class SolanaActivityFetcher {
     const movements: LedgerMovement[] = [];
     const fees: LedgerFee[] = [];
     for (const tx of txs) {
-      const r = normalizeSolanaTx(address, tx, mintInfo, assets);
+      const r = normalizeSolanaTx(address, tx, mintInfo, assets, coreHeld);
       movements.push(...r.movements);
       if (r.fee) fees.push(r.fee);
     }
