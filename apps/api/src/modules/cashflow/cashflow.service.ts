@@ -44,7 +44,16 @@ import { EVM_EXCHANGE_WALLETS, EXCHANGE_NAMES } from './exchange-wallets';
 import { RELAY_PAYEES, RelayLinksFetcher } from './relay-links.fetcher';
 import { SolanaActivityFetcher } from './solana-activity.fetcher';
 import type { PriceRef } from './base-assets';
-import { failedScan, fromSaved, replaceTxs, toSaved, type SavedChainScan } from './scan-store';
+import {
+  failedScan,
+  fromSaved,
+  mergeNew,
+  nftsHeld,
+  replaceTxs,
+  resumePoint,
+  toSaved,
+  type SavedChainScan,
+} from './scan-store';
 
 const CHAIN_NAMES: Record<string, string> = {
   ethereum: 'Ethereum',
@@ -108,6 +117,9 @@ export interface ScanTarget {
   /** EVM addresses lowercased; Solana as-is. */
   address: string;
 }
+
+/** 'full' re-reads a target's whole history; 'new' only what happened since its last scan. */
+export type ScanMode = 'full' | 'new';
 
 /** Narrows the report to one wallet and/or one chain. */
 export interface ReportView {
@@ -200,7 +212,13 @@ export class CashflowService {
    * Rescan some wallets/chains (all when `only` is omitted) and keep the rest
    * of the saved data as it is.
    */
-  async refresh(userId: string, only: ScanTarget[] | undefined, view: ReportView = {}): Promise<CashflowResponse> {
+  async refresh(
+    userId: string,
+    only: ScanTarget[] | undefined,
+    view: ReportView = {},
+    /** 'full' re-reads each target's whole history; 'new' only what happened since its last scan. */
+    mode: ScanMode = 'full',
+  ): Promise<CashflowResponse> {
     const linked = await this.linkedWallets(userId, view);
     if (linked.length === 0) return { status: 'no_wallets' };
     const entry = this.entries.get(userId);
@@ -214,7 +232,7 @@ export class CashflowService {
     if (selected.length === 0) throw new BadRequestException('None of those wallets/chains are scanned for your account');
 
     return this.startJob(userId, targetSignature(targets), entry, view, async (job) => {
-      await this.scanTargets(selected, userId, job);
+      await this.scanTargets(selected, userId, job, mode);
       // Chains never scanned before come along too, so the report is complete.
       const saved = await this.savedTargets(userId);
       const missing = targets.filter((t) => !saved.has(targetKey(t)));
@@ -640,25 +658,55 @@ export class CashflowService {
    * (e.g. by a deploy) keeps what it finished. Relay records for the scanned
    * addresses are refreshed too.
    */
-  private async scanTargets(targets: ScanTarget[], userId: string, job: Entry): Promise<void> {
+  private async scanTargets(
+    targets: ScanTarget[],
+    userId: string,
+    job: Entry,
+    mode: ScanMode = 'full',
+  ): Promise<void> {
     const { alchemyKey, heliusKey, relayKey } = this.apiKeys();
     const evm = alchemyKey ? new EvmActivityFetcher(alchemyKey) : null;
     const sol = heliusKey ? new SolanaActivityFetcher(heliusKey) : null;
+    const previous =
+      mode === 'new'
+        ? await this.db
+            .select()
+            .from(cashflowScans)
+            .where(and(eq(cashflowScans.userId, userId), eq(cashflowScans.kind, 'activity')))
+        : [];
     for (const [i, t] of targets.entries()) {
       const isSol = t.chain === 'solana';
       if (isSol ? !sol : !evm) continue; // the missing key is noted when the report loads
-      job.progress = `Scanning ${CHAIN_NAMES[t.chain] ?? t.chain} ${shortAddress(t.address)} (${i + 1}/${targets.length})`;
+      const prior = previous.find((r) => r.chain === t.chain && r.address === t.address)?.data as
+        | SavedChainScan
+        | undefined;
+      // "Fetch new" needs to know where the last read stopped; without that, read it all.
+      const since = prior ? resumePoint(prior, t.chain) : null;
+      const label = `${CHAIN_NAMES[t.chain] ?? t.chain} ${shortAddress(t.address)} (${i + 1}/${targets.length})`;
+      job.progress = since ? `Fetching new activity: ${label}` : `Scanning ${label}`;
       const assets = new Map<string, LedgerAsset>();
       let saved: SavedChainScan;
       try {
-        const r = isSol ? await sol!.fetch(t.address, assets) : await evm!.fetch(t.chain, t.address, assets);
+        let r;
+        if (since && prior && isSol) {
+          r = await sol!.fetch(t.address, assets, {
+            // A minute's overlap: txs read twice are replaced, not duplicated.
+            sinceTime: since.time! - 60,
+            coreHeld: nftsHeld(prior, t.address),
+          });
+        } else if (since && prior) {
+          r = await evm!.fetchSince(t.chain, t.address, since.block!, assets);
+        } else {
+          r = isSol ? await sol!.fetch(t.address, assets) : await evm!.fetch(t.chain, t.address, assets);
+        }
         await this.enrichNftNames(assets, alchemyKey);
-        saved = toSaved(r);
+        saved = since && prior ? mergeNew(prior, r) : toSaved(r);
       } catch (err) {
         const message = (err as Error).message;
         // Networks have to be enabled per Alchemy app; one that isn't is a config gap, not a failure.
         const disabled = !isSol && /HTTP 403|not enabled|unsupported network/i.test(message);
         if (!disabled) this.logger.warn(`Cash-flow scan failed for ${t.chain} ${t.address}: ${message}`);
+        if (since && prior) continue; // a failed "fetch new" keeps what was already saved
         saved = failedScan(message, disabled);
       }
       await this.saveRow(userId, 'activity', t.chain, t.address, saved);

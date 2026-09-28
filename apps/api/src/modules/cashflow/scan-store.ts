@@ -20,6 +20,8 @@ export interface SavedChainScan {
   error: string | null;
   /** The network isn't enabled on the Alchemy app — a config gap, not a failure. */
   disabled?: boolean;
+  /** Where the last read stopped (see ChainFetchResult.cursor). */
+  cursor?: { block?: string; time?: number };
 }
 
 export interface SavedMovement {
@@ -74,6 +76,7 @@ export function toSaved(result: ChainFetchResult): SavedChainScan {
     notes: result.notes,
     stats: result.stats,
     error: null,
+    ...(result.cursor ? { cursor: result.cursor } : {}),
   };
 }
 
@@ -178,4 +181,51 @@ export function replaceTxs(
     ),
     fees: [...saved.fees.filter((f) => !hashes.has(f.h)), ...next.fees],
   };
+}
+
+/**
+ * Where "fetch new" should resume: the saved cursor, or for Solana scans saved
+ * before cursors existed, the newest saved tx. null → a full scan is needed.
+ */
+export function resumePoint(saved: SavedChainScan, chain: string): { block?: string; time?: number } | null {
+  if (saved.error) return null;
+  if (chain === 'solana') {
+    if (saved.cursor?.time) return { time: saved.cursor.time };
+    const newest = Math.max(0, ...saved.movements.map((m) => m.t), ...saved.fees.map((f) => f.t));
+    return newest > 0 ? { time: Math.floor(newest / 1000) } : null;
+  }
+  return saved.cursor?.block ? { block: saved.cursor.block } : null;
+}
+
+/**
+ * Fold a "fetch new" read into the saved scan. Txs in both (the read overlaps
+ * the last one slightly) take the fresh version.
+ */
+export function mergeNew(saved: SavedChainScan, fresh: ChainFetchResult): SavedChainScan {
+  const hashes = new Set([...fresh.movements.map((m) => m.txHash), ...fresh.fees.map((f) => f.txHash)]);
+  const merged = replaceTxs(saved, hashes, fresh);
+  const stats = { ...(saved.stats ?? {}) };
+  for (const [k, v] of Object.entries(fresh.stats ?? {})) stats[k] = (stats[k] ?? 0) + v;
+  return {
+    ...merged,
+    transfers: saved.transfers + fresh.transfers,
+    truncated: saved.truncated || fresh.truncated,
+    notes: [...new Set([...saved.notes, ...fresh.notes])],
+    stats,
+    cursor: fresh.cursor ?? saved.cursor,
+  };
+}
+
+/**
+ * NFTs (token ids) the wallet holds per a saved scan: received more times than
+ * sent away, not counting moves to itself (e.g. into a listing escrow).
+ */
+export function nftsHeld(saved: SavedChainScan, wallet: string): Set<string> {
+  const nft = new Set(saved.assets.filter((a) => a.kind === 'nft').map((a) => a.key));
+  const count = new Map<string, number>();
+  for (const m of saved.movements) {
+    if (!m.i || !nft.has(m.a) || m.p === wallet) continue;
+    count.set(m.i, (count.get(m.i) ?? 0) + (m.d === 'in' ? 1 : -1));
+  }
+  return new Set([...count].filter(([, n]) => n > 0).map(([id]) => id));
 }

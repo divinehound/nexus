@@ -79,6 +79,11 @@ export class RefreshDto {
   @ValidateNested({ each: true })
   @Type(() => ScanTargetDto)
   targets?: ScanTargetDto[];
+
+  /** 'full' (default) re-reads each whole history; 'new' only fetches what happened since the last scan. */
+  @IsOptional()
+  @IsIn(['full', 'new'])
+  mode?: 'full' | 'new';
 }
 
 export class WalletChainsDto {
@@ -137,14 +142,17 @@ export class CashflowController {
   }
 
   @Post('refresh')
-  @ApiOperation({ summary: 'Rescan some wallet+chain pairs (or all, with no targets); the rest stays as saved' })
+  @ApiOperation({
+    summary:
+      'Rescan some wallet+chain pairs (or all, with no targets) — fully, or only new activity since the last scan (mode=new)',
+  })
   refresh(
     @Req() req: AuthRequest,
     @Body() body: RefreshDto,
     @Query('wallet') wallet?: string,
     @Query('chain') chain?: string,
   ): Promise<CashflowResponse> {
-    return this.cashflowService.refresh(req.user.sub, body.targets, view(wallet, chain));
+    return this.cashflowService.refresh(req.user.sub, body.targets, view(wallet, chain), body.mode ?? 'full');
   }
 
   @Put('wallet-chains')

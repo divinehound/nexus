@@ -154,3 +154,89 @@ describe('re-reading flagged transactions', () => {
     expect(r.fees).toHaveLength(1);
   });
 });
+
+describe('fetch new (incremental) scans', () => {
+  const { resumePoint, mergeNew, nftsHeld } = jest.requireActual('./scan-store');
+  afterEach(() => jest.restoreAllMocks());
+  const base = {
+    movements: [mv('0xa', 'out', ETH, 0.5), mv('0xa', 'in', NFT, 1)],
+    fees: [],
+    transfers: 2,
+    truncated: false,
+    notes: [],
+    stats: { transfers: 2 },
+  };
+
+  it('resumes EVM scans from the saved head block, Solana from the newest saved tx', () => {
+    expect(resumePoint(toSaved({ ...base, cursor: { block: '0x64' } }), 'base')).toEqual({ block: '0x64' });
+    // Saved before cursors existed: EVM can't resume (full scan), Solana can.
+    expect(resumePoint(toSaved(base), 'base')).toBeNull();
+    expect(resumePoint(toSaved(base), 'solana')).toEqual({ time: Date.parse('2025-03-01T12:00:00Z') / 1000 });
+    expect(resumePoint(failedScan('boom'), 'solana')).toBeNull();
+  });
+
+  it('merges new activity, replacing overlapping txs instead of duplicating them', () => {
+    const saved = toSaved({ ...base, cursor: { block: '0x64' } });
+    const fresh = {
+      movements: [mv('0xa', 'out', ETH, 0.5), mv('0xa', 'in', NFT, 1), mv('0xc', 'in', ETH, 1.2)],
+      fees: [],
+      transfers: 3,
+      truncated: false,
+      notes: [],
+      stats: { transfers: 3 },
+      cursor: { block: '0xc8' },
+    };
+    const next = mergeNew(saved, fresh);
+    expect(next.movements.map((m: { h: string }) => m.h).sort()).toEqual(['0xa', '0xa', '0xc']);
+    expect(next.cursor).toEqual({ block: '0xc8' });
+    expect(next.stats.transfers).toBe(5);
+  });
+
+  it('knows which NFTs the wallet still holds (parked in escrow counts as held)', () => {
+    const saved = toSaved({
+      ...base,
+      movements: [
+        mv('0x1', 'in', NFT, 1, { tokenId: '1' }),
+        mv('0x2', 'in', NFT, 1, { tokenId: '2' }),
+        mv('0x3', 'out', NFT, 1, { tokenId: '2', counterparty: '0xbuyer' }),
+        mv('0x4', 'out', NFT, 1, { tokenId: '1', counterparty: ME }), // listed into escrow
+      ],
+    });
+    expect([...nftsHeld(saved, ME)]).toEqual(['1']);
+  });
+
+  it('EVM: reads from the block after the saved head and records the new head', async () => {
+    const params: Array<Record<string, unknown>> = [];
+    jest.spyOn(global, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body));
+      if (!Array.isArray(body) && body.method === 'eth_blockNumber')
+        return new Response(JSON.stringify({ result: '0xc8' }), { status: 200 });
+      if (!Array.isArray(body) && body.method === 'alchemy_getAssetTransfers') {
+        params.push(body.params[0]);
+        return new Response(JSON.stringify({ result: { transfers: [] } }), { status: 200 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    const r = await new EvmActivityFetcher('key').fetchSince('base', ME, '0x64', new Map());
+    expect(params.map((p) => p.fromBlock)).toEqual(['0x65', '0x65']);
+    expect(r.cursor).toEqual({ block: '0xc8' });
+  });
+
+  it('Solana: asks Helius only for txs since the given time and records the newest', async () => {
+    const urls: string[] = [];
+    let page = 0;
+    jest.spyOn(global, 'fetch').mockImplementation(async (url) => {
+      urls.push(String(url));
+      if (String(url).includes('/addresses/')) {
+        const body = page++ === 0 ? [{ signature: 'newSig', timestamp: 1_750_000_000, tokenTransfers: [], nativeTransfers: [] }] : [];
+        return new Response(JSON.stringify(body), { status: 200 });
+      }
+      return new Response(JSON.stringify({ result: [] }), { status: 200 });
+    });
+    const r = await new SolanaActivityFetcher('key').fetch('SoLMe1111111111111111111111111111111111111', new Map(), {
+      sinceTime: 1_740_000_000,
+    });
+    expect(urls.filter((u) => u.includes('/addresses/')).every((u) => u.includes('gte-time=1740000000'))).toBe(true);
+    expect(r.cursor).toEqual({ time: 1_750_000_000 });
+  });
+});
