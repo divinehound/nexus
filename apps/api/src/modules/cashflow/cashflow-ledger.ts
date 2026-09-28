@@ -108,6 +108,13 @@ export interface BuildReportInput {
    * so a bridge out of a chain in scope still pairs with its arrival elsewhere.
    */
   chainScope?: (chain: string) => boolean;
+  /**
+   * Bridge/relayer addresses (by `addressIdentity`) that pay for things on
+   * another chain — e.g. Relay, which mints an NFT on Abstract for ETH paid
+   * on Ethereum. A payment to one of these just before an unpaid mint on
+   * another chain is paired with it as that mint's cost.
+   */
+  crossChainPayees?: Set<string>;
 }
 
 export interface TxPair {
@@ -471,6 +478,29 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     input.explicitLinks ?? [],
     input.rejectedLinks ?? [],
   );
+  // ── Pass 3: money paid on one chain for a mint/purchase delivered on another ──
+  const fundedFrom = matchCrossChainPurchases(
+    ordered,
+    analyses,
+    bridgeRoles,
+    input.explicitLinks ?? [],
+    input.rejectedLinks ?? [],
+    input.crossChainPayees ?? new Set(),
+  );
+  for (const [dest, role] of fundedFrom) {
+    // Book the payment as if it were made in the delivering tx, so the mint
+    // or purchase carries it as its cost (the payment tx itself books nothing).
+    const funding = role.pair.legs.map((l) => l.movement);
+    analyses.set(
+      dest,
+      analyze(
+        { ...dest, movements: [...dest.movements, ...funding] },
+        isOwn,
+        (m) => priceLegQuiet(pricer, m),
+        pricer,
+      ),
+    );
+  }
 
   // ── Accumulators ──
   const months = new Map<string, CashflowMonth>();
@@ -679,6 +709,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       moneyUsdKnown,
     } = a;
     const bridge = bridgeRoles.get(g);
+    const funder = fundedFrom.get(g);
 
     if (bridge) {
       // ── One side of a cross-chain move between the user's own wallets ──
@@ -687,7 +718,9 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       if (!lastAt || at > lastAt) lastAt = at;
       const pair = bridge.pair;
       let bridgeFee = 0;
-      if (bridge.side === 'out') {
+      if (bridge.funds) {
+        // The money is booked as the cost of what it bought, on the other chain.
+      } else if (bridge.side === 'out') {
         // Whatever didn't arrive is the bridge's fee — a real cost, like gas.
         bridgeFee = Math.max(0, bridge.self.usd - pair.usd);
         if (bridgeFee > 0) {
@@ -701,8 +734,9 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       }
       const legsSrc = bridge.self.legs;
       const phrase = assetPhrase(legsSrc.map((l) => l.movement));
-      const label =
-        bridge.side === 'out'
+      const label = bridge.funds
+        ? `Paid ${phrase} for a purchase on ${chainName(pair.group.chain)}`
+        : bridge.side === 'out'
           ? `Bridged ${phrase} · ${chainName(g.chain)} → ${chainName(pair.group.chain)}`
           : `Bridge arrival: ${phrase} from ${chainName(pair.group.chain)}`;
       activity.push({
@@ -1019,9 +1053,11 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       realizedPnlUsd: realized,
       counterparty,
       exchange,
-      linkedTo: null,
-      linkSource: null,
-      linkSide: null,
+      linkedTo: funder
+        ? { chain: funder.pair.group.chain, txHash: funder.pair.group.txHash }
+        : null,
+      linkSource: funder?.source ?? null,
+      linkSide: funder ? 'in' : null,
       legs,
     });
   }
@@ -1291,6 +1327,8 @@ export interface BridgeRole {
   self: BridgeSide;
   pair: BridgeSide;
   source: CashflowLinkSource;
+  /** The out side paid for a mint/purchase delivered on the pair's chain, rather than moving money. */
+  funds?: boolean;
 }
 
 const MINUTE = 60_000;
@@ -1303,6 +1341,8 @@ const SLOW_MIN_RATIO = 0.999;
 /** Cross-asset hops (SOL → ETH) are matched on USD value. */
 const CROSS_ASSET_MIN_RATIO = 0.95;
 const CLOCK_SKEW_MS = 10 * MINUTE;
+/** A relayer delivers a cross-chain mint/purchase within minutes of being paid. */
+const CROSS_CHAIN_PURCHASE_WINDOW_MS = 30 * MINUTE;
 
 function bridgeSide(group: TxGroup, legs: PricedLeg[]): BridgeSide {
   const units = new Set(
@@ -1402,6 +1442,91 @@ export function matchBridges(
     }
   }
   return roles;
+}
+
+/**
+ * Cross-chain purchases: money leaves one chain and what it bought — an NFT
+ * mint, usually — lands on another, delivered by a relayer (e.g. Relay's
+ * solver minting on Abstract for ETH paid on Ethereum). The delivering tx
+ * shows the NFT arriving with nothing paid; the paying tx looks like a plain
+ * send. Pairs come from explicit links (Relay's records, the user's own
+ * links) or, failing those, a payment to a known relayer followed within
+ * minutes by an unpaid acquisition on another chain whose gas the user
+ * didn't pay. Returns delivering tx → role of the paying tx (also added to
+ * `roles`, so the payment is shown as such rather than as spending).
+ */
+export function matchCrossChainPurchases(
+  ordered: TxGroup[],
+  analyses: Map<TxGroup, TxAnalysis>,
+  roles: Map<TxGroup, BridgeRole>,
+  explicit: ExplicitLink[],
+  rejected: TxPair[],
+  payees: Set<string>,
+): Map<TxGroup, BridgeRole> {
+  const funded = new Map<TxGroup, BridgeRole>();
+  const byKey = new Map(ordered.map((g) => [txKey(g.chain, g.txHash), g]));
+  const payment = (g: TxGroup) => {
+    const a = analyses.get(g)!;
+    return (
+      a.unIn.length === 0 &&
+      a.unOut.length === 0 &&
+      a.pricedIn.length === 0 &&
+      a.pricedOut.length > 0
+    );
+  };
+  const unpaidAcquisition = (g: TxGroup) => {
+    const a = analyses.get(g)!;
+    return (
+      a.unIn.length > 0 &&
+      a.unOut.length === 0 &&
+      a.pricedOut.length === 0 &&
+      a.pricedIn.length === 0
+    );
+  };
+  const pairUp = (from: TxGroup, to: TxGroup, source: CashflowLinkSource) => {
+    const out = bridgeSide(from, analyses.get(from)!.pricedOut);
+    const delivered = bridgeSide(to, []);
+    roles.set(from, { side: 'out', self: out, pair: delivered, source, funds: true });
+    funded.set(to, { side: 'in', self: delivered, pair: out, source, funds: true });
+  };
+
+  for (const link of explicit) {
+    const from = byKey.get(txKey(link.fromChain, link.fromTxHash));
+    const to = byKey.get(txKey(link.toChain, link.toTxHash));
+    if (!from || !to || from === to || roles.has(from) || roles.has(to) || funded.has(to)) continue;
+    if (payment(from) && unpaidAcquisition(to)) pairUp(from, to, link.source);
+  }
+
+  if (payees.size === 0) return funded;
+  const rejectedKeys = new Set(
+    rejected.flatMap((r) => {
+      const a = txKey(r.fromChain, r.fromTxHash);
+      const b = txKey(r.toChain, r.toTxHash);
+      return [`${a}>${b}`, `${b}>${a}`];
+    }),
+  );
+  const deliveries = ordered.filter(
+    (g) => !g.fee && !roles.has(g) && !funded.has(g) && unpaidAcquisition(g),
+  );
+  for (const from of ordered) {
+    if (roles.has(from) || !payment(from)) continue;
+    const toRelayer = analyses
+      .get(from)!
+      .pricedOut.every((l) => payees.has(addressIdentity(from.chain, l.movement.counterparty)));
+    if (!toRelayer) continue;
+    const t0 = from.timestamp.getTime();
+    let best: TxGroup | null = null;
+    for (const to of deliveries) {
+      if (funded.has(to) || to.chain === from.chain) continue;
+      const dt = to.timestamp.getTime() - t0;
+      if (dt < -CLOCK_SKEW_MS || dt > CROSS_CHAIN_PURCHASE_WINDOW_MS) continue;
+      if (rejectedKeys.has(`${txKey(from.chain, from.txHash)}>${txKey(to.chain, to.txHash)}`))
+        continue;
+      if (!best || Math.abs(dt) < Math.abs(best.timestamp.getTime() - t0)) best = to;
+    }
+    if (best) pairUp(from, best, 'auto');
+  }
+  return funded;
 }
 
 function bridgeAmountsMatch(out: BridgeSide, arrival: BridgeSide, dt: number): boolean {

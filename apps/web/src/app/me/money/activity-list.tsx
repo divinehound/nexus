@@ -220,7 +220,9 @@ function ActivityRow({
 }) {
   const { run, busy } = useCashflowActions();
   const net = a.inUsd - a.outUsd;
-  const linkable = OUTGOING.includes(a.type) || INCOMING.includes(a.type);
+  // An NFT/token that arrived with nothing paid may have been paid for on another chain (Relay).
+  const unpaid = a.type === 'received_asset';
+  const linkable = OUTGOING.includes(a.type) || INCOMING.includes(a.type) || unpaid;
 
   const unlink = () => {
     if (!a.linkedTo) return;
@@ -285,7 +287,7 @@ function ActivityRow({
             {detailsOpen ? 'Hide details' : 'Details'}
           </button>
           {a.linkSource && <span>{LINK_SOURCE_LABELS[a.linkSource]}</span>}
-          {a.type === 'bridge' && (
+          {a.linkedTo && (a.type === 'bridge' || a.linkSource) && (
             <button
               type="button"
               disabled={busy}
@@ -302,7 +304,7 @@ function ActivityRow({
               aria-expanded={linkOpen}
               className="text-purple-300 underline-offset-2 hover:text-purple-200 hover:underline"
             >
-              {linkOpen ? 'Cancel' : 'Link to my other wallet…'}
+              {linkOpen ? 'Cancel' : unpaid ? 'Link to its payment…' : 'Link to my other wallet…'}
             </button>
           )}
         </div>
@@ -412,8 +414,8 @@ function TxDetails({ a, flag }: { a: CashflowActivity; flag: CashflowFlag | unde
           No payment from your linked wallets was found in this transaction. If you did pay, the
           money most likely came from a wallet you haven&apos;t linked, from another chain (e.g. a
           Relay cross-chain mint), or in a token we don&apos;t price. Check the transaction on{' '}
-          {explorerName(a.chain)} — if the payer is another wallet of yours, link it on your
-          profile.
+          {explorerName(a.chain)} — if the payer is another wallet of yours, add it on your profile;
+          if you paid on another chain, use &ldquo;Link to its payment…&rdquo;.
         </p>
       )}
       <FlagControl chain={a.chain} txHash={a.txHash} flag={flag} />
@@ -444,7 +446,11 @@ function LinkPicker({
     const t0 = new Date(source.timestamp).getTime();
     const value = moneyOf(source);
     return report.activity
-      .filter((b) => (sourceIsOut ? INCOMING : OUTGOING).includes(b.type) && b !== source)
+      .filter(
+        (b) =>
+          (sourceIsOut ? [...INCOMING, 'received_asset'] : OUTGOING).includes(b.type) &&
+          b !== source,
+      )
       .map((b) => ({
         b,
         dt: new Date(b.timestamp).getTime() - t0,
@@ -465,16 +471,23 @@ function LinkPicker({
     const pair = sourceIsOut
       ? { fromChain: source.chain, fromTxHash: source.txHash, toChain: chain, toTxHash: txHash }
       : { fromChain: chain, fromTxHash: txHash, toChain: source.chain, toTxHash: source.txHash };
-    void run('Linked — counted as a move between your wallets', (token, view) =>
-      addCashflowLink(token, { kind: 'link', ...pair }, view),
+    void run(
+      source.type === 'received_asset'
+        ? 'Linked — that payment now counts as the cost of this'
+        : 'Linked — counted as a move between your wallets',
+      (token, view) => addCashflowLink(token, { kind: 'link', ...pair }, view),
     ).then((ok) => ok && onDone());
   };
 
   return (
     <div className="mt-3 rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-sm">
       <div className="mb-2 text-xs text-gray-400">
-        {sourceIsOut ? 'Where did this money arrive?' : 'Where did this money come from?'} Pick the
-        matching transaction in your other wallet.
+        {source.type === 'received_asset'
+          ? 'Paid for on another chain (e.g. a Relay cross-chain mint)? Pick the payment.'
+          : sourceIsOut
+            ? 'Where did this money arrive — or what did it buy on another chain?'
+            : 'Where did this money come from?'}{' '}
+        Pick the matching transaction in your other wallet.
       </div>
       {candidates.length > 0 ? (
         <ul className="space-y-1">

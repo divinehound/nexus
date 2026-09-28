@@ -41,7 +41,7 @@ import {
   shortAddress,
 } from './evm-activity.fetcher';
 import { EVM_EXCHANGE_WALLETS, EXCHANGE_NAMES } from './exchange-wallets';
-import { RelayLinksFetcher } from './relay-links.fetcher';
+import { RELAY_PAYEES, RelayLinksFetcher } from './relay-links.fetcher';
 import { SolanaActivityFetcher } from './solana-activity.fetcher';
 import type { PriceRef } from './base-assets';
 import { failedScan, fromSaved, replaceTxs, toSaved, type SavedChainScan } from './scan-store';
@@ -578,6 +578,7 @@ export class CashflowService {
       rejectedLinks: rejected,
       exchangeAddresses,
       chainScope: chain ? (c) => c === chain : undefined,
+      crossChainPayees: new Set(RELAY_PAYEES.map((p) => addressIdentity(p.chain, p.address))),
     });
     if (report.totals.unpricedMovements > 0) {
       report.notes.push(
