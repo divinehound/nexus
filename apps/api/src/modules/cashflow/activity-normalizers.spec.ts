@@ -807,6 +807,62 @@ describe('Jupiter DCA orders', () => {
     ],
   };
 
+  it("reads the order account's own history, so fills that never touch the wallet are sales", async () => {
+    // Fills pay into the order's wSOL account; only the close (all proceeds + unfilled BIG) reaches the wallet.
+    const quietFill = (n: number, sol: number) => ({
+      signature: `quiet${n}`,
+      timestamp: 1_750_572_151 + n * 7200,
+      feePayer: KEEPER,
+      instructions: dcaIx,
+      tokenTransfers: [
+        { fromUserAccount: DCA, toUserAccount: POOL, fromTokenAccount: DCA_IN, mint: BIG, tokenAmount: 28703.2 },
+        { fromUserAccount: POOL, toUserAccount: DCA, toTokenAccount: DCA_OUT, mint: WSOL, tokenAmount: sol },
+      ],
+    });
+    const payout = {
+      signature: 'closeAll',
+      timestamp: 1_750_700_000,
+      feePayer: KEEPER,
+      instructions: dcaIx,
+      nativeTransfers: [{ fromUserAccount: DCA_OUT, toUserAccount: ME, amount: 0.65e9 }],
+      tokenTransfers: [
+        { fromUserAccount: DCA, toUserAccount: ME, fromTokenAccount: DCA_IN, toTokenAccount: 'MyBigAta', mint: BIG, tokenAmount: 258329.2 },
+      ],
+    };
+    const histories: Record<string, unknown[]> = {
+      [ME]: [payout, open, buy], // newest first, as Helius returns them
+      [DCA]: [payout, quietFill(3, 0.2), quietFill(2, 0.25), quietFill(1, 0.2), open],
+    };
+    const asked: string[] = [];
+    jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.helius.xyz') {
+        const who = url.pathname.split('/')[3];
+        asked.push(who);
+        return new Response(JSON.stringify(url.searchParams.get('before-signature') ? [] : histories[who] ?? []), { status: 200 });
+      }
+      return new Response(JSON.stringify({ result: [] }), { status: 200 });
+    });
+    const { SolanaActivityFetcher } = jest.requireActual('./solana-activity.fetcher');
+    const r = await new SolanaActivityFetcher('key').fetch(ME, new Map());
+    jest.restoreAllMocks();
+    expect(asked).toContain(DCA);
+    const report = buildCashflowReport({
+      movements: r.movements.map((m: LedgerMovement) => ({ ...m, asset: { ...m.asset, name: m.asset.symbol === 'BIG' ? 'BIG' : m.asset.name } })),
+      fees: [],
+      wallets: [{ chain: 'solana', address: ME }],
+      pricer: { usdPerUnit: () => 150 },
+      coverage: [],
+      notes: [],
+      now: new Date('2026-01-01T00:00:00Z'),
+    });
+    const big = report.tokens.find((t: { contract: string }) => t.contract === BIG);
+    expect(big.trades.map((t: { kind: string }) => t.kind)).toEqual(['sell', 'sell', 'sell', 'buy']);
+    expect(big.qtyHeld).toBeCloseTo(344438.8 - 3 * 28703.2);
+    expect(report.inByCategory.token_sale).toBeCloseTo(0.65 * 150);
+    expect(report.inByCategory.transfer_in).toBeUndefined(); // the payout isn't counted again
+  });
+
   it("keeps a DCA deposit as yours and books each fill as a sale at the SOL it paid", () => {
     const assets = new Map();
     const legs = (tx: Parameters<typeof normalizeSolanaTx>[1]) => normalizeSolanaTx(ME, tx, mintInfo, assets).movements;

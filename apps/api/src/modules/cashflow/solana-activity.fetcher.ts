@@ -8,6 +8,8 @@ import { chunk, fetchJsonWithRetry, sleep } from './http';
 
 const LAMPORTS_PER_SOL = 1e9;
 const MAX_PAGES = 300; // × 100 transactions — Solana wallets collect a lot of spam
+/** Per Jupiter DCA order account: its own history (fills, close) is short. */
+const MAX_DCA_PAGES = 5;
 /** Helius NFT event types that move an NFT (bids/listings only move SOL or change state). */
 const NFT_MOVE_EVENTS = new Set(['NFT_SALE', 'NFT_MINT', 'COMPRESSED_NFT_MINT', 'COMPRESSED_NFT_TRANSFER', 'TRANSFER']);
 /** Event types that come with a price the buyer paid. */
@@ -156,6 +158,8 @@ export function normalizeSolanaTx(
   assets: Map<string, LedgerAsset>,
   /** Core assets the wallet holds going into this tx (updated in place) — see coreAssetMoves. */
   coreHeld: Set<string> = new Set(),
+  /** The wallet's Jupiter DCA order accounts seen so far (updated in place) — see dcaAccountsOf. */
+  dcaKnown: Set<string> = new Set(),
 ): { movements: LedgerMovement[]; fee: LedgerFee | null } {
   const timestamp = new Date(tx.timestamp * 1000);
   const fee: LedgerFee | null =
@@ -190,7 +194,10 @@ export function normalizeSolanaTx(
   // A Jupiter DCA account is the wallet's own pocket: what's deposited stays
   // the wallet's until the bot sells it, and each fill — the deposit token
   // leaving the DCA account, SOL/tokens arriving — is the wallet's sale.
-  const dcaAccounts = usesProgram(tx, JUPITER_DCA_PROGRAM) ? dcaAccountsOf(tx, wallet) : new Set<string>();
+  const dcaAccounts = usesProgram(tx, JUPITER_DCA_PROGRAM)
+    ? dcaAccountsOf(tx, wallet, dcaKnown)
+    : new Set<string>();
+  for (const a of dcaAccounts) dcaKnown.add(a);
   const who = (account: string | null | undefined, tokenAccount?: string | null) =>
     dcaAccounts.has(account ?? '') || (tokenAccount && dcaAccounts.has(tokenAccount)) ? wallet : (account ?? '');
   let nativeOut = 0;
@@ -424,6 +431,20 @@ function coreMove(accounts: string[], variant: number | null, wallet: string, he
 }
 
 /** A program-derived address (off the ed25519 curve) — an escrow or vault, never a person's wallet. */
+/**
+ * Jupiter DCA order accounts the wallet deposited into (opening an order):
+ * the owner of the token account its tokens went to, in a DCA tx it signed.
+ */
+export function dcaDepositAccounts(wallet: string, txs: HeliusEnhancedTx[]): string[] {
+  const found = new Set<string>();
+  for (const tx of txs) {
+    if (tx.feePayer !== wallet || tx.transactionError || !usesProgram(tx, JUPITER_DCA_PROGRAM)) continue;
+    for (const t of tx.tokenTransfers ?? [])
+      if (t.fromUserAccount === wallet && t.toUserAccount && t.toUserAccount !== wallet) found.add(t.toUserAccount);
+  }
+  return [...found];
+}
+
 /** Whether any instruction (or inner instruction) of the tx runs `programId`. */
 export function usesProgram(tx: HeliusEnhancedTx, programId: string): boolean {
   const visit = (ixs: HeliusInstruction[] | undefined): boolean =>
@@ -436,8 +457,19 @@ export function usesProgram(tx: HeliusEnhancedTx, programId: string): boolean {
  * whatever pays the wallet (fills, refunds of the unfilled rest), and — when
  * the wallet signed — whatever it deposits into (opening an order).
  */
-export function dcaAccountsOf(tx: HeliusEnhancedTx, wallet: string): Set<string> {
+export function dcaAccountsOf(
+  tx: HeliusEnhancedTx,
+  wallet: string,
+  /** Order accounts already known from earlier txs (a deposit): fills that never touch the wallet. */
+  known: Set<string> = new Set(),
+): Set<string> {
   const found = new Set<string>();
+  const involved = (a: string | null | undefined) => {
+    if (a && known.has(a)) found.add(a);
+  };
+  for (const n of tx.nativeTransfers ?? []) [n.fromUserAccount, n.toUserAccount].forEach(involved);
+  for (const t of tx.tokenTransfers ?? [])
+    [t.fromUserAccount, t.toUserAccount, t.fromTokenAccount, t.toTokenAccount].forEach(involved);
   const signed = tx.feePayer === wallet;
   for (const n of tx.nativeTransfers ?? []) {
     if (n.toUserAccount === wallet && n.fromUserAccount && n.fromUserAccount !== wallet) found.add(n.fromUserAccount);
@@ -526,12 +558,41 @@ export class SolanaActivityFetcher {
     assets: Map<string, LedgerAsset>,
     opts: { sinceTime?: number; coreHeld?: Set<string> } = {},
   ): Promise<ChainFetchResult> {
-    const txs: HeliusEnhancedTx[] = [];
-    const seen = new Set<string>();
     const notes: string[] = [];
+    const seen = new Set<string>();
+    const { txs, truncated } = await this.pageHistory(address, opts.sinceTime, MAX_PAGES, seen, notes);
+    if (truncated) {
+      notes.push(`Solana ${shortAddress(address)}: only the newest ${txs.length.toLocaleString()} transactions were scanned.`);
+    }
+    // A Jupiter DCA order's fills usually don't touch the wallet (the proceeds
+    // collect in the order's account until it closes): read each order
+    // account's own history too, so every fill is seen as a sale.
+    for (const dca of dcaDepositAccounts(address, txs)) {
+      const more = await this.pageHistory(dca, opts.sinceTime, MAX_DCA_PAGES, seen, notes);
+      txs.push(...more.txs);
+      if (more.truncated) notes.push(`Solana ${shortAddress(address)}: a DCA order had more fills than were scanned.`);
+    }
+    const r = await this.process(address, txs, truncated, notes, assets, opts.coreHeld);
+    const newest = txs.reduce((max, tx) => Math.max(max, tx.timestamp || 0), opts.sinceTime ?? 0);
+    return { ...r, cursor: newest > 0 ? { time: newest } : undefined };
+  }
+
+  /**
+   * One address's history, newest first, via Helius' enhanced transactions.
+   * `seen` is shared across calls so the same tx is only read once.
+   */
+  private async pageHistory(
+    address: string,
+    sinceTime: number | undefined,
+    maxPages: number,
+    seen: Set<string>,
+    notes: string[],
+  ): Promise<{ txs: HeliusEnhancedTx[]; truncated: boolean }> {
+    const txs: HeliusEnhancedTx[] = [];
+    const pageSeen = new Set<string>();
     let before: string | undefined;
     let truncated = true;
-    for (let page = 0; page < MAX_PAGES; page++) {
+    for (let page = 0; page < maxPages; page++) {
       const url = new URL(`https://api.helius.xyz/v0/addresses/${address}/transactions`);
       url.searchParams.set('api-key', this.apiKey);
       url.searchParams.set('limit', '100');
@@ -541,7 +602,7 @@ export class SolanaActivityFetcher {
       // Helius' pagination cursor is `before-signature` (a plain `before` is ignored,
       // which silently returns the newest page over and over).
       if (before) url.searchParams.set('before-signature', before);
-      if (opts.sinceTime !== undefined) url.searchParams.set('gte-time', String(Math.floor(opts.sinceTime)));
+      if (sinceTime !== undefined) url.searchParams.set('gte-time', String(Math.floor(sinceTime)));
       let batch: HeliusEnhancedTx[];
       try {
         batch = await fetchJsonWithRetry<HeliusEnhancedTx[]>(url.toString(), { headers: { accept: 'application/json' } }, 'Helius address transactions');
@@ -558,24 +619,23 @@ export class SolanaActivityFetcher {
         truncated = false;
         break;
       }
-      const fresh = batch.filter((tx) => tx.signature && !seen.has(tx.signature));
+      const fresh = batch.filter((tx) => tx.signature && !pageSeen.has(tx.signature));
       if (fresh.length === 0) {
         // The cursor didn't move — stop rather than re-read the same page.
         this.logger.warn(`Helius pagination stalled for ${address} at ${before}`);
         notes.push(`Solana ${shortAddress(address)}: history paging stopped early; older activity may be missing.`);
         break;
       }
-      for (const tx of fresh) seen.add(tx.signature);
-      txs.push(...fresh);
+      for (const tx of fresh) {
+        pageSeen.add(tx.signature);
+        if (seen.has(tx.signature)) continue;
+        seen.add(tx.signature);
+        txs.push(tx);
+      }
       before = batch[batch.length - 1].signature;
       await sleep(150);
     }
-    if (truncated) {
-      notes.push(`Solana ${shortAddress(address)}: only the newest ${txs.length.toLocaleString()} transactions were scanned.`);
-    }
-    const r = await this.process(address, txs, truncated, notes, assets, opts.coreHeld);
-    const newest = txs.reduce((max, tx) => Math.max(max, tx.timestamp || 0), opts.sinceTime ?? 0);
-    return { ...r, cursor: newest > 0 ? { time: newest } : undefined };
+    return { txs, truncated };
   }
 
   /** Re-read only the given transactions for `address` — the re-import of flagged transactions. */
@@ -621,8 +681,10 @@ export class SolanaActivityFetcher {
 
     const movements: LedgerMovement[] = [];
     const fees: LedgerFee[] = [];
+    // DCA order accounts learned as the history is walked, oldest first.
+    const dcaKnown = new Set<string>();
     for (const tx of txs) {
-      const r = normalizeSolanaTx(address, tx, mintInfo, assets, coreHeld);
+      const r = normalizeSolanaTx(address, tx, mintInfo, assets, coreHeld, dcaKnown);
       movements.push(...r.movements);
       if (r.fee) fees.push(r.fee);
     }
