@@ -7,6 +7,7 @@ import type {
   CashflowCounterparty,
   CashflowExchangeSource,
   CashflowExchangeSummary,
+  CashflowHiddenAsset,
   CashflowLinkSource,
   CashflowMonth,
   CashflowNftAcquiredVia,
@@ -136,6 +137,22 @@ export interface BuildReportInput {
    * stuck in a locked escrow. Their cost is booked as a realized loss.
    */
   lostTxs?: Set<string>;
+  /**
+   * Your say on individual tokens/collections (by asset key): 'hidden' leaves
+   * one out of everything, 'shown' keeps one the spam check would hide.
+   */
+  assetPrefs?: Map<string, 'hidden' | 'shown'>;
+}
+
+/**
+ * Airdropped spam names itself after a link to click: "SHIB - [ t.ly/uSHIB ]
+ * *Redeem within 7 days", "Visit claim-rewards.xyz". Real tokens don't.
+ */
+const SPAM_NAME =
+  /(https?:\/\/|www\.|\bt\.me\/|\b[a-z0-9-]+\.(com|io|org|net|xyz|site|online|app|live|gift|top|vip|pro|fun|cc|ly|to|link|click|claims?)\b|\b(claim|redeem|visit|voucher)\b)/i;
+
+export function looksLikeSpam(asset: Pick<LedgerAsset, 'name' | 'symbol'>): boolean {
+  return SPAM_NAME.test(`${asset.name ?? ''} ${asset.symbol ?? ''}`);
 }
 
 export interface TxPair {
@@ -478,8 +495,27 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     }
     return g;
   };
+  // Spam and anything you hid: left out of everything (gas you paid still counts).
+  const hiddenAssets: CashflowHiddenAsset[] = [];
+  const hiddenKeys = new Set<string>();
+  const seenAssets = new Set<string>();
+  for (const m of input.movements) {
+    const a = m.asset;
+    if (seenAssets.has(a.key) || a.price || a.kind === 'native') continue;
+    seenAssets.add(a.key);
+    const pref = input.assetPrefs?.get(a.key);
+    const reason = pref === 'hidden' ? 'hidden' : pref !== 'shown' && looksLikeSpam(a) ? 'spam' : null;
+    if (!reason) continue;
+    hiddenKeys.add(a.key);
+    hiddenAssets.push({ key: a.key, chain: a.chain, kind: a.kind === 'nft' ? 'nft' : 'fungible', name: a.name, symbol: a.symbol, reason });
+  }
   for (const m of input.movements) {
     if (!(m.amount > 0)) continue;
+    if (hiddenKeys.has(m.asset.key)) {
+      // Keep the tx (and its gas) — just not the hidden asset.
+      groupFor(m.chain, m.txHash, m.timestamp, m.wallet);
+      continue;
+    }
     groupFor(m.chain, m.txHash, m.timestamp, m.wallet).movements.push(m);
   }
   for (const f of input.fees) {
@@ -1504,6 +1540,8 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     contactLabels: [],
     txNotes: [],
     lostTxs: [],
+    hiddenAssets: hiddenAssets.sort((a, b) => a.name.localeCompare(b.name)),
+    shownAssets: [],
     fees: [...feesByChain.values()].sort((a, b) => b.feesUsd - a.feesUsd),
     ownWalletTransfers: ownTransfers,
     bridges,
@@ -1986,7 +2024,15 @@ export function matchLinkedTrades(
 
   // Relayer-delivered purchases on another chain.
   if (payees.size > 0) {
-    const deliveries = ordered.filter((g) => !g.fee && free(g) && unpaidAcquisition(g));
+    // Only NFTs: an unpaid token arriving with no gas is far more often an airdrop
+    // (or spam) than a Relay purchase — and Relay's own records pair real ones.
+    const deliveries = ordered.filter(
+      (g) =>
+        !g.fee &&
+        free(g) &&
+        unpaidAcquisition(g) &&
+        an(g).unIn.every((m) => m.asset.kind === 'nft'),
+    );
     for (const money of ordered) {
       if (!free(money) || !payment(money)) continue;
       const toRelayer = an(money).pricedOut.every((l) =>

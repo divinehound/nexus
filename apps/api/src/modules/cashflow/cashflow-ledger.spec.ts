@@ -1007,6 +1007,13 @@ describe('cross-chain purchases (paid on one chain, delivered on another)', () =
       ...opts,
     });
 
+  it("doesn't take a token airdropped on another chain for something Relay delivered", () => {
+    const POLY_TOKEN: LedgerAsset = { ...PEPE, key: 'polygon:0xshib', chain: 'polygon', contract: '0xshib', name: 'Shiba', symbol: 'SHIB' };
+    const r = buildWith([pay, mv('0xdrop', t(5), 'in', POLY_TOKEN, 8_000_000, '0xshib', { chain: 'polygon' })], [fee('0xeth', t(0), 0.0005)]);
+    expect(r.activity.find((a) => a.txHash === '0xdrop')!.type).toBe('received_asset');
+    expect(r.tokens.find((p) => p.symbol === 'SHIB')!.spentUsd).toBe(0);
+  });
+
   it('books ETH paid to Relay on Ethereum as the cost of the mint Relay delivered on Abstract', () => {
     const r = buildWith([pay, ...otterMint(1)], [fee('0xeth', t(0), 0.0005)]);
     const mint = r.activity.find((a) => a.chain === 'abstract')!;
@@ -1267,6 +1274,60 @@ describe('one payment for NFTs sent in several transactions', () => {
     const sales = r.activity.filter((a) => a.type === 'nft_sale');
     expect(sales.map((a) => a.inUsd)).toEqual([expect.closeTo(60), expect.closeTo(60)]);
     expect(r.totals.realizedPnlUsd).toBeCloseTo(120 - 40);
+  });
+});
+
+describe('spam and hidden tokens', () => {
+  const { looksLikeSpam } = jest.requireActual('./cashflow-ledger');
+  const SPAM: LedgerAsset = {
+    ...PEPE,
+    key: 'polygon:0xe1030883a69968a08263a7919656bfd6176a1f02',
+    chain: 'polygon',
+    contract: '0xe1030883a69968a08263a7919656bfd6176a1f02',
+    name: 'SHIB - [ t.ly/uSHIB ] *Redeem within 7 days',
+    symbol: 'SHIB',
+  };
+  const run = (prefs?: Map<string, 'hidden' | 'shown'>) =>
+    buildCashflowReport({
+      movements: [
+        mv('0xdrop', '2024-01-05T00:00:00Z', 'in', SPAM, 8_000_000, '0x9695acA3', { chain: 'polygon' }),
+        mv('0xb1', '2024-01-06T00:00:00Z', 'out', ETH, 1, MARKET),
+        mv('0xb1', '2024-01-06T00:00:00Z', 'in', DOGE, 50, MARKET),
+      ],
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      assetPrefs: prefs,
+    });
+
+  it('spots spam by a link or a call to action in its name', () => {
+    expect(looksLikeSpam(SPAM)).toBe(true);
+    expect(looksLikeSpam({ name: 'Visit claim-usdc.com for rewards', symbol: 'USDC' })).toBe(true);
+    expect(looksLikeSpam({ name: '$1000 voucher', symbol: 'VOUCHER' })).toBe(true);
+    for (const name of ['Shiba Inu', 'USD Coin', 'Wrapped Ether', 'Pudgy Penguins', 'POX', 'Lost Otters', 'Bonk', 'dogwifhat'])
+      expect(looksLikeSpam({ name, symbol: null })).toBe(false);
+  });
+
+  it('leaves spam out of everything and lists it as hidden', () => {
+    const r = run();
+    expect(r.tokens.map((t) => t.symbol)).toEqual(['DOGE']);
+    expect(r.activity.map((a) => a.txHash)).toEqual(['0xb1']);
+    expect(r.hiddenAssets).toEqual([expect.objectContaining({ key: SPAM.key, reason: 'spam', kind: 'fungible' })]);
+  });
+
+  it('keeps it if you say it is not spam, and hides anything you hide', () => {
+    expect(run(new Map([[SPAM.key, 'shown']])).tokens.map((t) => t.symbol).sort()).toEqual(['DOGE', 'SHIB']);
+    const r = run(new Map([[DOGE.key, 'hidden']]));
+    expect(r.tokens).toEqual([]);
+    expect(r.hiddenAssets.map((h) => [h.key, h.reason])).toEqual([
+      [DOGE.key, 'hidden'],
+      [SPAM.key, 'spam'],
+    ]);
+    // The ETH paid for the hidden DOGE still left the wallet — just not as a trade.
+    expect(r.totals.outUsd).toBeCloseTo(2000);
   });
 });
 

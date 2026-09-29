@@ -154,6 +154,18 @@ export class ContactLabelRemoveDto {
   ids!: string[];
 }
 
+export class AssetPrefDto {
+  /** `chain:contract` — the token's or collection's key in the report. */
+  @IsString()
+  @Length(10, 200)
+  @Matches(new RegExp(`^(${CHAINS.join('|')}):(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$`))
+  assetKey!: string;
+
+  @IsOptional()
+  @IsIn(['hidden', 'shown'])
+  pref!: 'hidden' | 'shown' | null;
+}
+
 export class LostDto {
   @IsIn(CHAINS)
   chain!: string;
@@ -315,6 +327,17 @@ export class CashflowController {
     @Query('chain') chain?: string,
   ): Promise<CashflowResponse> {
     return this.cashflowService.addAddressTag(req.user.sub, body, view(wallet, chain));
+  }
+
+  @Put('asset-prefs')
+  @ApiOperation({ summary: 'Hide a token/collection (spam), keep one the spam check hid, or clear (pref null)' })
+  setAssetPref(
+    @Req() req: AuthRequest,
+    @Body() body: AssetPrefDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.setAssetPref(req.user.sub, { assetKey: body.assetKey, pref: body.pref ?? null }, view(wallet, chain));
   }
 
   @Put('lost')

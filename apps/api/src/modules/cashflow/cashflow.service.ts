@@ -4,6 +4,7 @@ import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
   cashflowAddressTags,
+  cashflowAssetPrefs,
   cashflowContactLabels,
   cashflowFlags,
   cashflowLostTxs,
@@ -157,6 +158,12 @@ export interface TxNoteInput {
   chain: string;
   txHash: string;
   note: string;
+}
+
+export interface AssetPrefInput {
+  assetKey: string;
+  /** null clears your choice (back to the automatic spam check). */
+  pref: 'hidden' | 'shown' | null;
 }
 
 export interface LostInput {
@@ -589,6 +596,27 @@ export class CashflowService {
     return this.rebuild(userId, view);
   }
 
+  /** Hide a token/collection from the report (spam, dust), keep one the spam check hid, or undo. */
+  async setAssetPref(userId: string, input: AssetPrefInput, view: ReportView = {}): Promise<CashflowResponse> {
+    const [chain, ...rest] = input.assetKey.split(':');
+    const contract = rest.join(':');
+    const assetKey = `${chain}:${chain === 'solana' ? contract : contract.toLowerCase()}`;
+    if (input.pref) {
+      await this.db
+        .insert(cashflowAssetPrefs)
+        .values({ userId, assetKey, pref: input.pref })
+        .onConflictDoUpdate({
+          target: [cashflowAssetPrefs.userId, cashflowAssetPrefs.assetKey],
+          set: { pref: input.pref },
+        });
+    } else {
+      await this.db
+        .delete(cashflowAssetPrefs)
+        .where(and(eq(cashflowAssetPrefs.userId, userId), eq(cashflowAssetPrefs.assetKey, assetKey)));
+    }
+    return this.rebuild(userId, view);
+  }
+
   /** Mark what a transaction sent away as lost for good (a realized loss), or undo that. */
   async setLost(userId: string, input: LostInput, view: ReportView = {}): Promise<CashflowResponse> {
     const txHash = input.chain === 'solana' ? input.txHash : input.txHash.toLowerCase();
@@ -646,13 +674,14 @@ export class CashflowService {
 
   private async buildFromScan(userId: string, scan: ScanData, view: ReportView = {}): Promise<CashflowReport> {
     const { wallet, chain } = view;
-    const [linkRows, tagRows, flagRows, labelRows, noteRows, lostRows] = await Promise.all([
+    const [linkRows, tagRows, flagRows, labelRows, noteRows, lostRows, prefRows] = await Promise.all([
       this.db.select().from(cashflowTxLinks).where(eq(cashflowTxLinks.userId, userId)),
       this.db.select().from(cashflowAddressTags).where(eq(cashflowAddressTags.userId, userId)),
       this.db.select().from(cashflowFlags).where(eq(cashflowFlags.userId, userId)),
       this.db.select().from(cashflowContactLabels).where(eq(cashflowContactLabels.userId, userId)),
       this.db.select().from(cashflowTxNotes).where(eq(cashflowTxNotes.userId, userId)),
       this.db.select().from(cashflowLostTxs).where(eq(cashflowLostTxs.userId, userId)),
+      this.db.select().from(cashflowAssetPrefs).where(eq(cashflowAssetPrefs.userId, userId)),
     ]);
     const contactLabels: CashflowContactLabel[] = labelRows.map((r) => ({
       id: r.id,
@@ -731,6 +760,9 @@ export class CashflowService {
       addressContacts,
       txContacts,
       lostTxs: new Set(lostRows.map((r) => txKey(r.chain, r.txHash))),
+      assetPrefs: new Map(
+        prefRows.map((r) => [r.assetKey, r.pref === 'shown' ? ('shown' as const) : ('hidden' as const)]),
+      ),
       chainScope: chain ? (c) => c === chain : undefined,
       crossChainPayees: new Set(RELAY_PAYEES.map((p) => addressIdentity(p.chain, p.address))),
     });
@@ -755,6 +787,7 @@ export class CashflowService {
     report.links = links;
     report.addressTags = addressTags;
     report.contactLabels = contactLabels;
+    report.shownAssets = prefRows.filter((r) => r.pref === 'shown').map((r) => r.assetKey);
     report.lostTxs = lostRows.map((r) => ({ id: r.id, chain: r.chain, txHash: r.txHash }));
     report.txNotes = noteRows.map(
       (r): CashflowTxNote => ({

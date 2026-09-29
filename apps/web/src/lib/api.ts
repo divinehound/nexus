@@ -842,6 +842,19 @@ export function removeCashflowContactLabels(token: string, ids: string[], view: 
   });
 }
 
+/** Hide a token/collection (spam), keep one the spam check hid ('shown'), or clear (null). */
+export function setCashflowAssetPref(
+  token: string,
+  input: { assetKey: string; pref: 'hidden' | 'shown' | null },
+  view: CashflowView = {},
+) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/asset-prefs${cashflowQuery(view)}`, {
+    method: 'PUT',
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
 /** Mark what a transaction sent away as lost for good (booked as a realized loss), or undo. */
 export function setCashflowLost(
   token: string,

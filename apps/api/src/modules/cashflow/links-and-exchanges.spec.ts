@@ -3,7 +3,7 @@ import { validateSync } from 'class-validator';
 import { relayRequestToLink } from './relay-links.fetcher';
 import { sweepTarget } from './cashflow.service';
 import { EVM_EXCHANGE_WALLETS } from './exchange-wallets';
-import { AddressTagDto, ContactLabelBatchDto, ContactLabelRemoveDto, TxLinkDto } from './cashflow.controller';
+import { AddressTagDto, AssetPrefDto, ContactLabelBatchDto, ContactLabelRemoveDto, TxLinkDto } from './cashflow.controller';
 
 const coinbase = [...EVM_EXCHANGE_WALLETS].filter(([, name]) => name === 'Coinbase').map(([a]) => a);
 const binance = [...EVM_EXCHANGE_WALLETS].filter(([, name]) => name === 'Binance').map(([a]) => a);
@@ -63,6 +63,13 @@ describe('request validation', () => {
       ['kind', 'fromChain', 'fromTxHash'],
     );
     expect(errors(AddressTagDto, { chain: 'base', address: '0x123', exchange: '' })).toEqual(['address', 'exchange']);
+  });
+
+  it('accepts only real asset keys for hiding a token', () => {
+    expect(errors(AssetPrefDto, { assetKey: 'polygon:0xe1030883a69968a08263a7919656bfd6176a1f02', pref: 'hidden' })).toEqual([]);
+    expect(errors(AssetPrefDto, { assetKey: 'solana:DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', pref: null })).toEqual([]);
+    expect(errors(AssetPrefDto, { assetKey: 'bitcoin:0xe1030883a69968a08263a7919656bfd6176a1f02', pref: 'hidden' })).toEqual(['assetKey']);
+    expect(errors(AssetPrefDto, { assetKey: "polygon:0x'; drop table", pref: 'spam' })).toEqual(['assetKey', 'pref']);
   });
 
   it('checks every target when naming many transfers at once', () => {

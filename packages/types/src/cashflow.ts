@@ -253,6 +253,17 @@ export interface CashflowContactLabel {
   label: string;
 }
 
+/** A token or collection left out of the report: spam by its name, or hidden by you. */
+export interface CashflowHiddenAsset {
+  /** `chain:contract` (EVM lowercased; Solana mint or collection). */
+  key: string;
+  chain: string;
+  kind: 'nft' | 'fungible';
+  name: string;
+  symbol: string | null;
+  reason: 'spam' | 'hidden';
+}
+
 /** Your own note on a transaction. */
 export interface CashflowTxNote {
   id: string;
@@ -399,6 +410,10 @@ export interface CashflowReport {
   contacts: CashflowContact[];
   contactLabels: CashflowContactLabel[];
   txNotes: CashflowTxNote[];
+  /** Tokens/collections left out of the report (spam, or hidden by you). */
+  hiddenAssets: CashflowHiddenAsset[];
+  /** Keys you marked "not spam" (kept although the name looks like spam). */
+  shownAssets: string[];
   /** Transactions you marked as lost for good. */
   lostTxs: Array<{ id: string; chain: string; txHash: string }>;
   fees: CashflowChainFees[];

@@ -191,3 +191,22 @@ export const cashflowLostTxs = pgTable(
   },
   (table) => [uniqueIndex('cashflow_lost_txs_unique').on(table.userId, table.chain, table.txHash)],
 );
+
+/**
+ * The user's say on individual tokens/collections in the Money dashboard:
+ * 'hidden' leaves one out of everything (spam, dust), 'shown' keeps one the
+ * automatic spam check would hide. `assetKey` is `chain:contract` (EVM lowercased).
+ */
+export const cashflowAssetPrefs = pgTable(
+  'cashflow_asset_prefs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    assetKey: varchar('asset_key', { length: 300 }).notNull(),
+    pref: varchar('pref', { length: 8 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex('cashflow_asset_prefs_unique').on(table.userId, table.assetKey)],
+);

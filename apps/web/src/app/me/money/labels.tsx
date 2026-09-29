@@ -12,6 +12,7 @@ import {
   addCashflowContactLabels,
   removeCashflowContactLabel,
   removeCashflowContactLabels,
+  setCashflowAssetPref,
   setCashflowLost,
   setCashflowTxNote,
 } from '@/lib/api';
@@ -715,5 +716,93 @@ function TransferLine({
         </tr>
       )}
     </Fragment>
+  );
+}
+
+/** ⋯ on a token/collection row: hide it (spam, dust, not yours), or undo "not spam". */
+export function AssetMenu({ report, assetKey }: { report: CashflowReport; assetKey: string }) {
+  const { run } = useCashflowActions();
+  const keptAsNotSpam = report.shownAssets.includes(assetKey);
+  const items: MenuItem[] = [
+    {
+      label: 'Hide — spam or not mine',
+      title:
+        'Leave it out of P/L, spending and holdings. You can bring it back from the hidden list.',
+      onSelect: () =>
+        void run('Hidden — left out of the report', (tk, view) =>
+          setCashflowAssetPref(tk, { assetKey, pref: 'hidden' }, view),
+        ),
+    },
+    ...(keptAsNotSpam
+      ? [
+          {
+            label: 'Let the spam check decide again',
+            onSelect: () =>
+              void run('Back to the automatic spam check', (tk, view) =>
+                setCashflowAssetPref(tk, { assetKey, pref: null }, view),
+              ),
+          },
+        ]
+      : []),
+  ];
+  return <RowMenu items={items} label="Token actions" />;
+}
+
+/** Tokens/collections left out of the report, with a way to bring each back. */
+export function HiddenAssets({
+  report,
+  kind,
+}: {
+  report: CashflowReport;
+  kind: 'nft' | 'fungible';
+}) {
+  const { run, busy } = useCashflowActions();
+  const [open, setOpen] = useState(false);
+  const hidden = report.hiddenAssets.filter((h) => h.kind === kind);
+  if (hidden.length === 0) return null;
+  const spam = hidden.filter((h) => h.reason === 'spam').length;
+  return (
+    <div className="mt-3 text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="text-gray-400 hover:text-white"
+      >
+        {open ? '▾' : '▸'} {hidden.length} hidden
+        {spam > 0 ? ` (${spam} look${spam === 1 ? 's' : ''} like spam)` : ''}
+      </button>
+      {open && (
+        <ul className="mt-2 divide-y divide-gray-800/60 rounded-lg border border-gray-800 bg-gray-900/40 px-3">
+          {hidden.map((h) => (
+            <li key={h.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+              <span className="min-w-0 flex-1 truncate text-gray-300" title={h.name}>
+                {h.name}
+              </span>
+              <span className="text-gray-500">{CHAIN_LABELS[h.chain] ?? h.chain}</span>
+              <span className={h.reason === 'spam' ? 'text-amber-300/90' : 'text-gray-500'}>
+                {h.reason === 'spam' ? 'looks like spam (link in its name)' : 'hidden by you'}
+              </span>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void run(h.reason === 'spam' ? 'Kept — not spam' : 'Unhidden', (tk, view) =>
+                    setCashflowAssetPref(
+                      tk,
+                      { assetKey: h.key, pref: h.reason === 'spam' ? 'shown' : null },
+                      view,
+                    ),
+                  )
+                }
+                className="text-purple-300 hover:text-purple-200 disabled:opacity-50"
+              >
+                {h.reason === 'spam' ? 'Not spam' : 'Unhide'}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
