@@ -670,7 +670,8 @@ export function LinkPicker({
   const [range, setRange] = useState<keyof typeof LINK_RANGES>('week');
   const [query, setQuery] = useState('');
 
-  // Likely other halves in range: same person first, then closest in value, then in time.
+  // Likely other halves in range (same person first, then closest in value,
+  // then in time), listed by date.
   const candidates = useMemo(() => {
     // What the other half can be: money for assets and assets for money (a
     // trade — OTC or cross-chain), or money going the other way (a bridge).
@@ -687,42 +688,46 @@ export function LinkPicker({
     const t0 = new Date(source.timestamp).getTime();
     const value = moneyOf(source);
     const party = source.counterparty?.toLowerCase() ?? null;
-    return report.activity
-      .filter((b) => partnerTypes.includes(b.type) && b !== source)
-      .map((b) => ({
-        b,
-        dt: new Date(b.timestamp).getTime() - t0,
-        ratio: value > 0 ? moneyOf(b) / value : 0,
-        samePerson: !!party && b.counterparty?.toLowerCase() === party,
-      }))
-      .filter(({ b, dt }) => {
-        const span = LINK_RANGES[range].ms;
-        // Trades can come in either order; a bridge arrives after it leaves.
-        const inRange =
-          assetSource || b.type === 'received_asset' || b.type === 'sent_asset'
-            ? Math.abs(dt) < span
-            : sourceIsOut
-              ? dt > -10 * 60_000 && dt < span
-              : dt < 10 * 60_000 && dt > -span;
-        if (!inRange) return false;
-        const q = query.trim().toLowerCase();
-        return (
-          !q ||
-          b.label.toLowerCase().includes(q) ||
-          (b.counterparty ?? '').toLowerCase().includes(q) ||
-          (findContactLabel(report, 'address', b.chain, b.counterparty ?? '')?.label ?? '')
-            .toLowerCase()
-            .includes(q) ||
-          b.txHash.toLowerCase().includes(q)
-        );
-      })
-      .sort(
-        (x, y) =>
-          Number(y.samePerson) - Number(x.samePerson) ||
-          Math.abs(1 - x.ratio) - Math.abs(1 - y.ratio) ||
-          Math.abs(x.dt) - Math.abs(y.dt),
-      )
-      .slice(0, range === 'week' ? 8 : 25);
+    return (
+      report.activity
+        .filter((b) => partnerTypes.includes(b.type) && b !== source)
+        .map((b) => ({
+          b,
+          dt: new Date(b.timestamp).getTime() - t0,
+          ratio: value > 0 ? moneyOf(b) / value : 0,
+          samePerson: !!party && b.counterparty?.toLowerCase() === party,
+        }))
+        .filter(({ b, dt }) => {
+          const span = LINK_RANGES[range].ms;
+          // Trades can come in either order; a bridge arrives after it leaves.
+          const inRange =
+            assetSource || b.type === 'received_asset' || b.type === 'sent_asset'
+              ? Math.abs(dt) < span
+              : sourceIsOut
+                ? dt > -10 * 60_000 && dt < span
+                : dt < 10 * 60_000 && dt > -span;
+          if (!inRange) return false;
+          const q = query.trim().toLowerCase();
+          return (
+            !q ||
+            b.label.toLowerCase().includes(q) ||
+            (b.counterparty ?? '').toLowerCase().includes(q) ||
+            (findContactLabel(report, 'address', b.chain, b.counterparty ?? '')?.label ?? '')
+              .toLowerCase()
+              .includes(q) ||
+            b.txHash.toLowerCase().includes(q)
+          );
+        })
+        .sort(
+          (x, y) =>
+            Number(y.samePerson) - Number(x.samePerson) ||
+            Math.abs(1 - x.ratio) - Math.abs(1 - y.ratio) ||
+            Math.abs(x.dt) - Math.abs(y.dt),
+        )
+        .slice(0, range === 'week' ? 12 : 40)
+        // The likeliest ones make the list; they're shown in date order.
+        .sort((x, y) => x.dt - y.dt)
+    );
   }, [report, source, sourceIsOut, assetSource, range, query]);
 
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -827,11 +832,17 @@ export function LinkPicker({
                         label={`Open this transaction on ${explorerName(b.chain)}`}
                       />
                     )}
-                    <span
-                      className="shrink-0 text-xs tabular-nums text-gray-400"
-                      title={new Date(b.timestamp).toLocaleString()}
-                    >
-                      {usd(moneyOf(b))} · {formatGap(dt)}
+                    <span className="shrink-0 text-xs tabular-nums text-gray-400">
+                      {usd(moneyOf(b))} ·{' '}
+                      <span
+                        className="cursor-help underline decoration-dotted decoration-gray-600 underline-offset-2"
+                        title={new Date(b.timestamp).toLocaleString(undefined, {
+                          dateStyle: 'medium',
+                          timeStyle: 'medium',
+                        })}
+                      >
+                        {formatGap(dt)}
+                      </span>
                     </span>
                   </label>
                 </li>
