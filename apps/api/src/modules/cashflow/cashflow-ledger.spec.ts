@@ -1228,6 +1228,25 @@ describe('one payment for NFTs sent in several transactions', () => {
   });
 });
 
+describe('floating-point dust', () => {
+  it('sells a whole holding even when the amounts differ in the last float bits', () => {
+    // 66,290.994856638 bought; sold as 66,224.703861782 + 66.290994856 (not exactly equal in floats).
+    const r = build([
+      mv('0xb1', '2024-01-05T00:00:00Z', 'out', ETH, 1, MARKET),
+      mv('0xb1', '2024-01-05T00:00:00Z', 'in', PEPE, 66290.994856638, MARKET),
+      mv('0xs1', '2024-02-10T00:00:00Z', 'out', PEPE, 66224.703861782, MARKET),
+      mv('0xs1', '2024-02-10T00:00:00Z', 'out', PEPE, 66.290994856 + 1e-10, MARKET),
+      mv('0xs1', '2024-02-10T00:00:00Z', 'in', ETH, 1, MARKET),
+    ]);
+    const pepe = r.tokens.find((t) => t.symbol === 'PEPE')!;
+    expect(pepe.qtyHeld).toBe(0);
+    expect(pepe.openCostBasisUsd).toBe(0);
+    expect(pepe.qtySoldWithoutBasis).toBe(0);
+    expect(pepe.trades[0].qtyWithoutBasis ?? 0).toBe(0);
+    expect(pepe.realizedPnlUsd).toBeCloseTo(1000); // sold for $3000, cost $2000
+  });
+});
+
 describe('assets marked lost (e.g. a locked escrow)', () => {
   const ESCROW = '0xe5c0000000000000000000000000000000000009';
   const run = (lost: string[]) =>
