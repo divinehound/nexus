@@ -1,5 +1,6 @@
 import {
   buildCashflowReport,
+  type CarriedBasis,
   type LedgerAsset,
   type LedgerFee,
   type LedgerMovement,
@@ -1476,6 +1477,73 @@ describe('writing off something still held (a frozen NFT)', () => {
     expect(pepe.qtyHeld).toBe(0);
     expect(pepe.trades[0]).toMatchObject({ kind: 'lost', qty: 1000, pnlUsd: expect.closeTo(-500), txHash: '' });
     expect(r.collections.find((c) => c.key === PUNKS.key)!.realizedPnlUsd).toBe(0);
+  });
+});
+
+describe('one wallet in view', () => {
+  // Minted/bought in ME, moved to COLD, sold from COLD.
+  const movements = [
+    mv('0xb1', '2024-01-05T00:00:00Z', 'out', ETH, 1, MARKET),
+    mv('0xb1', '2024-01-05T00:00:00Z', 'in', PUNKS, 1, MARKET, { tokenId: '7' }),
+    mv('0xb2', '2024-01-06T00:00:00Z', 'out', ETH, 0.5, MARKET),
+    mv('0xb2', '2024-01-06T00:00:00Z', 'in', PEPE, 1000, MARKET),
+    mv('0xm1', '2024-01-10T00:00:00Z', 'out', PUNKS, 1, COLD, { tokenId: '7' }),
+    mv('0xm1', '2024-01-10T00:00:00Z', 'in', PUNKS, 1, ME, { tokenId: '7', wallet: COLD }),
+    mv('0xm2', '2024-01-11T00:00:00Z', 'out', PEPE, 400, COLD),
+    mv('0xm2', '2024-01-11T00:00:00Z', 'in', PEPE, 400, ME, { wallet: COLD }),
+    mv('0xs1', '2024-02-10T00:00:00Z', 'out', PUNKS, 1, MARKET, { tokenId: '7', wallet: COLD }),
+    mv('0xs1', '2024-02-10T00:00:00Z', 'in', ETH, 2, MARKET, { wallet: COLD }),
+  ];
+  const wallets = [
+    { chain: 'ethereum', address: ME },
+    { chain: 'ethereum', address: COLD },
+  ];
+  const base = { fees: [], wallets, pricer, coverage: [], notes: [], now: new Date('2024-03-01T00:00:00Z') };
+  const carried = new Map<string, CarriedBasis>();
+  const all = buildCashflowReport({ ...base, movements, recordOwnMoves: carried });
+  const only = (w: string) =>
+    buildCashflowReport({
+      ...base,
+      movements: movements.filter((m) => m.wallet === w),
+      focusWallet: w,
+      carriedBasis: carried,
+    });
+
+  it('sees the moves as internal with every wallet in view', () => {
+    const punks = all.collections.find((c) => c.key === PUNKS.key)!;
+    expect(punks.items).toHaveLength(1);
+    expect(punks.items[0]).toMatchObject({ acquiredVia: 'purchase', disposedVia: 'sale' });
+    expect(punks.realizedPnlUsd).toBeCloseTo(4000); // 2 ETH at $3000 − 1 ETH at $2000
+  });
+
+  it('shows what left for another wallet as moved, not still held', () => {
+    const r = only(ME);
+    const punks = r.collections.find((c) => c.key === PUNKS.key)!;
+    expect(punks.qtyHeld).toBe(0);
+    expect(punks.realizedPnlUsd).toBe(0);
+    expect(punks.items[0]).toMatchObject({ disposedVia: 'moved', movedTo: COLD, realizedPnlUsd: null });
+    const pepe = r.tokens.find((t) => t.symbol === 'PEPE')!;
+    expect(pepe.qtyHeld).toBeCloseTo(600);
+    expect(pepe.openCostBasisUsd).toBeCloseTo(600); // $1000 for 1000, 400 moved away
+    expect(pepe.trades[0]).toMatchObject({ kind: 'moved_out', qty: 400, costBasisUsd: expect.closeTo(400) });
+  });
+
+  it('carries the cost basis into the wallet it moved to', () => {
+    const r = only(COLD);
+    const punks = r.collections.find((c) => c.key === PUNKS.key)!;
+    expect(punks.items[0]).toMatchObject({
+      acquiredVia: 'moved',
+      movedFrom: ME,
+      costUsd: expect.closeTo(2000),
+      disposedVia: 'sale',
+      realizedPnlUsd: expect.closeTo(4000),
+    });
+    expect(punks.realizedPnlUsd).toBeCloseTo(4000);
+    const pepe = r.tokens.find((t) => t.symbol === 'PEPE')!;
+    expect(pepe.qtyHeld).toBeCloseTo(400);
+    expect(pepe.openCostBasisUsd).toBeCloseTo(400);
+    // Neither side counts the move as money in or out.
+    expect(r.totals.outUsd).toBe(0);
   });
 });
 

@@ -23,6 +23,8 @@ const KIND_LABELS: Record<CashflowTokenTradeKind, string> = {
   swap_in: 'Swapped in',
   swap_out: 'Swapped out',
   lost: 'Lost for good',
+  moved_in: 'From your wallet',
+  moved_out: 'To your wallet',
 };
 const KIND_CLASS: Partial<Record<CashflowTokenTradeKind, string>> = {
   buy: 'text-orange-300',
@@ -39,7 +41,12 @@ const FILTERS: Array<{ id: Filter; label: string; match: (t: CashflowTokenTrade)
     id: 'other',
     label: 'Transfers',
     match: (t) =>
-      t.kind === 'received' || t.kind === 'sent' || t.kind === 'burned' || t.kind === 'lost',
+      t.kind === 'received' ||
+      t.kind === 'sent' ||
+      t.kind === 'burned' ||
+      t.kind === 'lost' ||
+      t.kind === 'moved_in' ||
+      t.kind === 'moved_out',
   },
 ];
 const PAGE = 50;
@@ -152,7 +159,9 @@ export function TokenTradesTable({
                 t.kind === 'received' ||
                 t.kind === 'sent' ||
                 t.kind === 'burned' ||
-                t.kind === 'lost';
+                t.kind === 'lost' ||
+                t.kind === 'moved_in' ||
+                t.kind === 'moved_out';
               const noBasis = (t.qtyWithoutBasis ?? 0) > 0;
               return (
                 <Fragment key={`${t.txHash}:${t.kind}:${i}`}>
