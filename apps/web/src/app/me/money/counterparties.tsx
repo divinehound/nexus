@@ -16,7 +16,6 @@ import { CHAIN_LABELS, addressExplorerUrl, explorerName, pnlClass, usd, usdSigne
 import {
   ContactChip,
   ContactNameEditor,
-  BulkNameBar,
   ContactNameOptions,
   RowMenu,
   TransfersTable,
@@ -40,17 +39,6 @@ export function CounterpartiesTable({ report }: { report: CashflowReport }) {
   const cashedOut = report.exchanges.reduce((s, e) => s + e.depositedUsd, 0);
   const deposited = report.exchanges.reduce((s, e) => s + e.withdrawnUsd, 0);
   const [openExchange, setOpenExchange] = useState<string | null>(null);
-  // Addresses selected to name together (not exchanges' shared public wallets).
-  const [selectedAddrs, setSelectedAddrs] = useState<Set<string>>(new Set());
-  const nameable = report.counterparties.filter(isNameable).map((c) => `${c.chain}:${c.address}`);
-  const allNameable = nameable.length > 0 && nameable.every((k) => selectedAddrs.has(k));
-  const toggleAddr = (key: string) =>
-    setSelectedAddrs((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
   const allTransfers = useMemo<TransferRow[]>(
     () =>
       report.counterparties.flatMap((c) => c.transfers.map((t) => ({ ...t, address: c.address }))),
@@ -148,29 +136,10 @@ export function CounterpartiesTable({ report }: { report: CashflowReport }) {
           the bridge kept count as fees
           {report.bridges.feesUsd > 0 ? ` (${usd(report.bridges.feesUsd)} in bridge fees)` : ''}.
         </p>
-        {selectedAddrs.size > 0 && (
-          <BulkNameBar
-            targets={report.counterparties
-              .filter((c) => selectedAddrs.has(`${c.chain}:${c.address}`))
-              .map((c) => ({ kind: 'address' as const, chain: c.chain, ref: c.address }))}
-            report={report}
-            onDone={() => setSelectedAddrs(new Set())}
-          />
-        )}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-left text-xs text-gray-500">
               <tr>
-                <th className="w-6 py-2 pr-2">
-                  <input
-                    type="checkbox"
-                    checked={allNameable}
-                    disabled={nameable.length === 0}
-                    onChange={() => setSelectedAddrs(allNameable ? new Set() : new Set(nameable))}
-                    aria-label={allNameable ? 'Unselect all' : 'Select all to name them together'}
-                    title={allNameable ? 'Unselect all' : 'Select all to name them together'}
-                  />
-                </th>
                 <th className="py-2 pr-4 font-medium">Address</th>
                 <th className="py-2 pr-4 text-right font-medium">Sent to</th>
                 <th className="py-2 pr-4 text-right font-medium">Received from</th>
@@ -180,17 +149,11 @@ export function CounterpartiesTable({ report }: { report: CashflowReport }) {
             </thead>
             <tbody className="divide-y divide-gray-800/70">
               {report.counterparties.map((c) => (
-                <CounterpartyRow
-                  key={`${c.chain}:${c.address}`}
-                  c={c}
-                  report={report}
-                  selected={selectedAddrs.has(`${c.chain}:${c.address}`)}
-                  onToggle={() => toggleAddr(`${c.chain}:${c.address}`)}
-                />
+                <CounterpartyRow key={`${c.chain}:${c.address}`} c={c} report={report} />
               ))}
               {report.counterparties.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-6 text-center text-gray-500">
+                  <td colSpan={5} className="py-6 text-center text-gray-500">
                     No transfers to or from other wallets.
                   </td>
                 </tr>
@@ -207,17 +170,7 @@ export function CounterpartiesTable({ report }: { report: CashflowReport }) {
 const isNameable = (c: CashflowCounterparty) =>
   c.address !== 'unknown' && c.exchangeSource !== 'known';
 
-function CounterpartyRow({
-  c,
-  report,
-  selected,
-  onToggle,
-}: {
-  c: CashflowCounterparty;
-  report: CashflowReport;
-  selected: boolean;
-  onToggle: () => void;
-}) {
+function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: CashflowReport }) {
   const { run, busy } = useCashflowActions();
   const [editing, setEditing] = useState<'name' | 'tag' | null>(null);
   const [exchange, setExchange] = useState(report.exchangeNames[0] ?? 'Coinbase');
@@ -301,17 +254,7 @@ function CounterpartyRow({
 
   return (
     <Fragment>
-      <tr className={cn('align-top', selected && 'bg-purple-500/5')}>
-        <td className="py-2 pr-2">
-          {personal && (
-            <input
-              type="checkbox"
-              checked={selected}
-              onChange={onToggle}
-              aria-label="Select this address"
-            />
-          )}
-        </td>
+      <tr className="align-top">
         <td className="py-2 pr-4">
           <ExpandableName
             open={open}
@@ -413,7 +356,7 @@ function CounterpartyRow({
       </tr>
       {open && (
         <tr>
-          <td colSpan={6} className="pb-3">
+          <td colSpan={5} className="pb-3">
             <TransfersTable
               rows={c.transfers.map((t) => ({ ...t, address: c.address }))}
               report={report}
