@@ -12,7 +12,7 @@ import type {
 import { LinkPicker } from './activity-list';
 import { cn } from '@/lib/utils';
 import { explorerName, nativeAmount, pnlClass, txExplorerUrl, usd, usdSigned } from './format';
-import { LostMenu } from './labels';
+import { LostMenu, RowMenu, useWriteOff } from './labels';
 import { Dual } from './ui';
 
 const ACQUIRED_LABELS: Record<CashflowNftAcquiredVia, string> = {
@@ -377,9 +377,17 @@ export function NftItemsTable({
                                 txHash={i.disposeTxHash}
                               />
                             )}
+                          {report && !i.disposeTxHash && i.disposedVia === 'lost' && (
+                            <WriteOffMenu report={report} position={position} tokenId={i.tokenId} />
+                          )}
                         </span>
                       ) : (
-                        <span className="text-gray-500">Still held</span>
+                        <span className="inline-flex items-center gap-1 text-gray-500">
+                          Still held
+                          {report && (
+                            <WriteOffMenu report={report} position={position} tokenId={i.tokenId} />
+                          )}
+                        </span>
                       )}
                     </td>
                     <td className="py-1.5 pr-3 text-right tabular-nums text-gray-300">
@@ -474,5 +482,24 @@ export function NftItemsTable({
         </button>
       )}
     </div>
+  );
+}
+
+/** ⋯ on a held NFT (or on one already written off): mark it lost for good, or undo. */
+function WriteOffMenu({
+  report,
+  position,
+  tokenId,
+}: {
+  report: CashflowReport;
+  position: CashflowPosition;
+  tokenId: string;
+}) {
+  const writeOff = useWriteOff(report);
+  return (
+    <RowMenu
+      items={[writeOff(position.key, tokenId, `${position.name} #${tokenId}`)]}
+      label="NFT actions"
+    />
   );
 }

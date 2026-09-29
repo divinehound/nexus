@@ -12,6 +12,7 @@ import {
   cashflowScans,
   cashflowTxLinks,
   cashflowTxNotes,
+  cashflowWriteOffs,
   cashflowWalletChains,
   chainEnum,
   collections,
@@ -167,6 +168,13 @@ export interface AssetPrefInput {
   assetKey: string;
   /** null clears your choice (back to the automatic spam check). */
   pref: 'hidden' | 'shown' | null;
+}
+
+export interface WriteOffInput {
+  assetKey: string;
+  /** One NFT; omit for everything held of a token. */
+  tokenId?: string;
+  lost: boolean;
 }
 
 export interface LostInput {
@@ -707,6 +715,28 @@ export class CashflowService {
     return keys;
   }
 
+  /** Write off something still held as lost for good (a frozen NFT), or undo. */
+  async setWriteOff(userId: string, input: WriteOffInput, view: ReportView = {}): Promise<CashflowResponse> {
+    const [chain, ...rest] = input.assetKey.split(':');
+    const contract = rest.join(':');
+    const assetKey = `${chain}:${chain === 'solana' ? contract : contract.toLowerCase()}`;
+    const tokenId = input.tokenId ?? '';
+    if (input.lost) {
+      await this.db.insert(cashflowWriteOffs).values({ userId, assetKey, tokenId }).onConflictDoNothing();
+    } else {
+      await this.db
+        .delete(cashflowWriteOffs)
+        .where(
+          and(
+            eq(cashflowWriteOffs.userId, userId),
+            eq(cashflowWriteOffs.assetKey, assetKey),
+            eq(cashflowWriteOffs.tokenId, tokenId),
+          ),
+        );
+    }
+    return this.rebuild(userId, view);
+  }
+
   /** Mark what a transaction sent away as lost for good (a realized loss), or undo that. */
   async setLost(userId: string, input: LostInput, view: ReportView = {}): Promise<CashflowResponse> {
     const txHash = input.chain === 'solana' ? input.txHash : input.txHash.toLowerCase();
@@ -764,7 +794,7 @@ export class CashflowService {
 
   private async buildFromScan(userId: string, scan: ScanData, view: ReportView = {}): Promise<CashflowReport> {
     const { wallet, chain } = view;
-    const [linkRows, tagRows, flagRows, labelRows, noteRows, lostRows, prefRows] = await Promise.all([
+    const [linkRows, tagRows, flagRows, labelRows, noteRows, lostRows, prefRows, writeOffRows] = await Promise.all([
       this.db.select().from(cashflowTxLinks).where(eq(cashflowTxLinks.userId, userId)),
       this.db.select().from(cashflowAddressTags).where(eq(cashflowAddressTags.userId, userId)),
       this.db.select().from(cashflowFlags).where(eq(cashflowFlags.userId, userId)),
@@ -772,6 +802,7 @@ export class CashflowService {
       this.db.select().from(cashflowTxNotes).where(eq(cashflowTxNotes.userId, userId)),
       this.db.select().from(cashflowLostTxs).where(eq(cashflowLostTxs.userId, userId)),
       this.db.select().from(cashflowAssetPrefs).where(eq(cashflowAssetPrefs.userId, userId)),
+      this.db.select().from(cashflowWriteOffs).where(eq(cashflowWriteOffs.userId, userId)),
     ]);
     const contactLabels: CashflowContactLabel[] = labelRows.map((r) => ({
       id: r.id,
@@ -852,6 +883,7 @@ export class CashflowService {
       txContacts,
       lostTxs: new Set(lostRows.map((r) => txKey(r.chain, r.txHash))),
       platformSpam,
+      writeOffs: writeOffRows.map((r) => ({ assetKey: r.assetKey, tokenId: r.tokenId || null, at: r.lostAt })),
       assetPrefs: new Map(
         prefRows.map((r) => [r.assetKey, r.pref === 'shown' ? ('shown' as const) : ('hidden' as const)]),
       ),
@@ -879,6 +911,12 @@ export class CashflowService {
     report.links = links;
     report.addressTags = addressTags;
     report.contactLabels = contactLabels;
+    report.writeOffs = writeOffRows.map((r) => ({
+      id: r.id,
+      assetKey: r.assetKey,
+      tokenId: r.tokenId,
+      lostAt: r.lostAt.toISOString(),
+    }));
     report.shownAssets = prefRows.filter((r) => r.pref === 'shown').map((r) => r.assetKey);
     report.lostTxs = lostRows.map((r) => ({ id: r.id, chain: r.chain, txHash: r.txHash }));
     report.txNotes = noteRows.map(

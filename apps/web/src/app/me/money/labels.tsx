@@ -15,6 +15,7 @@ import {
   setCashflowAssetPref,
   setCashflowLost,
   setCashflowTxNote,
+  setCashflowWriteOff,
 } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { useCashflowActions } from './actions';
@@ -719,11 +720,71 @@ function TransferLine({
   );
 }
 
-/** ⋯ on a token/collection row: hide it (spam, dust, not yours), or undo "not spam". */
-export function AssetMenu({ report, assetKey }: { report: CashflowReport; assetKey: string }) {
+/**
+ * Write off something still in the wallet as lost for good (a frozen NFT, a
+ * token that can't be moved or sold): its cost becomes a realized loss.
+ */
+export function useWriteOff(report: CashflowReport) {
   const { run } = useCashflowActions();
+  const isWrittenOff = (assetKey: string, tokenId: string | null) =>
+    report.writeOffs.some((w) => w.assetKey === assetKey && w.tokenId === (tokenId ?? ''));
+  return (assetKey: string, tokenId: string | null, what: string): MenuItem =>
+    isWrittenOff(assetKey, tokenId)
+      ? {
+          label: 'Not lost (undo write-off)',
+          onSelect: () =>
+            void run('Write-off undone', (tk, view) =>
+              setCashflowWriteOff(
+                tk,
+                { assetKey, tokenId: tokenId ?? undefined, lost: false },
+                view,
+              ),
+            ),
+        }
+      : {
+          label: tokenId ? 'Mark as lost for good…' : 'Write off what’s still held…',
+          title:
+            'Still in your wallet but gone for good (frozen, can’t be moved or sold): its cost is booked as a realized loss today. You can undo this.',
+          onSelect: () => {
+            if (
+              window.confirm(
+                `Write off ${what} as lost for good? Its cost will count as a realized loss today. You can undo this.`,
+              )
+            )
+              void run('Written off — its cost now counts as a realized loss', (tk, view) =>
+                setCashflowWriteOff(
+                  tk,
+                  { assetKey, tokenId: tokenId ?? undefined, lost: true },
+                  view,
+                ),
+              );
+          },
+        };
+}
+
+/** ⋯ on a token/collection row: hide it (spam, dust, not yours), write off a token, or undo "not spam". */
+export function AssetMenu({
+  report,
+  assetKey,
+  kind,
+  qtyHeld,
+  name,
+}: {
+  report: CashflowReport;
+  assetKey: string;
+  kind: 'nft' | 'fungible';
+  qtyHeld: number;
+  name: string;
+}) {
+  const { run } = useCashflowActions();
+  const writeOff = useWriteOff(report);
   const keptAsNotSpam = report.shownAssets.includes(assetKey);
+  const writtenOff = report.writeOffs.some((w) => w.assetKey === assetKey && w.tokenId === '');
   const items: MenuItem[] = [
+    // NFTs are written off one by one, in the expanded item list.
+    ...(kind === 'fungible' && (qtyHeld > 0 || writtenOff)
+      ? [writeOff(assetKey, null, `the ${name} you still hold`)]
+      : []),
     {
       label: 'Hide — spam or not mine',
       title:

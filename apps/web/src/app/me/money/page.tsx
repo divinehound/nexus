@@ -885,7 +885,13 @@ function PositionsTable({
                             </span>
                           </button>
                           <ContractLink chain={r.chain} contract={r.contract} />
-                          <AssetMenu report={report} assetKey={r.key} />
+                          <AssetMenu
+                            report={report}
+                            assetKey={r.key}
+                            kind={r.kind === 'nft' ? 'nft' : 'fungible'}
+                            qtyHeld={r.qtyHeld}
+                            name={r.symbol ?? r.name}
+                          />
                         </div>
                         <button
                           type="button"
@@ -908,7 +914,13 @@ function PositionsTable({
                         <div className="flex items-center gap-1.5">
                           <span className="font-medium text-gray-200">{r.name}</span>
                           <ContractLink chain={r.chain} contract={r.contract} />
-                          <AssetMenu report={report} assetKey={r.key} />
+                          <AssetMenu
+                            report={report}
+                            assetKey={r.key}
+                            kind={r.kind === 'nft' ? 'nft' : 'fungible'}
+                            qtyHeld={r.qtyHeld}
+                            name={r.symbol ?? r.name}
+                          />
                         </div>
                         <div className="text-xs text-gray-500">
                           {CHAIN_LABELS[r.chain] ?? r.chain}

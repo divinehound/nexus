@@ -145,6 +145,12 @@ export interface BuildReportInput {
   assetPrefs?: Map<string, 'hidden' | 'shown'>;
   /** Asset keys of collections NEXUS has flagged as spam (and not allowlisted). */
   platformSpam?: Set<string>;
+  /**
+   * Still held but gone for good (a frozen NFT, a token that can't be moved):
+   * what's held of it (one NFT, or all of a token when tokenId is null) is
+   * written off at `at`, its cost booked as a realized loss.
+   */
+  writeOffs?: Array<{ assetKey: string; tokenId: string | null; at: Date }>;
 }
 
 /**
@@ -267,6 +273,11 @@ class Position {
   touch(at: Date) {
     if (at < this.firstAt) this.firstAt = at;
     if (at > this.lastAt) this.lastAt = at;
+  }
+
+  /** How much is held of one NFT (or of the token, tokenId null). */
+  heldOf(tokenId: string | null): number {
+    return this.lots.get(this.lotKey(tokenId))?.qty ?? 0;
   }
 
   lotKey(tokenId: string | null): string {
@@ -1466,6 +1477,46 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     });
   }
 
+  // ── Written off: still in the wallet, but gone for good ──
+  for (const w of input.writeOffs ?? []) {
+    const p = positions.get(w.assetKey);
+    if (!p) continue;
+    const qty = p.heldOf(w.tokenId);
+    if (qty <= EPSILON) continue;
+    const at = w.at;
+    p.touch(at);
+    // The month chart runs to the last event, which this may now be.
+    if (!lastAt || at > lastAt) lastAt = at;
+    const d = p.dispose(qty, w.tokenId);
+    const usdOk = d.usdMissing === 0;
+    bookSplit(p, usdOk ? -d.basis : null, -d.basisNative, nativeRate(p.asset.chain, at));
+    p.realizedPnlAfterGasNative += -d.basisNative - d.gasNative;
+    if (usdOk) {
+      p.realizedPnlUsd -= d.basis;
+      p.realizedPnlAfterGasUsd += -d.basis - d.gas;
+      bookRealized(at, -d.basis, -d.basis - d.gas);
+    } else {
+      p.usdPriceMissing++;
+    }
+    p.trade({
+      txHash: '',
+      at: at.toISOString(),
+      kind: 'lost',
+      qty,
+      usd: 0,
+      native: 0,
+      costBasisUsd: usdOk ? d.basis : null,
+      pnlUsd: usdOk ? -d.basis : null,
+      pnlNative: -d.basisNative,
+      gasUsd: 0,
+      qtyWithoutBasis: d.missing,
+    });
+    for (const t of p.closeTrips(w.tokenId, qty, at, 'lost', '')) {
+      t.proceedsUsd = 0;
+      t.proceedsNative = 0;
+    }
+  }
+
   // ── Positions → collections / tokens ──
   const collections: CashflowPosition[] = [];
   const tokens: CashflowPosition[] = [];
@@ -1576,6 +1627,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     contactLabels: [],
     txNotes: [],
     lostTxs: [],
+    writeOffs: [],
     hiddenAssets: hiddenAssets.sort((a, b) => a.name.localeCompare(b.name)),
     linkIssues,
     shownAssets: [],
@@ -2178,7 +2230,8 @@ const chainName = (chain: string) => CHAIN_NAMES[chain] ?? chain;
 const MAX_ITEMS_PER_COLLECTION = 1000;
 
 function toNftItem(t: NftTrip): CashflowNftItem {
-  const sold = t.disposedVia === 'sale';
+  // A sale, or something lost for good (proceeds 0): either way the result is realized.
+  const sold = t.disposedVia === 'sale' || t.disposedVia === 'lost';
   const realized =
     sold && t.proceedsUsd !== null && !t.usdMissing ? t.proceedsUsd - t.costUsd : null;
   const pnlNative = sold && t.proceedsNative !== null ? t.proceedsNative - t.costNative : null;
