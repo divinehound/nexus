@@ -158,6 +158,7 @@ export function NftItemsTable({
       worst: ranked.length > 1 ? ranked[ranked.length - 1] : null,
       avgHold: holds.length ? holds.reduce((a, b) => a + b, 0) / holds.length : null,
       held: items.filter((i) => i.disposedAt === null).length,
+      lost: items.filter((i) => i.disposedVia === 'lost').length,
     };
   }, [items]);
 
@@ -233,6 +234,11 @@ export function NftItemsTable({
         <span>
           <span className="text-gray-200">{summary.held}</span> still held
         </span>
+        {summary.lost > 0 && (
+          <span>
+            <span className="text-red-300">{summary.lost}</span> lost for good
+          </span>
+        )}
       </div>
 
       <div className="mb-2 flex flex-wrap items-center gap-2">
