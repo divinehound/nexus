@@ -2044,10 +2044,11 @@ export function matchLinkedTrades(
     const gets = sorted.filter(receipt);
     const acq = sorted.filter(unpaidAcquisition);
     const disp = sorted.filter(unpaidDisposal);
-    if (pays.length + acq.length === sorted.length && pays.length > 0 && acq.length > 0)
-      pairGroup(pays, acq, 'purchase', source);
-    else if (gets.length + disp.length === sorted.length && gets.length > 0 && disp.length > 0)
-      pairGroup(gets, disp, 'sale', source);
+    // A tx that doesn't fit (e.g. an earlier, wrong guess linked to the same
+    // airdrop) is left out rather than sinking the whole group; its link is
+    // reported as not applied.
+    if (pays.length > 0 && acq.length > 0) pairGroup(pays, acq, 'purchase', source);
+    else if (gets.length > 0 && disp.length > 0) pairGroup(gets, disp, 'sale', source);
   }
 
   const rejectedKeys = new Set(

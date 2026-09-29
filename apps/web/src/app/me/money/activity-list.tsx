@@ -12,7 +12,7 @@ import type {
   CashflowResponse,
   CashflowTxType,
 } from '@nexus/types';
-import { addCashflowLink, removeCashflowContactLabel } from '@/lib/api';
+import { addCashflowLink, removeCashflowContactLabel, removeCashflowLink } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { useCashflowActions } from './actions';
 import { ExplorerIcon } from './ui';
@@ -663,6 +663,76 @@ export function linkIssueMessage(i: CashflowLinkIssue): string {
   return `Saved, but not applied: that pairs ${SHAPES[i.fromKind ?? 'nothing']} with ${SHAPES[i.toKind ?? 'nothing']}. A link needs a payment and what it paid for (something arriving with no payment), or something sent and the money received for it.`;
 }
 
+const sameTx = (chain: string, hash: string, c2: string, h2: string) =>
+  chain === c2 && (chain === 'solana' ? hash === h2 : hash.toLowerCase() === h2.toLowerCase());
+
+/**
+ * Every link you've saved on this transaction — applied or not — so a wrong
+ * guess can be removed even when it never showed up anywhere.
+ */
+function SavedLinks({ source, report }: { source: CashflowActivity; report: CashflowReport }) {
+  const { run, busy } = useCashflowActions();
+  const saved = report.links.filter(
+    (l) =>
+      l.kind === 'link' &&
+      (sameTx(l.fromChain, l.fromTxHash, source.chain, source.txHash) ||
+        sameTx(l.toChain, l.toTxHash, source.chain, source.txHash)),
+  );
+  if (saved.length === 0) return null;
+  return (
+    <div className="mb-3 rounded-md border border-gray-800 px-2 py-1.5 text-xs">
+      <div className="mb-1 text-gray-400">Links you've saved on this transaction</div>
+      <ul className="space-y-1">
+        {saved.map((l) => {
+          const fromSide = sameTx(l.fromChain, l.fromTxHash, source.chain, source.txHash);
+          const chain = fromSide ? l.toChain : l.fromChain;
+          const hash = fromSide ? l.toTxHash : l.fromTxHash;
+          const other = report.activity.find((a) => sameTx(a.chain, a.txHash, chain, hash));
+          const issue = report.linkIssues.find(
+            (i) =>
+              sameTx(i.fromChain, i.fromTxHash, l.fromChain, l.fromTxHash) &&
+              sameTx(i.toChain, i.toTxHash, l.toChain, l.toTxHash),
+          );
+          const url = txExplorerUrl(chain, hash);
+          return (
+            <li key={l.id} className="flex flex-wrap items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-gray-200">
+                <span className="text-gray-500">{CHAIN_LABELS[chain] ?? chain} · </span>
+                {other ? (
+                  other.label
+                ) : (
+                  <span className="font-mono">{truncateAddress(hash, 8)}</span>
+                )}
+                {other && <PartyNote a={other} report={report} />}
+              </span>
+              {url && (
+                <ExplorerIcon url={url} label={`Open this transaction on ${explorerName(chain)}`} />
+              )}
+              {issue ? (
+                <span className="cursor-help text-amber-300/90" title={linkIssueMessage(issue)}>
+                  not applied
+                </span>
+              ) : (
+                <span className="text-emerald-300/90">applied</span>
+              )}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void run('Link removed', (tk, view) => removeCashflowLink(tk, l.id, view))
+                }
+                className="text-red-300 hover:text-red-200 disabled:opacity-50"
+              >
+                Remove
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 /** Transfers smaller than this are hidden from the candidates unless asked for (dust, spam, rent). */
 const SMALL_USD = 5;
 
@@ -830,6 +900,7 @@ export function LinkPicker({
               ? 'Where did this money arrive — or what did it pay for (OTC deal, cross-chain mint)?'
               : 'Where did this money come from — or what did you sell for it?'}
       </div>
+      <SavedLinks source={source} report={report} />
       <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
         <label className="text-gray-500" htmlFor={`link-range-${source.txHash}`}>
           Look
