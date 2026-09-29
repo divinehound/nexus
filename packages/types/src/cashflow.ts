@@ -132,7 +132,9 @@ export type CashflowTokenTradeKind =
   | 'sent'
   | 'burned'
   | 'swap_in'
-  | 'swap_out';
+  | 'swap_out'
+  /** Sent away and gone for good (marked lost): its cost is a realized loss. */
+  | 'lost';
 
 /** One buy, sale or move of a fungible token. */
 export interface CashflowTokenTrade {
@@ -160,7 +162,7 @@ export interface CashflowTokenTrade {
 }
 
 export type CashflowNftAcquiredVia = 'purchase' | 'mint' | 'free_mint' | 'received' | 'swap' | 'unknown';
-export type CashflowNftDisposedVia = 'sale' | 'sent' | 'burned' | 'swap';
+export type CashflowNftDisposedVia = 'sale' | 'sent' | 'burned' | 'swap' | 'lost';
 
 export interface CashflowNftItem {
   tokenId: string;
@@ -302,6 +304,8 @@ export interface CashflowActivity {
   /** Every tx on the other side of a trade when there's more than one (linkedTo is the first). */
   linkedTxs?: Array<{ chain: string; txHash: string }>;
   linkSource: CashflowLinkSource | null;
+  /** You marked what this sent away as lost for good; its cost is a realized loss. */
+  lost?: boolean;
   /** Whether this row is where the money left ('out') or arrived ('in'). */
   linkSide: 'out' | 'in' | null;
   legs: CashflowActivityLeg[];
@@ -395,6 +399,8 @@ export interface CashflowReport {
   contacts: CashflowContact[];
   contactLabels: CashflowContactLabel[];
   txNotes: CashflowTxNote[];
+  /** Transactions you marked as lost for good. */
+  lostTxs: Array<{ id: string; chain: string; txHash: string }>;
   fees: CashflowChainFees[];
   /** Same-chain moves between linked wallets — excluded from in/out. */
   ownWalletTransfers: { count: number; usd: number };

@@ -12,6 +12,7 @@ import {
   addCashflowContactLabels,
   removeCashflowContactLabel,
   removeCashflowContactLabels,
+  setCashflowLost,
   setCashflowTxNote,
 } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
@@ -156,6 +157,60 @@ export function RowMenu({ items, label = 'Actions' }: { items: MenuItem[]; label
       )}
     </>
   );
+}
+
+/** Whether you marked what this transaction sent away as lost for good. */
+export function isLostTx(report: CashflowReport, chain: string, txHash: string): boolean {
+  const key = flagKey(chain, txHash);
+  return report.lostTxs.some((l) => flagKey(l.chain, l.txHash) === key);
+}
+
+/**
+ * The "Mark as lost" / "Not lost" menu item for a transaction that sent
+ * assets away — e.g. into an escrow that got locked for good.
+ */
+export function useLostMenuItem(report: CashflowReport) {
+  const { run } = useCashflowActions();
+  return (chain: string, txHash: string): MenuItem => {
+    const lost = isLostTx(report, chain, txHash);
+    return lost
+      ? {
+          label: 'Not lost (undo)',
+          onSelect: () =>
+            void run('No longer marked lost', (tk, view) =>
+              setCashflowLost(tk, { chain, txHash, lost: false }, view),
+            ),
+        }
+      : {
+          label: 'Mark as lost for good…',
+          title:
+            "What this sent away can't be recovered (e.g. stuck in a locked escrow): its cost is booked as a realized loss.",
+          onSelect: () => {
+            if (
+              window.confirm(
+                'Mark what this transaction sent away as lost for good? Its cost will count as a realized loss. You can undo this.',
+              )
+            )
+              void run('Marked lost — its cost now counts as a realized loss', (tk, view) =>
+                setCashflowLost(tk, { chain, txHash, lost: true }, view),
+              );
+          },
+        };
+  };
+}
+
+/** A ⋯ menu with just "Mark as lost" / "Not lost" for one transaction. */
+export function LostMenu({
+  report,
+  chain,
+  txHash,
+}: {
+  report: CashflowReport;
+  chain: string;
+  txHash: string;
+}) {
+  const item = useLostMenuItem(report);
+  return <RowMenu items={[item(chain, txHash)]} label="Transfer actions" />;
 }
 
 /** A person's name as shown on a row: solid when set here, faded when it comes from the address. */

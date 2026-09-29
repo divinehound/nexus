@@ -1,9 +1,15 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import type { CashflowPosition, CashflowTokenTrade, CashflowTokenTradeKind } from '@nexus/types';
+import type {
+  CashflowPosition,
+  CashflowReport,
+  CashflowTokenTrade,
+  CashflowTokenTradeKind,
+} from '@nexus/types';
 import { cn } from '@/lib/utils';
 import { explorerName, qty, txExplorerUrl, usd } from './format';
+import { RowMenu, useLostMenuItem } from './labels';
 import { Dual } from './ui';
 
 const KIND_LABELS: Record<CashflowTokenTradeKind, string> = {
@@ -14,10 +20,12 @@ const KIND_LABELS: Record<CashflowTokenTradeKind, string> = {
   burned: 'Burned',
   swap_in: 'Swapped in',
   swap_out: 'Swapped out',
+  lost: 'Lost for good',
 };
 const KIND_CLASS: Partial<Record<CashflowTokenTradeKind, string>> = {
   buy: 'text-orange-300',
   sell: 'text-sky-300',
+  lost: 'text-red-300',
 };
 
 type Filter = 'all' | 'buys' | 'sales' | 'other';
@@ -28,13 +36,21 @@ const FILTERS: Array<{ id: Filter; label: string; match: (t: CashflowTokenTrade)
   {
     id: 'other',
     label: 'Transfers',
-    match: (t) => t.kind === 'received' || t.kind === 'sent' || t.kind === 'burned',
+    match: (t) =>
+      t.kind === 'received' || t.kind === 'sent' || t.kind === 'burned' || t.kind === 'lost',
   },
 ];
 const PAGE = 50;
 
 /** Every buy, sale and move of one token, newest first — the token counterpart of the NFT item list. */
-export function TokenTradesTable({ position }: { position: CashflowPosition }) {
+export function TokenTradesTable({
+  position,
+  report,
+}: {
+  position: CashflowPosition;
+  report: CashflowReport;
+}) {
+  const lostItem = useLostMenuItem(report);
   const [filter, setFilter] = useState<Filter>('all');
   const [order, setOrder] = useState<'newest' | 'oldest'>('newest');
   const [limit, setLimit] = useState(PAGE);
@@ -91,13 +107,20 @@ export function TokenTradesTable({ position }: { position: CashflowPosition }) {
               <th className="py-1.5 pr-3 text-right font-medium">Price per {unit}</th>
               <th className="py-1.5 pr-3 text-right font-medium">Cost basis</th>
               <th className="py-1.5 pr-3 text-right font-medium">P/L</th>
-              <th className="py-1.5 text-right font-medium">Gas</th>
+              <th className="py-1.5 pr-2 text-right font-medium">Gas</th>
+              <th className="w-6 py-1.5">
+                <span className="sr-only">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/60">
             {rows.slice(0, limit).map((t, i) => {
               const url = txExplorerUrl(position.chain, t.txHash);
-              const moved = t.kind === 'received' || t.kind === 'sent' || t.kind === 'burned';
+              const moved =
+                t.kind === 'received' ||
+                t.kind === 'sent' ||
+                t.kind === 'burned' ||
+                t.kind === 'lost';
               const noBasis = (t.qtyWithoutBasis ?? 0) > 0;
               return (
                 <tr key={`${t.txHash}:${t.kind}:${i}`} className="align-top">
@@ -154,7 +177,7 @@ export function TokenTradesTable({ position }: { position: CashflowPosition }) {
                     )}
                   </td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {(t.kind === 'sell' || t.kind === 'swap_out') &&
+                    {(t.kind === 'sell' || t.kind === 'swap_out' || t.kind === 'lost') &&
                     (t.pnlUsd !== null || t.pnlNative !== null) ? (
                       <span className={cn(noBasis && 'opacity-60')}>
                         <Dual usd={t.pnlUsd} native={t.pnlNative} symbol={sym} signed />
@@ -163,8 +186,16 @@ export function TokenTradesTable({ position }: { position: CashflowPosition }) {
                       <span className="text-gray-600">—</span>
                     )}
                   </td>
-                  <td className="py-1.5 text-right tabular-nums text-gray-500">
+                  <td className="py-1.5 pr-2 text-right tabular-nums text-gray-500">
                     {t.gasUsd > 0 ? usd(t.gasUsd) : '—'}
+                  </td>
+                  <td className="py-1.5 text-right">
+                    {(t.kind === 'sent' || t.kind === 'lost') && (
+                      <RowMenu
+                        items={[lostItem(position.chain, t.txHash)]}
+                        label="Transfer actions"
+                      />
+                    )}
                   </td>
                 </tr>
               );

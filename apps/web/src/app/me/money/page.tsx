@@ -1009,7 +1009,7 @@ function PositionsTable({
                       {kind === 'nft' ? (
                         <NftItemsTable position={r} report={report} />
                       ) : (
-                        <TokenTradesTable position={r} />
+                        <TokenTradesTable position={r} report={report} />
                       )}
                     </td>
                   </tr>

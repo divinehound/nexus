@@ -1228,6 +1228,52 @@ describe('one payment for NFTs sent in several transactions', () => {
   });
 });
 
+describe('assets marked lost (e.g. a locked escrow)', () => {
+  const ESCROW = '0xe5c0000000000000000000000000000000000009';
+  const run = (lost: string[]) =>
+    buildCashflowReport({
+      movements: [
+        mv('0xb1', '2024-01-05T00:00:00Z', 'out', ETH, 1, MARKET),
+        mv('0xb1', '2024-01-05T00:00:00Z', 'in', PEPE, 1000, MARKET),
+        mv('0xb2', '2024-01-06T00:00:00Z', 'out', ETH, 0.5, MARKET),
+        mv('0xb2', '2024-01-06T00:00:00Z', 'in', PUNKS, 1, MARKET, { tokenId: '7' }),
+        mv('0xe1', '2024-02-10T00:00:00Z', 'out', PEPE, 400, ESCROW),
+        mv('0xe2', '2024-02-11T00:00:00Z', 'out', PUNKS, 1, ESCROW, { tokenId: '7' }),
+      ],
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      lostTxs: new Set(lost),
+    });
+
+  it('only sends the asset away until you mark it lost', () => {
+    const r = run([]);
+    expect(r.totals.realizedPnlUsd).toBe(0);
+    expect(r.tokens[0].trades[0]).toMatchObject({ kind: 'sent', pnlUsd: null });
+  });
+
+  it("books a lost asset's cost as a realized loss", () => {
+    const r = run(['ethereum:0xe1', 'ethereum:0xe2']);
+    const pepe = r.tokens.find((t) => t.symbol === 'PEPE')!;
+    // 400 of 1000 PEPE bought for 1 ETH ($2000) → $800 cost, 0.4 ETH.
+    expect(pepe.trades[0]).toMatchObject({ kind: 'lost', qty: 400, pnlUsd: expect.closeTo(-800), pnlNative: expect.closeTo(-0.4) });
+    expect(pepe.realizedPnlUsd).toBeCloseTo(-800);
+    expect(pepe.qtyHeld).toBeCloseTo(600);
+    const punks = r.collections.find((c) => c.key === PUNKS.key)!;
+    expect(punks.realizedPnlUsd).toBeCloseTo(-1000);
+    expect(punks.items[0]).toMatchObject({ disposedVia: 'lost', proceedsUsd: 0 });
+    expect(r.totals.realizedPnlUsd).toBeCloseTo(-1800);
+    const e1 = r.activity.find((a) => a.txHash === '0xe1')!;
+    expect(e1).toMatchObject({ type: 'sent_asset', lost: true, realizedPnlUsd: expect.closeTo(-800) });
+    expect(e1.label).toMatch(/marked lost/);
+    // No money moved: nothing counts as spent.
+    expect(r.totals.outUsd).toBeCloseTo(3000);
+  });
+});
+
 describe('token trades (the expandable list under each token)', () => {
   it('lists buys, sales and moves newest first, with average-cost P/L on sales', () => {
     const r = build([

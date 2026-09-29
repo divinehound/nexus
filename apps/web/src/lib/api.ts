@@ -842,6 +842,19 @@ export function removeCashflowContactLabels(token: string, ids: string[], view: 
   });
 }
 
+/** Mark what a transaction sent away as lost for good (booked as a realized loss), or undo. */
+export function setCashflowLost(
+  token: string,
+  input: { chain: string; txHash: string; lost: boolean },
+  view: CashflowView = {},
+) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/lost${cashflowQuery(view)}`, {
+    method: 'PUT',
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
 /** Save your note on a transaction; an empty note removes it. */
 export function setCashflowTxNote(
   token: string,

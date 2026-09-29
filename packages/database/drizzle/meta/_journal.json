@@ -232,6 +232,13 @@
       "when": 1790850000000,
       "tag": "0032_cashflow_labels_and_notes",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790950000000,
+      "tag": "0033_cashflow_lost_txs",
+      "breakpoints": true
     }
   ]
 }
