@@ -996,6 +996,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
             pnlUsd: usdOk ? share - d.basis : null,
             pnlNative,
             gasUsd: gasShare,
+            qtyWithoutBasis: d.missing,
           });
           p.sellCount++;
           p.qtySold += m.amount;
@@ -1136,6 +1137,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           pnlUsd: usdOk ? outUsd! - d.basis : null,
           pnlNative,
           gasUsd: gasShare,
+          qtyWithoutBasis: d.missing,
         });
         p.sellCount++;
         p.qtySold += m.amount;
@@ -1221,6 +1223,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           pnlUsd: null,
           pnlNative: null,
           gasUsd: feeUsd / (unIn.length + unOut.length),
+          qtyWithoutBasis: d.missing,
         });
         carried += d.basis;
         carriedGas += d.gas;

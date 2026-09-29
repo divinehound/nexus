@@ -1257,6 +1257,19 @@ describe('token trades (the expandable list under each token)', () => {
     expect(r.collections.every((c) => c.trades.length === 0)).toBe(true);
   });
 
+  it('flags a valued swap of tokens that have no recorded purchase', () => {
+    // 1000 PEPE with no buy on record, swapped for DOGE through a route worth 0.1 ETH.
+    const r = build([
+      mv('0xsw', '2024-02-10T00:00:00Z', 'out', PEPE, 1000, MARKET),
+      mv('0xsw', '2024-02-10T00:00:00Z', 'in', DOGE, 50, MARKET),
+      { ...mv('0xsw', '2024-02-10T00:00:00Z', 'in', ETH, 0.1, MARKET), valuation: true },
+    ]);
+    const out = r.tokens.find((t) => t.symbol === 'PEPE')!.trades[0];
+    expect(out).toMatchObject({ kind: 'swap_out', qty: 1000, qtyWithoutBasis: 1000, usd: expect.closeTo(300) });
+    // Counted at $0 cost (like an airdrop) — the dashboard marks it rather than hiding it.
+    expect(out.pnlUsd).toBeCloseTo(300);
+  });
+
   it('records a token-for-token swap on both tokens', () => {
     const r = build([
       mv('0xb1', '2024-01-05T00:00:00Z', 'out', ETH, 1, MARKET),

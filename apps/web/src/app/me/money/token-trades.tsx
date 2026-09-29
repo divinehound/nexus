@@ -98,6 +98,7 @@ export function TokenTradesTable({ position }: { position: CashflowPosition }) {
             {rows.slice(0, limit).map((t, i) => {
               const url = txExplorerUrl(position.chain, t.txHash);
               const moved = t.kind === 'received' || t.kind === 'sent' || t.kind === 'burned';
+              const noBasis = (t.qtyWithoutBasis ?? 0) > 0;
               return (
                 <tr key={`${t.txHash}:${t.kind}:${i}`} className="align-top">
                   <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
@@ -137,11 +138,27 @@ export function TokenTradesTable({ position }: { position: CashflowPosition }) {
                     {!moved && t.usd !== null && t.qty > 0 ? usd(t.usd / t.qty) : '—'}
                   </td>
                   <td className="py-1.5 pr-3 text-right tabular-nums text-gray-400">
-                    {t.costBasisUsd !== null ? usd(t.costBasisUsd) : '—'}
+                    {noBasis ? (
+                      <span
+                        className="cursor-help text-amber-300/90"
+                        title={`${qty(t.qtyWithoutBasis!)} ${unit} left with no recorded purchase — an airdrop or gift, or a buy the scan missed (e.g. older than the scanned history). It's counted at $0 cost, so any P/L here is overstated. If you paid for it, flag the buy's transaction.`}
+                      >
+                        {t.qtyWithoutBasis! >= t.qty - 1e-9
+                          ? 'no purchase found'
+                          : 'partly unknown'}
+                      </span>
+                    ) : t.costBasisUsd !== null ? (
+                      usd(t.costBasisUsd)
+                    ) : (
+                      '—'
+                    )}
                   </td>
                   <td className="py-1.5 pr-3 text-right tabular-nums">
-                    {t.kind === 'sell' ? (
-                      <Dual usd={t.pnlUsd} native={t.pnlNative} symbol={sym} signed />
+                    {(t.kind === 'sell' || t.kind === 'swap_out') &&
+                    (t.pnlUsd !== null || t.pnlNative !== null) ? (
+                      <span className={cn(noBasis && 'opacity-60')}>
+                        <Dual usd={t.pnlUsd} native={t.pnlNative} symbol={sym} signed />
+                      </span>
                     ) : (
                       <span className="text-gray-600">—</span>
                     )}
@@ -166,7 +183,8 @@ export function TokenTradesTable({ position }: { position: CashflowPosition }) {
       )}
       {rows.length === 0 && <p className="py-3 text-center text-xs text-gray-500">Nothing here.</p>}
       <p className="mt-2 text-[11px] text-gray-500">
-        P/L on a sale uses the average cost of everything held at the time (cost basis column).
+        P/L on a sale or valued swap uses the average cost of everything held at the time (cost
+        basis column).
       </p>
     </div>
   );

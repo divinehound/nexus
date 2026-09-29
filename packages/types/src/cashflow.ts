@@ -148,10 +148,15 @@ export interface CashflowTokenTrade {
   native: number | null;
   /** Average cost of the units sold/sent (average-cost basis). */
   costBasisUsd: number | null;
-  /** Sales only. */
+  /** Sales and valued swaps. */
   pnlUsd: number | null;
   pnlNative: number | null;
   gasUsd: number;
+  /**
+   * Units that left with no recorded purchase (airdrop, gift, a buy the scan
+   * missed or older than its history) — counted at $0 cost.
+   */
+  qtyWithoutBasis?: number;
 }
 
 export type CashflowNftAcquiredVia = 'purchase' | 'mint' | 'free_mint' | 'received' | 'swap' | 'unknown';
