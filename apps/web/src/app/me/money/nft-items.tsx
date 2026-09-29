@@ -87,7 +87,7 @@ function PnlText({ item, symbol }: { item: CashflowNftItem; symbol: string }) {
  * The activity row for an NFT's acquire/dispose tx, for linking it to its
  * payment. The activity list is capped, so an older tx gets a minimal stand-in.
  */
-function activityFor(
+export function activityFor(
   report: CashflowReport,
   chain: string,
   txHash: string,

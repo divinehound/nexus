@@ -752,3 +752,85 @@ describe('buying a token with SOL on Solana', () => {
     expect(r.totals.outUsd).toBeCloseTo(75);
   });
 });
+
+describe('Jupiter DCA orders', () => {
+  const { buildCashflowReport } = jest.requireActual('./cashflow-ledger');
+  const { JUPITER_DCA_PROGRAM } = jest.requireActual('./solana-activity.fetcher');
+  const ME = 'HbHNSdCC6waMEbitEtBb5hH9xn1KMWAcMcyL58h3VJrj';
+  const DCA = 'DcaAccount111111111111111111111111111111111'; // the order's PDA
+  const DCA_IN = 'DcaInAta1111111111111111111111111111111111'; // holds the BIG being sold
+  const DCA_OUT = 'DcaOutAta111111111111111111111111111111111'; // receives wSOL, unwrapped to the owner
+  const KEEPER = 'Keeper11111111111111111111111111111111111111';
+  const POOL = 'Poo1111111111111111111111111111111111111111';
+  const BIG = 'BigMint111111111111111111111111111111111111';
+  const WSOL = 'So11111111111111111111111111111111111111112';
+  const dcaIx = [{ programId: JUPITER_DCA_PROGRAM, accounts: [], data: '' }];
+  const mintInfo = new Map<string, MintInfo>([
+    [BIG, { isNft: false, name: 'BIG', symbol: 'BIG', collection: null, collectionName: null }],
+  ]);
+  const buy = {
+    signature: 'buyBig',
+    timestamp: 1_750_000_000,
+    feePayer: ME,
+    nativeTransfers: [{ fromUserAccount: ME, toUserAccount: POOL, amount: 2_000_000_000 }],
+    tokenTransfers: [{ fromUserAccount: POOL, toUserAccount: ME, mint: BIG, tokenAmount: 344438.8 }],
+  };
+  const open = {
+    signature: '3iys4N3Z',
+    timestamp: 1_750_572_151,
+    feePayer: ME,
+    instructions: dcaIx,
+    nativeTransfers: [{ fromUserAccount: ME, toUserAccount: DCA, amount: 3_000_000 }], // account rent
+    tokenTransfers: [
+      { fromUserAccount: ME, toUserAccount: DCA, fromTokenAccount: 'MyBigAta', toTokenAccount: DCA_IN, mint: BIG, tokenAmount: 344438.8 },
+    ],
+  };
+  const fill = (n: number, sol: number) => ({
+    signature: `fill${n}`,
+    timestamp: 1_750_572_151 + n * 7200,
+    feePayer: KEEPER,
+    instructions: dcaIx,
+    nativeTransfers: [{ fromUserAccount: DCA_OUT, toUserAccount: ME, amount: sol * 1e9 }],
+    tokenTransfers: [
+      { fromUserAccount: DCA, toUserAccount: POOL, fromTokenAccount: DCA_IN, mint: BIG, tokenAmount: 28703.2 },
+      { fromUserAccount: POOL, toUserAccount: DCA, toTokenAccount: DCA_OUT, mint: WSOL, tokenAmount: sol },
+    ],
+  });
+  const close = {
+    signature: 'closeDca',
+    timestamp: 1_750_700_000,
+    feePayer: ME,
+    instructions: dcaIx,
+    nativeTransfers: [{ fromUserAccount: DCA, toUserAccount: ME, amount: 3_000_000 }],
+    tokenTransfers: [
+      { fromUserAccount: DCA, toUserAccount: ME, fromTokenAccount: DCA_IN, toTokenAccount: 'MyBigAta', mint: BIG, tokenAmount: 287032.4 },
+    ],
+  };
+
+  it("keeps a DCA deposit as yours and books each fill as a sale at the SOL it paid", () => {
+    const assets = new Map();
+    const legs = (tx: Parameters<typeof normalizeSolanaTx>[1]) => normalizeSolanaTx(ME, tx, mintInfo, assets).movements;
+    expect(legs(open)).toEqual([]); // just moving into your own DCA account
+    expect(legs(fill(1, 0.2)).map((m) => [m.direction, m.asset.symbol, m.amount])).toEqual([
+      ['out', 'BIG', 28703.2],
+      ['in', 'wSOL', 0.2],
+    ]);
+    expect(legs(close)).toEqual([]); // the unfilled rest coming back
+
+    const r = buildCashflowReport({
+      movements: [buy, open, fill(1, 0.2), fill(2, 0.25), close].flatMap((tx) => legs(tx)),
+      fees: [],
+      wallets: [{ chain: 'solana', address: ME }],
+      pricer: { usdPerUnit: () => 150 },
+      coverage: [],
+      notes: [],
+      now: new Date('2026-01-01T00:00:00Z'),
+    });
+    const big = r.tokens.find((t: { symbol: string }) => t.symbol === 'BIG');
+    expect(big.trades.map((t: { kind: string }) => t.kind)).toEqual(['sell', 'sell', 'buy']);
+    expect(big.qtyHeld).toBeCloseTo(344438.8 - 2 * 28703.2);
+    // Each fill: 1/12 of the 2 SOL cost, sold for 0.2 / 0.25 SOL.
+    expect(big.realizedPnlNative).toBeCloseTo(0.45 - (2 * 2 * 28703.2) / 344438.8);
+    expect(r.inByCategory.token_sale).toBeCloseTo(0.45 * 150);
+  });
+});
