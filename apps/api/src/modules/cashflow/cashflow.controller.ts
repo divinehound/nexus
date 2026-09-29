@@ -166,6 +166,23 @@ export class AssetPrefDto {
   pref!: 'hidden' | 'shown' | null;
 }
 
+export class WriteOffDto {
+  @IsString()
+  @Length(10, 200)
+  @Matches(new RegExp(`^(${CHAINS.join('|')}):(0x[0-9a-fA-F]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$`))
+  assetKey!: string;
+
+  /** One NFT; omit to write off everything held of a token. */
+  @IsOptional()
+  @IsString()
+  @Length(1, 200)
+  @Matches(/^[0-9A-Za-z]+$/)
+  tokenId?: string;
+
+  @IsBoolean()
+  lost!: boolean;
+}
+
 export class LostDto {
   @IsIn(CHAINS)
   chain!: string;
@@ -338,6 +355,17 @@ export class CashflowController {
     @Query('chain') chain?: string,
   ): Promise<CashflowResponse> {
     return this.cashflowService.setAssetPref(req.user.sub, { assetKey: body.assetKey, pref: body.pref ?? null }, view(wallet, chain));
+  }
+
+  @Put('write-offs')
+  @ApiOperation({ summary: 'Write off something still held (a frozen NFT) as lost for good, or undo' })
+  setWriteOff(
+    @Req() req: AuthRequest,
+    @Body() body: WriteOffDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.setWriteOff(req.user.sub, body, view(wallet, chain));
   }
 
   @Put('lost')

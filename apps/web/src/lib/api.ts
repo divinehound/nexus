@@ -855,6 +855,19 @@ export function setCashflowAssetPref(
   });
 }
 
+/** Write off something still held (a frozen NFT; omit tokenId for all of a token), or undo. */
+export function setCashflowWriteOff(
+  token: string,
+  input: { assetKey: string; tokenId?: string; lost: boolean },
+  view: CashflowView = {},
+) {
+  return apiFetch<CashflowResponse>(`/me/cashflow/write-offs${cashflowQuery(view)}`, {
+    method: 'PUT',
+    token,
+    body: JSON.stringify(input),
+  });
+}
+
 /** Mark what a transaction sent away as lost for good (booked as a realized loss), or undo. */
 export function setCashflowLost(
   token: string,

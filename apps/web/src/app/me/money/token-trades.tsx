@@ -10,7 +10,7 @@ import type {
 import { cn } from '@/lib/utils';
 import { explorerName, qty, txExplorerUrl, usd } from './format';
 import { LinkPicker } from './activity-list';
-import { RowMenu, useLostMenuItem, type MenuItem } from './labels';
+import { RowMenu, useLostMenuItem, useWriteOff, type MenuItem } from './labels';
 import { activityFor } from './nft-items';
 import { Dual } from './ui';
 
@@ -53,6 +53,7 @@ export function TokenTradesTable({
   report: CashflowReport;
 }) {
   const lostItem = useLostMenuItem(report);
+  const writeOff = useWriteOff(report);
   // The row whose link picker is open: tokens that arrived with no payment
   // (an airdrop for a presale, an OTC deal) or left with none.
   const [linking, setLinking] = useState<string | null>(null);
@@ -82,7 +83,9 @@ export function TokenTradesTable({
         },
         lostItem(position.chain, t.txHash),
       ];
-    if (t.kind === 'lost') return [lostItem(position.chain, t.txHash)];
+    // A write-off has no transaction of its own.
+    if (t.kind === 'lost')
+      return [t.txHash ? lostItem(position.chain, t.txHash) : writeOff(position.key, null, '')];
     return [];
   };
 
@@ -144,7 +147,7 @@ export function TokenTradesTable({
           </thead>
           <tbody className="divide-y divide-gray-800/60">
             {rows.slice(0, limit).map((t, i) => {
-              const url = txExplorerUrl(position.chain, t.txHash);
+              const url = t.txHash ? txExplorerUrl(position.chain, t.txHash) : null;
               const moved =
                 t.kind === 'received' ||
                 t.kind === 'sent' ||

@@ -446,6 +446,8 @@ export interface CashflowReport {
   hiddenAssets: CashflowHiddenAsset[];
   /** Keys you marked "not spam" (kept although the name looks like spam). */
   shownAssets: string[];
+  /** Things still held that you wrote off as lost (tokenId '' = all of a token). */
+  writeOffs: Array<{ id: string; assetKey: string; tokenId: string; lostAt: string }>;
   /** Transactions you marked as lost for good. */
   lostTxs: Array<{ id: string; chain: string; txHash: string }>;
   fees: CashflowChainFees[];

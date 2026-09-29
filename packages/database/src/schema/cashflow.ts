@@ -210,3 +210,22 @@ export const cashflowAssetPrefs = pgTable(
   },
   (table) => [uniqueIndex('cashflow_asset_prefs_unique').on(table.userId, table.assetKey)],
 );
+
+/**
+ * Things still in the wallet that the user wrote off as lost for good (a
+ * frozen NFT, a token that can't be moved or sold): their cost is booked as a
+ * realized loss on `lostAt`. `tokenId` '' = everything held of a token.
+ */
+export const cashflowWriteOffs = pgTable(
+  'cashflow_write_offs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    assetKey: varchar('asset_key', { length: 300 }).notNull(),
+    tokenId: varchar('token_id', { length: 200 }).notNull().default(''),
+    lostAt: timestamp('lost_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex('cashflow_write_offs_unique').on(table.userId, table.assetKey, table.tokenId)],
+);

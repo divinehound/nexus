@@ -1435,6 +1435,50 @@ describe('spam and hidden tokens', () => {
   });
 });
 
+describe('writing off something still held (a frozen NFT)', () => {
+  const run = (writeOffs: Array<{ assetKey: string; tokenId: string | null; at: Date }>) =>
+    buildCashflowReport({
+      movements: [
+        mv('0xb1', '2024-01-05T00:00:00Z', 'out', ETH, 1, MARKET),
+        mv('0xb1', '2024-01-05T00:00:00Z', 'in', PUNKS, 1, MARKET, { tokenId: '7' }),
+        mv('0xb2', '2024-01-06T00:00:00Z', 'out', ETH, 0.5, MARKET),
+        mv('0xb2', '2024-01-06T00:00:00Z', 'in', PUNKS, 1, MARKET, { tokenId: '8' }),
+        mv('0xb3', '2024-01-07T00:00:00Z', 'out', ETH, 0.25, MARKET),
+        mv('0xb3', '2024-01-07T00:00:00Z', 'in', PEPE, 1000, MARKET),
+      ],
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      writeOffs,
+    });
+
+  it("books a written-off NFT's cost as a realized loss and stops holding it", () => {
+    const r = run([{ assetKey: PUNKS.key, tokenId: '7', at: new Date('2024-02-20T00:00:00Z') }]);
+    const punks = r.collections.find((c) => c.key === PUNKS.key)!;
+    expect(punks.qtyHeld).toBe(1); // #8 is still held
+    expect(punks.realizedPnlUsd).toBeCloseTo(-2000); // 1 ETH at $2000
+    expect(punks.realizedPnlNative).toBeCloseTo(-1);
+    const seven = punks.items.find((i) => i.tokenId === '7')!;
+    expect(seven).toMatchObject({ disposedVia: 'lost', proceedsUsd: 0, realizedPnlUsd: expect.closeTo(-2000) });
+    expect(r.months.find((m) => m.month === '2024-02')!.realizedPnlUsd).toBeCloseTo(-2000);
+    expect(r.totals.outUsd).toBeCloseTo(3500); // nothing new counted as spent
+  });
+
+  it('writes off everything held of a token, and ignores what is no longer held', () => {
+    const r = run([
+      { assetKey: PEPE.key, tokenId: null, at: new Date('2024-02-20T00:00:00Z') },
+      { assetKey: PUNKS.key, tokenId: '99', at: new Date('2024-02-20T00:00:00Z') },
+    ]);
+    const pepe = r.tokens.find((t) => t.symbol === 'PEPE')!;
+    expect(pepe.qtyHeld).toBe(0);
+    expect(pepe.trades[0]).toMatchObject({ kind: 'lost', qty: 1000, pnlUsd: expect.closeTo(-500), txHash: '' });
+    expect(r.collections.find((c) => c.key === PUNKS.key)!.realizedPnlUsd).toBe(0);
+  });
+});
+
 describe('floating-point dust', () => {
   it('sells a whole holding even when the amounts differ in the last float bits', () => {
     // 66,290.994856638 bought; sold as 66,224.703861782 + 66.290994856 (not exactly equal in floats).
