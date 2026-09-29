@@ -155,6 +155,12 @@ export function txKey(chain: string, txHash: string): string {
 }
 
 const EPSILON = 1e-12;
+/**
+ * Token amounts (e.g. 66,290.994856638) don't add up exactly in floating
+ * point, so "sold it all" can leave 1e-11 behind or overshoot by as much.
+ * Within this fraction of a lot, it counts as the whole lot.
+ */
+const DUST = 1e-9;
 
 /** Chain-family-aware identity for an address (EVM addresses are shared across EVM chains). */
 export function addressIdentity(chain: string, address: string): string {
@@ -291,8 +297,9 @@ class Position {
     const lot = this.lots.get(key);
     if (!lot || lot.qty <= EPSILON)
       return { basis: 0, gas: 0, gasNative: 0, basisNative: 0, missing: qty, usdMissing: 0 };
-    const take = Math.min(qty, lot.qty);
-    const fraction = lot.qty > 0 ? take / lot.qty : 0;
+    const all = Math.abs(qty - lot.qty) <= lot.qty * DUST;
+    const take = all ? lot.qty : Math.min(qty, lot.qty);
+    const fraction = all ? 1 : lot.qty > 0 ? take / lot.qty : 0;
     const basis = lot.cost * fraction;
     const gas = lot.gas * fraction;
     const gasNative = lot.gasNative * fraction;
@@ -304,8 +311,8 @@ class Position {
     lot.gas -= gas;
     lot.gasNative -= gasNative;
     lot.costNative -= basisNative;
-    if (lot.qty <= EPSILON) this.lots.delete(key);
-    const missing = qty - take;
+    if (all || lot.qty <= EPSILON) this.lots.delete(key);
+    const missing = all ? 0 : qty - take;
     return {
       basis,
       gas,
@@ -1638,9 +1645,9 @@ function analyze(
   }
   /** The legs on the side that won, scaled down to the net amount. */
   const netted = (e: { in: LedgerMovement[]; out: LedgerMovement[]; net: number }) => {
-    if (Math.abs(e.net) <= EPSILON) return [];
     const dominant = e.net > 0 ? e.in : e.out;
     const gross = dominant.reduce((sum, m) => sum + m.amount, 0);
+    if (Math.abs(e.net) <= Math.max(EPSILON, gross * DUST)) return [];
     const scale = gross > 0 ? Math.abs(e.net) / gross : 0;
     return dominant.map((m): LedgerMovement => (scale === 1 ? m : { ...m, amount: m.amount * scale }));
   };
