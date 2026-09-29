@@ -23,6 +23,11 @@ const FUNGIBLE_INTERFACES = new Set(['FungibleToken', 'FungibleAsset']);
 const FUNGIBLE_STANDARDS = new Set(['Fungible', 'FungibleAsset']);
 /** Metaplex Core: NFTs that are single program accounts, not SPL tokens, so no token transfer ever shows. */
 export const MPL_CORE_PROGRAM = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
+/**
+ * Jupiter DCA: a deposit sits in a DCA account (a program address) that the
+ * Jupiter bot sells from bit by bit, paying the proceeds to the owner.
+ */
+export const JUPITER_DCA_PROGRAM = 'DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M';
 /** MplAssetInstruction variant indexes (the first byte of the instruction data). */
 const CORE_CREATE_V1 = 0;
 const CORE_BURN_V1 = 12;
@@ -182,11 +187,17 @@ export function normalizeSolanaTx(
       if (c.userAccount === wallet && c.tokenAccount) ownTokenAccounts.add(c.tokenAccount);
     }
   }
+  // A Jupiter DCA account is the wallet's own pocket: what's deposited stays
+  // the wallet's until the bot sells it, and each fill — the deposit token
+  // leaving the DCA account, SOL/tokens arriving — is the wallet's sale.
+  const dcaAccounts = usesProgram(tx, JUPITER_DCA_PROGRAM) ? dcaAccountsOf(tx, wallet) : new Set<string>();
+  const who = (account: string | null | undefined, tokenAccount?: string | null) =>
+    dcaAccounts.has(account ?? '') || (tokenAccount && dcaAccounts.has(tokenAccount)) ? wallet : (account ?? '');
   let nativeOut = 0;
   let nativeIn = 0;
   for (const n of tx.nativeTransfers ?? []) {
-    const from = n.fromUserAccount ?? '';
-    const to = n.toUserAccount ?? '';
+    const from = who(n.fromUserAccount);
+    const to = who(n.toUserAccount);
     if ((from === wallet) === (to === wallet) || !n.amount) continue;
     if (ownTokenAccounts.has(from === wallet ? to : from)) continue;
     const direction = from === wallet ? 'out' : 'in';
@@ -204,8 +215,8 @@ export function normalizeSolanaTx(
   }
   const tokenMints = new Set<string>();
   for (const t of tx.tokenTransfers ?? []) {
-    const from = t.fromUserAccount ?? '';
-    const to = t.toUserAccount ?? '';
+    const from = who(t.fromUserAccount, t.fromTokenAccount);
+    const to = who(t.toUserAccount, t.toTokenAccount);
     if ((from === wallet) === (to === wallet) || !t.mint || !t.tokenAmount) continue;
     tokenMints.add(t.mint);
     const direction = from === wallet ? 'out' : 'in';
@@ -413,6 +424,57 @@ function coreMove(accounts: string[], variant: number | null, wallet: string, he
 }
 
 /** A program-derived address (off the ed25519 curve) — an escrow or vault, never a person's wallet. */
+/** Whether any instruction (or inner instruction) of the tx runs `programId`. */
+export function usesProgram(tx: HeliusEnhancedTx, programId: string): boolean {
+  const visit = (ixs: HeliusInstruction[] | undefined): boolean =>
+    (ixs ?? []).some((ix) => ix.programId === programId || visit(ix.innerInstructions));
+  return visit(tx.instructions);
+}
+
+/**
+ * The wallet's DCA account(s) in a Jupiter DCA tx, with their token accounts:
+ * whatever pays the wallet (fills, refunds of the unfilled rest), and — when
+ * the wallet signed — whatever it deposits into (opening an order).
+ */
+export function dcaAccountsOf(tx: HeliusEnhancedTx, wallet: string): Set<string> {
+  const found = new Set<string>();
+  const signed = tx.feePayer === wallet;
+  for (const n of tx.nativeTransfers ?? []) {
+    if (n.toUserAccount === wallet && n.fromUserAccount && n.fromUserAccount !== wallet) found.add(n.fromUserAccount);
+    if (signed && n.fromUserAccount === wallet && n.toUserAccount && n.toUserAccount !== wallet) found.add(n.toUserAccount);
+  }
+  for (const t of tx.tokenTransfers ?? []) {
+    if (t.toUserAccount === wallet && t.fromUserAccount && t.fromUserAccount !== wallet) {
+      found.add(t.fromUserAccount);
+      if (t.fromTokenAccount) found.add(t.fromTokenAccount);
+    }
+    if (signed && t.fromUserAccount === wallet && t.toUserAccount && t.toUserAccount !== wallet) {
+      found.add(t.toUserAccount);
+      if (t.toTokenAccount) found.add(t.toTokenAccount);
+    }
+  }
+  // A payout can come from the DCA account's token account (e.g. unwrapped
+  // SOL): add the account that owns it, and every token account of an owner found.
+  const owners = [
+    ...(tx.tokenTransfers ?? []).flatMap((t) => [
+      [t.fromUserAccount, t.fromTokenAccount],
+      [t.toUserAccount, t.toTokenAccount],
+    ]),
+    ...(tx.accountData ?? []).flatMap((a) =>
+      (a.tokenBalanceChanges ?? []).map((c) => [c.userAccount, c.tokenAccount]),
+    ),
+  ] as Array<[string | null | undefined, string | null | undefined]>;
+  for (const [owner, account] of owners) {
+    if (!owner || !account || owner === wallet) continue;
+    if (found.has(account)) found.add(owner);
+  }
+  for (const [owner, account] of owners) {
+    if (owner && account && found.has(owner)) found.add(account);
+  }
+  found.delete(wallet);
+  return found;
+}
+
 export function isProgramAddress(address: string): boolean {
   try {
     return !PublicKey.isOnCurve(new PublicKey(address).toBytes());
