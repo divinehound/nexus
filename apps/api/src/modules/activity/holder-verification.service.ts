@@ -31,7 +31,8 @@ export class HolderVerificationService {
   }
 
   /**
-   * Verify ERC-721 / ERC-1155 ownership via Alchemy isHolderOfContract.
+   * Verify ERC-721 / ERC-1155 ownership via Alchemy getNFTsForOwner, filtered
+   * to the collection contract.
    * Supports any EVM chain that Alchemy indexes.
    */
   private async verifyEvmHolder(
@@ -52,7 +53,15 @@ export class HolderVerificationService {
       return true;
     }
 
-    const url = `https://${meta.alchemySubdomain}.g.alchemy.com/nft/v3/${apiKey}/isHolderOfContract?wallet=${walletAddress}&contractAddress=${contractAddress}`;
+    // isHolderOfContract was removed by Alchemy (2026-09-30); getNFTsForOwner
+    // filtered to the one contract is the documented replacement.
+    const params = new URLSearchParams({
+      owner: walletAddress,
+      'contractAddresses[]': contractAddress,
+      withMetadata: 'false',
+      pageSize: '1',
+    });
+    const url = `https://${meta.alchemySubdomain}.g.alchemy.com/nft/v3/${apiKey}/getNFTsForOwner?${params}`;
 
     try {
       const res = await fetch(url);
@@ -60,8 +69,8 @@ export class HolderVerificationService {
         this.logger.error(`Alchemy API error (${meta.name}): ${res.status}`);
         return false;
       }
-      const body = (await res.json()) as { isHolderOfContract: boolean };
-      return body.isHolderOfContract;
+      const body = (await res.json()) as { ownedNfts?: unknown[]; totalCount?: number };
+      return (body.ownedNfts?.length ?? 0) > 0 || (body.totalCount ?? 0) > 0;
     } catch (err) {
       this.logger.error(`Holder verification failed (${meta.name}): ${err}`);
       return false;
