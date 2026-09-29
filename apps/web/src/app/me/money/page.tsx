@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import type {
   CashflowCategory,
@@ -723,6 +723,98 @@ const realizedAny = (r: CashflowPosition) =>
   r.sellCount > 0 || r.realizedPnlUsd !== 0 || r.realizedPnlNative !== 0;
 const realizedUsdKnown = (r: CashflowPosition) => r.sellCountUsd > 0 || r.realizedPnlUsd !== 0;
 
+type PositionFilter = 'all' | 'profit' | 'loss' | 'held' | 'exited';
+const POSITION_FILTERS: Array<{ id: PositionFilter; label: string; title: string }> = [
+  { id: 'all', label: 'All', title: 'Everything' },
+  { id: 'profit', label: 'Profitable', title: 'Realized a profit' },
+  { id: 'loss', label: 'Losing', title: 'Realized a loss' },
+  { id: 'held', label: 'Still held', title: 'You still hold some' },
+  { id: 'exited', label: 'Sold out', title: 'Sold (or lost) everything you had' },
+];
+type PositionSortKey =
+  | 'name'
+  | 'bought'
+  | 'spent'
+  | 'sold'
+  | 'proceeds'
+  | 'pnl'
+  | 'pnlAfterGas'
+  | 'held';
+/** USD when known, otherwise the coin figure — so unpriced trades still rank. */
+const realizedValue = (r: CashflowPosition, afterGas = false) =>
+  realizedUsdKnown(r)
+    ? afterGas
+      ? r.realizedPnlAfterGasUsd
+      : r.realizedPnlUsd
+    : afterGas
+      ? r.realizedPnlAfterGasNative
+      : r.realizedPnlNative;
+const POSITION_SORTS: Record<PositionSortKey, (r: CashflowPosition) => number | string> = {
+  name: (r) => r.name.toLowerCase(),
+  bought: (r) => r.qtyBought,
+  spent: (r) => r.spentUsd,
+  sold: (r) => r.qtySold,
+  proceeds: (r) => r.proceedsUsd,
+  pnl: (r) => (realizedAny(r) ? realizedValue(r) : 0),
+  pnlAfterGas: (r) => (realizedAny(r) ? realizedValue(r, true) : 0),
+  // What's still held is ranked by what it cost — amounts of different tokens don't compare.
+  held: (r) => (r.openCostBasisUsd > 0 ? r.openCostBasisUsd : r.qtyHeld > 0 ? 1e-9 : 0),
+};
+
+function matchesPosition(r: CashflowPosition, f: PositionFilter): boolean {
+  switch (f) {
+    case 'profit':
+      return realizedAny(r) && realizedValue(r) > 0;
+    case 'loss':
+      return realizedAny(r) && realizedValue(r) < 0;
+    case 'held':
+      return r.qtyHeld > 0;
+    case 'exited':
+      return r.qtyHeld <= 0 && realizedAny(r);
+    default:
+      return true;
+  }
+}
+
+function SortTh({
+  id,
+  sort,
+  onSort,
+  children,
+  title,
+  className,
+}: {
+  id: PositionSortKey;
+  sort: { key: PositionSortKey; desc: boolean } | null;
+  onSort: (key: PositionSortKey) => void;
+  children: ReactNode;
+  title?: string;
+  className?: string;
+}) {
+  const active = sort?.key === id;
+  return (
+    <th
+      className={cn('py-2 font-medium', className)}
+      title={title}
+      aria-sort={active ? (sort!.desc ? 'descending' : 'ascending') : undefined}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(id)}
+        className={cn(
+          'inline-flex items-center gap-1 hover:text-gray-200',
+          active && 'text-gray-200',
+        )}
+      >
+        {children}
+        <span aria-hidden="true" className={cn('text-[10px]', !active && 'opacity-0')}>
+          {active && !sort!.desc ? '▲' : '▼'}
+        </span>
+      </button>
+    </th>
+  );
+}
+
 function PositionsTable({
   rows,
   kind,
@@ -745,17 +837,61 @@ function PositionsTable({
   // Anything actually bought or sold — including on days with no USD price.
   // Anything bought, sold or minted (free mints included — spam airdrops come
   // from other addresses, not the zero address, so they stay tucked away).
-  const traded = rows.filter(
-    (r) =>
-      r.buyCount > 0 ||
-      r.sellCount > 0 ||
-      r.spentUsd > 0 ||
-      r.proceedsUsd > 0 ||
-      r.items.some((i) => i.acquiredVia === 'mint' || i.acquiredVia === 'free_mint') ||
-      // Tokens only ever swapped for other tokens are trades too.
-      r.trades.some((t) => t.kind === 'swap_in' || t.kind === 'swap_out'),
+  const traded = useMemo(
+    () =>
+      rows.filter(
+        (r) =>
+          r.buyCount > 0 ||
+          r.sellCount > 0 ||
+          r.spentUsd > 0 ||
+          r.proceedsUsd > 0 ||
+          r.items.some((i) => i.acquiredVia === 'mint' || i.acquiredVia === 'free_mint') ||
+          // Tokens only ever swapped for other tokens are trades too.
+          r.trades.some((t) => t.kind === 'swap_in' || t.kind === 'swap_out'),
+      ),
+    [rows],
   );
-  const visible = showAll ? rows : traded;
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<PositionFilter>('all');
+  const [chainPick, setChainPick] = useState<string>('');
+  // null: the API's order (most money moved first).
+  const [sort, setSort] = useState<{ key: PositionSortKey; desc: boolean } | null>(null);
+  const onSort = (key: PositionSortKey) =>
+    setSort((prev) =>
+      prev?.key !== key
+        ? { key, desc: key !== 'name' }
+        : prev.desc === (key !== 'name')
+          ? { key, desc: !prev.desc }
+          : null,
+    );
+  const chains = useMemo(() => [...new Set(rows.map((r) => r.chain))].sort(), [rows]);
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    // A search looks through everything, including what has no money involved.
+    let list = (showAll || q ? rows : traded).filter(
+      (r) => matchesPosition(r, filter) && (!chainPick || r.chain === chainPick),
+    );
+    if (q) {
+      list = list.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          (r.symbol ?? '').toLowerCase().includes(q) ||
+          r.contract.toLowerCase().includes(q) ||
+          (r.kind === 'nft' && r.items.some((i) => i.tokenId.toLowerCase().includes(q))),
+      );
+    }
+    if (sort) {
+      const val = POSITION_SORTS[sort.key];
+      list = [...list].sort((a, b) => {
+        const va = val(a);
+        const vb = val(b);
+        const c = typeof va === 'string' ? va.localeCompare(vb as string) : va - (vb as number);
+        return sort.desc ? -c : c;
+      });
+    }
+    return list;
+  }, [rows, traded, showAll, query, filter, chainPick, sort]);
+  const narrowed = query.trim() !== '' || filter !== 'all' || chainPick !== '';
   const totals = traded.reduce(
     (acc, r) => ({
       spent: acc.spent + r.spentUsd,
@@ -846,28 +982,116 @@ function PositionsTable({
         made ETH still loses USD if ETH fell while you held. &ldquo;From trading&rdquo; is your coin
         profit valued at the sale-day price; &ldquo;coin price moved&rdquo; is the rest.
       </p>
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={
+            kind === 'nft'
+              ? 'Search collections, contracts, token ids…'
+              : 'Search tokens, symbols, contracts…'
+          }
+          aria-label={kind === 'nft' ? 'Search collections' : 'Search tokens'}
+          className="w-full rounded-md border border-gray-700 bg-gray-900 px-2.5 py-1.5 text-sm text-gray-200 placeholder:text-gray-500 focus:border-purple-500 focus:outline-none sm:w-72"
+        />
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Filter">
+          {POSITION_FILTERS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              title={f.title}
+              aria-pressed={filter === f.id}
+              onClick={() => setFilter(f.id)}
+              className={cn(
+                'rounded-md px-2 py-1',
+                filter === f.id
+                  ? 'bg-purple-600/30 text-purple-200'
+                  : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200',
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        {chains.length > 1 && (
+          <select
+            value={chainPick}
+            onChange={(e) => setChainPick(e.target.value)}
+            aria-label="Chain"
+            className="rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-gray-200"
+          >
+            <option value="">All chains</option>
+            {chains.map((c) => (
+              <option key={c} value={c}>
+                {CHAIN_LABELS[c] ?? c}
+              </option>
+            ))}
+          </select>
+        )}
+        {narrowed && (
+          <span className="text-gray-500">
+            {visible.length} match{visible.length === 1 ? '' : 'es'}
+            <button
+              type="button"
+              onClick={() => {
+                setQuery('');
+                setFilter('all');
+                setChainPick('');
+              }}
+              className="ml-2 text-gray-400 underline underline-offset-2 hover:text-white"
+            >
+              clear
+            </button>
+          </span>
+        )}
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-gray-500">
             <tr>
-              <th className="py-2 pr-4 font-medium">{kind === 'nft' ? 'Collection' : 'Token'}</th>
-              <th className="py-2 pr-4 text-right font-medium">Bought ({qtyUnit})</th>
-              <th className="py-2 pr-4 text-right font-medium">Spent</th>
-              <th className="py-2 pr-4 text-right font-medium">Sold ({qtyUnit})</th>
-              <th className="py-2 pr-4 text-right font-medium">Sold for</th>
-              <th
-                className="py-2 pr-4 text-right font-medium"
+              <SortTh id="name" sort={sort} onSort={onSort} className="pr-4">
+                {kind === 'nft' ? 'Collection' : 'Token'}
+              </SortTh>
+              <SortTh id="bought" sort={sort} onSort={onSort} className="pr-4 text-right">
+                Bought ({qtyUnit})
+              </SortTh>
+              <SortTh id="spent" sort={sort} onSort={onSort} className="pr-4 text-right">
+                Spent
+              </SortTh>
+              <SortTh id="sold" sort={sort} onSort={onSort} className="pr-4 text-right">
+                Sold ({qtyUnit})
+              </SortTh>
+              <SortTh id="proceeds" sort={sort} onSort={onSort} className="pr-4 text-right">
+                Sold for
+              </SortTh>
+              <SortTh
+                id="pnl"
+                sort={sort}
+                onSort={onSort}
+                className="pr-4 text-right"
                 title="Sale proceeds (after marketplace fees and royalties) minus what you paid"
               >
                 Realized P/L
-              </th>
-              <th
-                className="py-2 pr-4 text-right font-medium"
+              </SortTh>
+              <SortTh
+                id="pnlAfterGas"
+                sort={sort}
+                onSort={onSort}
+                className="pr-4 text-right"
                 title="Also subtracts gas paid to buy or mint what you sold, and gas paid to sell it"
               >
                 P/L after gas
-              </th>
-              <th className="py-2 text-right font-medium">Still held</th>
+              </SortTh>
+              <SortTh
+                id="held"
+                sort={sort}
+                onSort={onSort}
+                className="text-right"
+                title="Sorts by the cost of what you still hold"
+              >
+                Still held
+              </SortTh>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800/70">
@@ -1050,7 +1274,9 @@ function PositionsTable({
             {visible.length === 0 && (
               <tr>
                 <td colSpan={8} className="py-6 text-center text-gray-500">
-                  No {kind === 'nft' ? 'NFT' : 'token'} buys or sales found.
+                  {narrowed
+                    ? `No ${kind === 'nft' ? 'collections' : 'tokens'} match.`
+                    : `No ${kind === 'nft' ? 'NFT' : 'token'} buys or sales found.`}
                 </td>
               </tr>
             )}
