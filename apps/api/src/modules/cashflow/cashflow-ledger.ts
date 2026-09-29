@@ -8,6 +8,7 @@ import type {
   CashflowExchangeSource,
   CashflowExchangeSummary,
   CashflowHiddenAsset,
+  CashflowLinkIssue,
   CashflowLinkSource,
   CashflowMonth,
   CashflowNftAcquiredVia,
@@ -569,6 +570,30 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     input.rejectedLinks ?? [],
     input.crossChainPayees ?? new Set(),
   );
+  // Links you made that couldn't be applied — say why, instead of silently ignoring them.
+  const linkIssues: CashflowLinkIssue[] = [];
+  {
+    const byKey = new Map(ordered.map((g) => [txKey(g.chain, g.txHash), g]));
+    const inUse = (g: TxGroup) => bridgeRoles.has(g) || fundedFrom.has(g);
+    for (const l of input.explicitLinks ?? []) {
+      if (l.source !== 'manual') continue;
+      const a = byKey.get(txKey(l.fromChain, l.fromTxHash));
+      const b = byKey.get(txKey(l.toChain, l.toTxHash));
+      const pair = { fromChain: l.fromChain, fromTxHash: l.fromTxHash, toChain: l.toChain, toTxHash: l.toTxHash };
+      if (!a || !b) {
+        linkIssues.push({ ...pair, reason: 'not_found', missing: !a && !b ? 'both' : !a ? 'from' : 'to' });
+      } else if (!inUse(a) || !inUse(b)) {
+        const fromKind = txShape(analyses.get(a)!);
+        const toKind = txShape(analyses.get(b)!);
+        const kinds = new Set([fromKind, toKind]);
+        // The right shapes, so one side must already belong to another link.
+        const fits =
+          kinds.size === 2 &&
+          ((kinds.has('payment') && kinds.has('arrival')) || (kinds.has('receipt') && kinds.has('departure')));
+        linkIssues.push({ ...pair, reason: fits ? 'already_linked' : 'not_a_trade', fromKind, toKind });
+      }
+    }
+  }
   for (const [dest, role] of fundedFrom) {
     // Book the money as if it moved in the asset tx, so the purchase carries
     // it as its cost, or the sale as its proceeds (the money tx books nothing).
@@ -1552,6 +1577,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     txNotes: [],
     lostTxs: [],
     hiddenAssets: hiddenAssets.sort((a, b) => a.name.localeCompare(b.name)),
+    linkIssues,
     shownAssets: [],
     fees: [...feesByChain.values()].sort((a, b) => b.feesUsd - a.feesUsd),
     ownWalletTransfers: ownTransfers,
@@ -1881,6 +1907,16 @@ export function matchBridges(
  * same chain within a few days. Returns asset tx → role of its money tx (also
  * added to `roles`, so the money tx isn't counted as spending or income too).
  */
+/** What a tx looks like to the linker: which side of a trade (or bridge) it could be. */
+function txShape(a: TxAnalysis): CashflowLinkIssue['fromKind'] {
+  const money = a.pricedIn.length > 0 || a.pricedOut.length > 0;
+  const assets = a.unIn.length > 0 || a.unOut.length > 0;
+  if (money && assets) return 'trade';
+  if (!money && !assets) return 'nothing';
+  if (money) return a.pricedOut.length > 0 && a.pricedIn.length === 0 ? 'payment' : a.pricedIn.length > 0 && a.pricedOut.length === 0 ? 'receipt' : 'money_both_ways';
+  return a.unIn.length > 0 && a.unOut.length === 0 ? 'arrival' : a.unOut.length > 0 && a.unIn.length === 0 ? 'departure' : 'swap';
+}
+
 export function matchLinkedTrades(
   ordered: TxGroup[],
   analyses: Map<TxGroup, TxAnalysis>,

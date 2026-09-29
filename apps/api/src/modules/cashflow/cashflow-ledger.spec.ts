@@ -1105,6 +1105,69 @@ describe('presale: paid one wallet, tokens airdropped later from another', () =>
   });
 });
 
+describe("links that can't be applied", () => {
+  const PRESALE = '0xp4e5a1e000000000000000000000000000000007';
+  const DIST = '0xd15t000000000000000000000000000000000008';
+  const movements = [
+    mv('0xpay', '2024-01-10T00:00:00Z', 'out', ETH, 0.5, PRESALE),
+    mv('0xpay2', '2024-01-11T00:00:00Z', 'out', ETH, 0.1, FRIEND),
+    mv('0xdrop', '2024-02-15T00:00:00Z', 'in', PEPE, 600_000, DIST),
+  ];
+  const link = (from: string, to: string) => ({ fromChain: 'ethereum', fromTxHash: from, toChain: 'ethereum', toTxHash: to, source: 'manual' as const });
+  const run = (...links: ReturnType<typeof link>[]) =>
+    buildCashflowReport({
+      movements,
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      explicitLinks: links,
+    });
+
+  it('reports nothing for a link that applied', () => {
+    expect(run(link('0xpay', '0xdrop')).linkIssues).toEqual([]);
+  });
+
+  it('says which transaction is missing from the scanned history', () => {
+    expect(run(link('0xnotmine', '0xdrop')).linkIssues).toEqual([
+      expect.objectContaining({ fromTxHash: '0xnotmine', reason: 'not_found', missing: 'from' }),
+    ]);
+  });
+
+  it('says when one side already belongs to another link', () => {
+    const BASE_ETH: LedgerAsset = { ...ETH, key: 'base:native', chain: 'base' };
+    const r = buildCashflowReport({
+      movements: [
+        ...movements,
+        // The same ETH, linked by hand as a bridge to Base...
+        mv('0xarrive', '2024-01-10T00:05:00Z', 'in', BASE_ETH, 0.499, '0xso1ver', { chain: 'base' }),
+      ],
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      explicitLinks: [
+        { fromChain: 'ethereum', fromTxHash: '0xpay', toChain: 'base', toTxHash: '0xarrive', source: 'manual' },
+        // ...and then as the presale payment too.
+        link('0xpay', '0xdrop'),
+      ],
+    });
+    expect(r.linkIssues).toEqual([
+      expect.objectContaining({ toTxHash: '0xdrop', reason: 'already_linked', fromKind: 'payment', toKind: 'arrival' }),
+    ]);
+  });
+
+  it('says why two transactions found together are not a trade', () => {
+    expect(run(link('0xpay', '0xpay2')).linkIssues).toEqual([
+      expect.objectContaining({ reason: 'not_a_trade', fromKind: 'payment', toKind: 'payment' }),
+    ]);
+  });
+});
+
 describe('OTC deals (money and NFTs sent as separate transfers)', () => {
   const SELLER = '0xse11e40000000000000000000000000000000005';
   const BUYER = '0xb4ye400000000000000000000000000000000006';

@@ -253,6 +253,35 @@ export interface CashflowContactLabel {
   label: string;
 }
 
+/** A link you made that the report couldn't apply, and why. */
+export interface CashflowLinkIssue {
+  fromChain: string;
+  fromTxHash: string;
+  toChain: string;
+  toTxHash: string;
+  /**
+   * not_found: a tx isn't in the scanned history of your wallets (in this view);
+   * not_a_trade: both were found, but together they aren't a payment + what it
+   * paid for (or a sale + its proceeds, or one move between your wallets);
+   * already_linked: they fit, but one is already part of another link.
+   */
+  reason: 'not_found' | 'not_a_trade' | 'already_linked';
+  missing?: 'from' | 'to' | 'both';
+  /** For not_a_trade: what each side looks like. */
+  fromKind?: CashflowTxShape;
+  toKind?: CashflowTxShape;
+}
+
+export type CashflowTxShape =
+  | 'payment'
+  | 'receipt'
+  | 'money_both_ways'
+  | 'arrival'
+  | 'departure'
+  | 'swap'
+  | 'trade'
+  | 'nothing';
+
 /** A token or collection left out of the report: spam by its name, or hidden by you. */
 export interface CashflowHiddenAsset {
   /** `chain:contract` (EVM lowercased; Solana mint or collection). */
@@ -411,6 +440,8 @@ export interface CashflowReport {
   contacts: CashflowContact[];
   contactLabels: CashflowContactLabel[];
   txNotes: CashflowTxNote[];
+  /** Links you made that couldn't be applied. */
+  linkIssues: CashflowLinkIssue[];
   /** Tokens/collections left out of the report (spam, or hidden by you). */
   hiddenAssets: CashflowHiddenAsset[];
   /** Keys you marked "not spam" (kept although the name looks like spam). */
