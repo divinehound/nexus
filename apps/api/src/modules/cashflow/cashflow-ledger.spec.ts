@@ -1547,6 +1547,20 @@ describe('one wallet in view', () => {
   });
 });
 
+describe('transfers beyond the 250 listed addresses', () => {
+  it('keeps them in otherTransfers, so a list of every transfer is complete', () => {
+    const movements = Array.from({ length: 260 }, (_, i) =>
+      mv(`0xt${i}`, '2024-01-05T00:00:00Z', 'in', USDC, 1000 - i, `0xpayer${i}`),
+    );
+    const r = build(movements);
+    expect(r.counterparties).toHaveLength(250);
+    expect(r.otherTransfers).toHaveLength(10);
+    expect(r.otherTransfers![0]).toMatchObject({ direction: 'in', address: expect.stringMatching(/^0xpayer25\d$/) });
+    const listed = r.counterparties.reduce((n, c) => n + c.transfers.length, 0);
+    expect(listed + r.otherTransfers!.length).toBe(260);
+  });
+});
+
 describe('floating-point dust', () => {
   it('sells a whole holding even when the amounts differ in the last float bits', () => {
     // 66,290.994856638 bought; sold as 66,224.703861782 + 66.290994856 (not exactly equal in floats).

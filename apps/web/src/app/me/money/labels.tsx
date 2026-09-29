@@ -408,15 +408,18 @@ export function TransfersTable({
   rows,
   report,
   showAddress,
+  presorted,
 }: {
   rows: TransferRow[];
   report: CashflowReport;
   showAddress?: boolean;
+  /** Keep the rows' order instead of newest first. */
+  presorted?: boolean;
 }) {
   const [limit, setLimit] = useState(50);
   // Selected transfers (by tx — a name is per transaction), for naming several at once.
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const sorted = [...rows].sort((a, b) => b.at.localeCompare(a.at));
+  const sorted = presorted ? rows : [...rows].sort((a, b) => b.at.localeCompare(a.at));
   const notes = notesByTx(report);
   const shown = sorted.slice(0, limit);
   const shownKeys = [...new Set(shown.map((t) => flagKey(t.chain, t.txHash)))];

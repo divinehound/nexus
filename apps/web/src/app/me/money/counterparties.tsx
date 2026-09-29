@@ -22,8 +22,10 @@ import {
   contactMenuItems,
   findContactLabel,
   type MenuItem,
+  notesByTx,
   type TransferRow,
 } from './labels';
+import { flagKey } from './flags';
 import { ExplorerIcon, Stat } from './ui';
 
 const SOURCE_LABELS = {
@@ -40,14 +42,70 @@ export function CounterpartiesTable({ report }: { report: CashflowReport }) {
   const deposited = report.exchanges.reduce((s, e) => s + e.withdrawnUsd, 0);
   const [openExchange, setOpenExchange] = useState<string | null>(null);
   const allTransfers = useMemo<TransferRow[]>(
-    () =>
-      report.counterparties.flatMap((c) => c.transfers.map((t) => ({ ...t, address: c.address }))),
-    [report.counterparties],
+    () => [
+      ...report.counterparties.flatMap((c) =>
+        c.transfers.map((t) => ({ ...t, address: c.address })),
+      ),
+      ...(report.otherTransfers ?? []),
+    ],
+    [report.counterparties, report.otherTransfers],
   );
+  const [view, setView] = useState<'grouped' | 'dated'>(() => {
+    try {
+      return localStorage.getItem(VIEW_KEY) === 'dated' ? 'dated' : 'grouped';
+    } catch {
+      return 'grouped';
+    }
+  });
+  const pickView = (v: 'grouped' | 'dated') => {
+    setView(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      // Remembering the choice is a nicety.
+    }
+  };
+
+  const viewToggle = (
+    <div className="flex gap-1 text-xs" role="group" aria-label="View">
+      {(
+        [
+          ['grouped', 'By person & address'],
+          ['dated', 'Every transfer by date'],
+        ] as const
+      ).map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          aria-pressed={view === id}
+          onClick={() => pickView(id)}
+          className={cn(
+            'rounded-md px-2 py-1',
+            view === id
+              ? 'bg-purple-600/30 text-purple-200'
+              : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200',
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (view === 'dated') {
+    return (
+      <div className="space-y-4">
+        <ContactNameOptions report={report} />
+        {viewToggle}
+        <AllTransfers report={report} transfers={allTransfers} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <ContactNameOptions report={report} />
+      {viewToggle}
       <PeopleTable report={report} transfers={allTransfers} />
 
       <div>
@@ -165,6 +223,175 @@ export function CounterpartiesTable({ report }: { report: CashflowReport }) {
     </div>
   );
 }
+
+const VIEW_KEY = 'money.transfers.view';
+
+type DirFilter = 'all' | 'in' | 'out';
+type KindFilter = 'all' | 'exchange' | 'wallet' | 'named' | 'unnamed';
+type TransferSort = 'newest' | 'oldest' | 'largest' | 'smallest';
+const KIND_FILTERS: Array<[KindFilter, string]> = [
+  ['all', 'All'],
+  ['exchange', 'Exchanges'],
+  ['wallet', 'Other wallets'],
+  ['named', 'Named'],
+  ['unnamed', 'Not named'],
+];
+
+/** Every transfer in one list — filter, search and sort them, with totals for what's shown. */
+function AllTransfers({ report, transfers }: { report: CashflowReport; transfers: TransferRow[] }) {
+  const [query, setQuery] = useState('');
+  const [dir, setDir] = useState<DirFilter>('all');
+  const [kind, setKind] = useState<KindFilter>('all');
+  const [chain, setChain] = useState('');
+  const [sort, setSort] = useState<TransferSort>('newest');
+  // Dust (address-poisoning spam, rounding leftovers) buries the real transfers.
+  const [hideSmall, setHideSmall] = useState(true);
+  const notes = useMemo(() => notesByTx(report), [report]);
+  const chains = useMemo(() => [...new Set(transfers.map((t) => t.chain))].sort(), [transfers]);
+
+  const { rows, small } = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let small = 0;
+    const list = transfers.filter((t) => {
+      if (dir !== 'all' && t.direction !== dir) return false;
+      if (kind === 'exchange' && !t.exchange) return false;
+      if (kind === 'wallet' && t.exchange) return false;
+      if (kind === 'named' && !t.contact) return false;
+      if (kind === 'unnamed' && t.contact) return false;
+      if (chain && t.chain !== chain) return false;
+      if (q) {
+        const note = notes.get(flagKey(t.chain, t.txHash))?.note ?? '';
+        const hay = [
+          t.address,
+          t.txHash,
+          t.contact,
+          t.exchange,
+          t.symbol,
+          note,
+          CHAIN_LABELS[t.chain],
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      if (hideSmall && t.usd < SMALL_USD) {
+        small++;
+        return false;
+      }
+      return true;
+    });
+    const by: Record<TransferSort, (a: TransferRow, b: TransferRow) => number> = {
+      newest: (a, b) => b.at.localeCompare(a.at),
+      oldest: (a, b) => a.at.localeCompare(b.at),
+      largest: (a, b) => b.usd - a.usd || b.at.localeCompare(a.at),
+      smallest: (a, b) => a.usd - b.usd || b.at.localeCompare(a.at),
+    };
+    return { rows: list.sort(by[sort]), small };
+  }, [transfers, query, dir, kind, chain, sort, hideSmall, notes]);
+
+  const inUsd = rows.filter((t) => t.direction === 'in').reduce((s, t) => s + t.usd, 0);
+  const outUsd = rows.filter((t) => t.direction === 'out').reduce((s, t) => s + t.usd, 0);
+  const chip = (active: boolean) =>
+    cn(
+      'rounded-md px-2 py-1',
+      active
+        ? 'bg-purple-600/30 text-purple-200'
+        : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200',
+    );
+
+  return (
+    <div>
+      <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Stat label="Transfers shown" value={rows.length.toLocaleString()} />
+        <Stat label="Received" value={usd(inUsd)} swatch={IN_COLOR} />
+        <Stat label="Sent" value={usd(outUsd)} swatch={OUT_COLOR} />
+        <Stat label="Net" value={usdSigned(inUsd - outUsd)} valueClass={pnlClass(inUsd - outUsd)} />
+      </div>
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search address, name, exchange, note, tx…"
+          aria-label="Search transfers"
+          className="w-full rounded-md border border-gray-700 bg-gray-900 px-2.5 py-1.5 text-sm text-gray-200 placeholder:text-gray-500 focus:border-purple-500 focus:outline-none sm:w-72"
+        />
+        <div className="flex gap-1" role="group" aria-label="Direction">
+          {(
+            [
+              ['all', 'In & out'],
+              ['in', 'Received'],
+              ['out', 'Sent'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={dir === id}
+              onClick={() => setDir(id)}
+              className={chip(dir === id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Kind">
+          {KIND_FILTERS.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={kind === id}
+              onClick={() => setKind(id)}
+              className={chip(kind === id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {chains.length > 1 && (
+          <select
+            value={chain}
+            onChange={(e) => setChain(e.target.value)}
+            aria-label="Chain"
+            className="rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-gray-200"
+          >
+            <option value="">All chains</option>
+            {chains.map((c) => (
+              <option key={c} value={c}>
+                {CHAIN_LABELS[c] ?? c}
+              </option>
+            ))}
+          </select>
+        )}
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as TransferSort)}
+          aria-label="Sort"
+          className="rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-gray-200"
+        >
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="largest">Largest first</option>
+          <option value="smallest">Smallest first</option>
+        </select>
+        <label className="inline-flex items-center gap-1.5 text-gray-400">
+          <input
+            type="checkbox"
+            checked={hideSmall}
+            onChange={(e) => setHideSmall(e.target.checked)}
+          />
+          Hide under {usd(SMALL_USD)}
+          {hideSmall && small > 0 && <span className="text-gray-500">({small} hidden)</span>}
+        </label>
+      </div>
+      <TransfersTable rows={rows} report={report} showAddress presorted />
+    </div>
+  );
+}
+
+/** Transfers worth less than this are dust — hidden unless asked. */
+const SMALL_USD = 1;
 
 /** An address that can carry a person's name: not unknown, not an exchange's shared public wallet. */
 const isNameable = (c: CashflowCounterparty) =>

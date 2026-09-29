@@ -450,6 +450,11 @@ export interface CashflowReport {
   collections: CashflowPosition[];
   tokens: CashflowPosition[];
   counterparties: CashflowCounterparty[];
+  /**
+   * Transfers with addresses left out of `counterparties` (it keeps the
+   * biggest 250), newest first — so a list of every transfer is complete.
+   */
+  otherTransfers?: Array<CashflowCounterpartyTransfer & { address: string }>;
   /** Totals per person you named, across all their addresses. */
   contacts: CashflowContact[];
   contactLabels: CashflowContactLabel[];

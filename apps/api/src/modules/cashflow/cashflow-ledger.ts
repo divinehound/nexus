@@ -1686,6 +1686,20 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
   const limit = input.activityLimit ?? 5000;
   activity.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
+  // The biggest 250, plus any with a named person (their transfers make up the per-person view).
+  const ranked = [...counterparties.values()].sort(
+    (a, b) => b.sentUsd + b.receivedUsd - (a.sentUsd + a.receivedUsd),
+  );
+  const listedCounterparties = ranked.filter(
+    (c, i) => i < 250 || c.contact || c.transfers.some((t) => t.contact),
+  );
+  const listed = new Set(listedCounterparties);
+  const otherTransfers = ranked
+    .filter((c) => !listed.has(c))
+    .flatMap((c) => c.transfers.map((t) => ({ ...t, address: c.address })))
+    .sort((a, b) => b.at.localeCompare(a.at))
+    .slice(0, MAX_OTHER_TRANSFERS);
+
   return {
     generatedAt: input.now.toISOString(),
     wallets: input.wallets,
@@ -1714,11 +1728,8 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     months: monthRows,
     collections,
     tokens,
-    // The biggest 250, plus any with a named person (their transfers make up the per-person view).
-    counterparties: [...counterparties.values()]
-      .sort((a, b) => b.sentUsd + b.receivedUsd - (a.sentUsd + a.receivedUsd))
-      .filter((c, i) => i < 250 || c.contact || c.transfers.some((t) => t.contact))
-      .map((c) => ({ ...c, transfers: c.transfers.reverse() })),
+    counterparties: listedCounterparties.map((c) => ({ ...c, transfers: c.transfers.reverse() })),
+    otherTransfers,
     contacts: [...contacts.values()].sort(
       (a, b) => b.sentUsd + b.receivedUsd - (a.sentUsd + a.receivedUsd),
     ),
@@ -2323,6 +2334,9 @@ const CHAIN_NAMES: Record<string, string> = {
   solana: 'Solana',
 };
 const chainName = (chain: string) => CHAIN_NAMES[chain] ?? chain;
+
+/** Transfers with the long tail of small addresses kept in the report (newest first). */
+const MAX_OTHER_TRANSFERS = 5000;
 
 /** Keeps very large collections from bloating the report; newest trips win. */
 const MAX_ITEMS_PER_COLLECTION = 1000;
