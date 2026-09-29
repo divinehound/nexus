@@ -142,6 +142,8 @@ export interface BuildReportInput {
    * one out of everything, 'shown' keeps one the spam check would hide.
    */
   assetPrefs?: Map<string, 'hidden' | 'shown'>;
+  /** Asset keys of collections NEXUS has flagged as spam (and not allowlisted). */
+  platformSpam?: Set<string>;
 }
 
 /**
@@ -504,7 +506,16 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     if (seenAssets.has(a.key) || a.price || a.kind === 'native') continue;
     seenAssets.add(a.key);
     const pref = input.assetPrefs?.get(a.key);
-    const reason = pref === 'hidden' ? 'hidden' : pref !== 'shown' && looksLikeSpam(a) ? 'spam' : null;
+    const reason =
+      pref === 'hidden'
+        ? 'hidden'
+        : pref === 'shown'
+          ? null
+          : input.platformSpam?.has(a.key)
+            ? 'flagged'
+            : looksLikeSpam(a)
+              ? 'spam'
+              : null;
     if (!reason) continue;
     hiddenKeys.add(a.key);
     hiddenAssets.push({ key: a.key, chain: a.chain, kind: a.kind === 'nft' ? 'nft' : 'fungible', name: a.name, symbol: a.symbol, reason });

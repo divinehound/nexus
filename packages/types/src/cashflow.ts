@@ -261,7 +261,8 @@ export interface CashflowHiddenAsset {
   kind: 'nft' | 'fungible';
   name: string;
   symbol: string | null;
-  reason: 'spam' | 'hidden';
+  /** flagged = NEXUS marked the collection spam; spam = its name looks like spam; hidden = you hid it. */
+  reason: 'flagged' | 'spam' | 'hidden';
 }
 
 /** Your own note on a transaction. */

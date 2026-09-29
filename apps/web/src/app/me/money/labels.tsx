@@ -727,7 +727,7 @@ export function AssetMenu({ report, assetKey }: { report: CashflowReport; assetK
     {
       label: 'Hide — spam or not mine',
       title:
-        'Leave it out of P/L, spending and holdings. You can bring it back from the hidden list.',
+        'Leave it out of P/L, spending and holdings (for a collection NEXUS tracks, this also reports it as spam for review). You can bring it back from the hidden list.',
       onSelect: () =>
         void run('Hidden — left out of the report', (tk, view) =>
           setCashflowAssetPref(tk, { assetKey, pref: 'hidden' }, view),
@@ -748,6 +748,12 @@ export function AssetMenu({ report, assetKey }: { report: CashflowReport; assetK
   return <RowMenu items={items} label="Token actions" />;
 }
 
+const HIDDEN_REASONS = {
+  flagged: 'flagged as spam by NEXUS',
+  spam: 'looks like spam (link in its name)',
+  hidden: 'hidden by you',
+} as const;
+
 /** Tokens/collections left out of the report, with a way to bring each back. */
 export function HiddenAssets({
   report,
@@ -760,7 +766,7 @@ export function HiddenAssets({
   const [open, setOpen] = useState(false);
   const hidden = report.hiddenAssets.filter((h) => h.kind === kind);
   if (hidden.length === 0) return null;
-  const spam = hidden.filter((h) => h.reason === 'spam').length;
+  const spam = hidden.filter((h) => h.reason !== 'hidden').length;
   return (
     <div className="mt-3 text-xs">
       <button
@@ -780,24 +786,24 @@ export function HiddenAssets({
                 {h.name}
               </span>
               <span className="text-gray-500">{CHAIN_LABELS[h.chain] ?? h.chain}</span>
-              <span className={h.reason === 'spam' ? 'text-amber-300/90' : 'text-gray-500'}>
-                {h.reason === 'spam' ? 'looks like spam (link in its name)' : 'hidden by you'}
+              <span className={h.reason === 'hidden' ? 'text-gray-500' : 'text-amber-300/90'}>
+                {HIDDEN_REASONS[h.reason]}
               </span>
               <button
                 type="button"
                 disabled={busy}
                 onClick={() =>
-                  void run(h.reason === 'spam' ? 'Kept — not spam' : 'Unhidden', (tk, view) =>
+                  void run(h.reason === 'hidden' ? 'Unhidden' : 'Kept — not spam', (tk, view) =>
                     setCashflowAssetPref(
                       tk,
-                      { assetKey: h.key, pref: h.reason === 'spam' ? 'shown' : null },
+                      { assetKey: h.key, pref: h.reason === 'hidden' ? null : 'shown' },
                       view,
                     ),
                   )
                 }
                 className="text-purple-300 hover:text-purple-200 disabled:opacity-50"
               >
-                {h.reason === 'spam' ? 'Not spam' : 'Unhide'}
+                {h.reason === 'hidden' ? 'Unhide' : 'Not spam'}
               </button>
             </li>
           ))}

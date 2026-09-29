@@ -13,7 +13,10 @@ import {
   cashflowTxLinks,
   cashflowTxNotes,
   cashflowWalletChains,
+  chainEnum,
   collections,
+  spamAllowlist,
+  spamReports,
   wallets,
   watchedWallets,
   type Database,
@@ -179,6 +182,8 @@ export interface FlagInput {
 }
 
 export const ALL_CHAINS = [...EVM_CHAINS, 'solana'];
+/** Chains NEXUS tracks collections (and their spam flags) on. */
+const COLLECTION_CHAINS = new Set<string>(chainEnum.enumValues);
 /** A scan whose instance hasn't checked in for this long is treated as abandoned (e.g. a deploy restarted it). */
 const HEARTBEAT_STALE_MS = 90_000;
 const HEARTBEAT_EVERY_MS = 20_000;
@@ -614,7 +619,92 @@ export class CashflowService {
         .delete(cashflowAssetPrefs)
         .where(and(eq(cashflowAssetPrefs.userId, userId), eq(cashflowAssetPrefs.assetKey, assetKey)));
     }
+    if (input.pref) await this.reportSpam(userId, chain, contract, input.pref === 'hidden' ? 'spam' : 'not_spam');
     return this.rebuild(userId, view);
+  }
+
+  /**
+   * Hiding a collection NEXUS tracks (or keeping one as "not spam") files a
+   * spam report for the admins to review — it doesn't change the platform's
+   * verdict by itself. Once per user, collection and verdict.
+   */
+  private async reportSpam(userId: string, chain: string, contract: string, reportType: 'spam' | 'not_spam') {
+    if (!COLLECTION_CHAINS.has(chain)) return;
+    try {
+      const [collection] = await this.db
+        .select({ id: collections.id })
+        .from(collections)
+        .where(
+          and(
+            sql`${collections.chain} = ${chain}`,
+            chain === 'solana'
+              ? eq(collections.contractAddress, contract)
+              : sql`lower(${collections.contractAddress}) = ${contract.toLowerCase()}`,
+          ),
+        )
+        .limit(1);
+      if (!collection) return;
+      const [already] = await this.db
+        .select({ id: spamReports.id })
+        .from(spamReports)
+        .where(
+          and(
+            eq(spamReports.collectionId, collection.id),
+            eq(spamReports.reportedByUserId, userId),
+            eq(spamReports.reportType, reportType),
+          ),
+        )
+        .limit(1);
+      if (already) return;
+      await this.db.insert(spamReports).values({
+        collectionId: collection.id,
+        reportedByUserId: userId,
+        reportType,
+        reason: reportType === 'spam' ? 'hidden_in_money_dashboard' : 'kept_in_money_dashboard',
+      });
+    } catch (err) {
+      // A report is a courtesy to the admins; never fail the user's action over it.
+      this.logger.warn(`Spam report for ${chain}:${contract} failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * NFT collections in these movements that NEXUS has flagged as spam
+   * (Alchemy, an admin, or the community) and not allowlisted, by asset key.
+   */
+  private async platformSpamKeys(movements: LedgerMovement[]): Promise<Set<string>> {
+    const byChain = new Map<string, Set<string>>();
+    for (const m of movements) {
+      if (m.asset.kind !== 'nft' || !m.asset.contract || !COLLECTION_CHAINS.has(m.asset.chain)) continue;
+      const set = byChain.get(m.asset.chain) ?? new Set<string>();
+      set.add(m.asset.chain === 'solana' ? m.asset.contract : m.asset.contract.toLowerCase());
+      byChain.set(m.asset.chain, set);
+    }
+    const keys = new Set<string>();
+    for (const [chain, contracts] of byChain) {
+      const list = [...contracts];
+      try {
+        const rows = await this.db
+          .select({ contractAddress: collections.contractAddress })
+          .from(collections)
+          .leftJoin(spamAllowlist, eq(spamAllowlist.collectionId, collections.id))
+          .where(
+            and(
+              sql`${collections.chain} = ${chain}`,
+              eq(collections.isSpam, true),
+              sql`${spamAllowlist.id} is null`,
+              chain === 'solana'
+                ? inArray(collections.contractAddress, list)
+                : inArray(sql`lower(${collections.contractAddress})`, list),
+            ),
+          );
+        for (const r of rows)
+          keys.add(`${chain}:${chain === 'solana' ? r.contractAddress : r.contractAddress.toLowerCase()}`);
+      } catch (err) {
+        this.logger.warn(`Spam flag lookup failed on ${chain}: ${(err as Error).message}`);
+      }
+    }
+    return keys;
   }
 
   /** Mark what a transaction sent away as lost for good (a realized loss), or undo that. */
@@ -745,6 +835,7 @@ export class CashflowService {
     }
 
     const mine = (address: string) => !wallet || sameWallet(address, wallet);
+    const platformSpam = await this.platformSpamKeys(scan.movements);
     const report = buildCashflowReport({
       movements: scan.movements.filter((m) => mine(m.wallet)),
       fees: scan.fees.filter((f) => mine(f.wallet)),
@@ -760,6 +851,7 @@ export class CashflowService {
       addressContacts,
       txContacts,
       lostTxs: new Set(lostRows.map((r) => txKey(r.chain, r.txHash))),
+      platformSpam,
       assetPrefs: new Map(
         prefRows.map((r) => [r.assetKey, r.pref === 'shown' ? ('shown' as const) : ('hidden' as const)]),
       ),

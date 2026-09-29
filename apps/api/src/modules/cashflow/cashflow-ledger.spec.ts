@@ -1318,6 +1318,25 @@ describe('spam and hidden tokens', () => {
     expect(r.hiddenAssets).toEqual([expect.objectContaining({ key: SPAM.key, reason: 'spam', kind: 'fungible' })]);
   });
 
+  it('hides collections NEXUS flagged as spam, unless you keep them', () => {
+    const flagged = (prefs?: Map<string, 'hidden' | 'shown'>) =>
+      buildCashflowReport({
+        movements: [mv('0xnft', '2024-01-05T00:00:00Z', 'in', PUNKS, 1, '', { tokenId: '1' })],
+        fees: [],
+        wallets: [{ chain: 'ethereum', address: ME }],
+        pricer,
+        coverage: [],
+        notes: [],
+        now: new Date('2024-03-01T00:00:00Z'),
+        platformSpam: new Set([PUNKS.key]),
+        assetPrefs: prefs,
+      });
+    const r = flagged();
+    expect(r.collections).toEqual([]);
+    expect(r.hiddenAssets).toEqual([expect.objectContaining({ key: PUNKS.key, reason: 'flagged', kind: 'nft' })]);
+    expect(flagged(new Map([[PUNKS.key, 'shown']])).collections).toHaveLength(1);
+  });
+
   it('keeps it if you say it is not spam, and hides anything you hide', () => {
     expect(run(new Map([[SPAM.key, 'shown']])).tokens.map((t) => t.symbol).sort()).toEqual(['DOGE', 'SHIB']);
     const r = run(new Map([[DOGE.key, 'hidden']]));
