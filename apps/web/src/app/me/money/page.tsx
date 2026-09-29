@@ -712,6 +712,17 @@ function perSymbol(
   return parts.length ? parts.join(' · ') : '';
 }
 
+/** How much of a position was lost for good (marked lost, or written off while held). */
+function lostQty(r: CashflowPosition): number {
+  return r.kind === 'nft'
+    ? r.items.filter((i) => i.disposedVia === 'lost').reduce((n, i) => n + i.qty, 0)
+    : r.trades.filter((t) => t.kind === 'lost').reduce((n, t) => n + t.qty, 0);
+}
+/** Anything realized: a sale, or something lost for good. */
+const realizedAny = (r: CashflowPosition) =>
+  r.sellCount > 0 || r.realizedPnlUsd !== 0 || r.realizedPnlNative !== 0;
+const realizedUsdKnown = (r: CashflowPosition) => r.sellCountUsd > 0 || r.realizedPnlUsd !== 0;
+
 function PositionsTable({
   rows,
   kind,
@@ -755,7 +766,9 @@ function PositionsTable({
       priceMove: acc.priceMove + r.priceMoveUsd,
       gas: acc.gas + r.gasUsd,
       open: acc.open + r.openCostBasisUsd,
-      sellsUsd: acc.sellsUsd + r.sellCountUsd,
+      // Sales, or anything lost for good / written off: either way, realized.
+      sellsUsd:
+        acc.sellsUsd + r.sellCountUsd + (r.sellCountUsd === 0 && r.realizedPnlUsd !== 0 ? 1 : 0),
     }),
     {
       spent: 0,
@@ -947,6 +960,9 @@ function PositionsTable({
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums text-gray-300">
                     {r.qtySold ? qty(r.qtySold) : '—'}
+                    {lostQty(r) > 0 && (
+                      <div className="text-xs text-red-300/90">{qty(lostQty(r))} lost</div>
+                    )}
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums">
                     {r.proceedsUsd || r.proceedsNative ? (
@@ -960,10 +976,10 @@ function PositionsTable({
                     )}
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums">
-                    {r.sellCount > 0 ? (
+                    {realizedAny(r) ? (
                       <>
                         <Dual
-                          usd={r.sellCountUsd > 0 ? r.realizedPnlUsd : null}
+                          usd={realizedUsdKnown(r) ? r.realizedPnlUsd : null}
                           native={r.realizedPnlNative}
                           symbol={r.nativeSymbol}
                           signed
@@ -997,9 +1013,9 @@ function PositionsTable({
                     )}
                   </td>
                   <td className="py-2 pr-4 text-right tabular-nums">
-                    {r.sellCount > 0 ? (
+                    {realizedAny(r) ? (
                       <Dual
-                        usd={r.sellCountUsd > 0 ? r.realizedPnlAfterGasUsd : null}
+                        usd={realizedUsdKnown(r) ? r.realizedPnlAfterGasUsd : null}
                         native={r.realizedPnlAfterGasNative}
                         symbol={r.nativeSymbol}
                         signed
