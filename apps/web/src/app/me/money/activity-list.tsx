@@ -5,7 +5,9 @@ import type {
   CashflowActivity,
   CashflowActivityLeg,
   CashflowFlag,
+  CashflowLinkIssue,
   CashflowTxNote,
+  CashflowTxShape,
   CashflowReport,
   CashflowResponse,
   CashflowTxType,
@@ -641,6 +643,29 @@ function PartyNote({ a, report }: { a: CashflowActivity; report: CashflowReport 
   );
 }
 
+const SHAPES: Record<CashflowTxShape, string> = {
+  payment: 'a payment',
+  receipt: 'money received',
+  money_both_ways: 'money going both ways',
+  arrival: 'something arriving with no payment',
+  departure: 'something leaving with no payment',
+  swap: 'a swap',
+  trade: 'a trade that already has its money',
+  nothing: 'a transaction that moved nothing of yours',
+};
+
+/** Why a saved link wasn't applied, in plain words. */
+export function linkIssueMessage(i: CashflowLinkIssue): string {
+  if (i.reason === 'not_found')
+    return `Saved, but not applied: ${i.missing === 'both' ? 'neither transaction is' : "that transaction isn't"} in the scanned history of your linked wallets. It has to be one of your wallets' own transactions — if it was sent from another wallet, add that wallet (watch-only) first; if it's newer than your last scan, fetch new activity.`;
+  if (i.reason === 'already_linked')
+    return 'Saved, but not applied: one of these is already part of another link (a bridge, or another trade). Unlink that one first, then link these again.';
+  return `Saved, but not applied: that pairs ${SHAPES[i.fromKind ?? 'nothing']} with ${SHAPES[i.toKind ?? 'nothing']}. A link needs a payment and what it paid for (something arriving with no payment), or something sent and the money received for it.`;
+}
+
+/** Transfers smaller than this are hidden from the candidates unless asked for (dust, spam, rent). */
+const SMALL_USD = 5;
+
 const DAY_MS = 86_400_000;
 const LINK_RANGES = {
   week: { label: 'Within a week', ms: 7 * DAY_MS },
@@ -669,6 +694,7 @@ export function LinkPicker({
   // How far from this one to look — a presale can be paid weeks before the airdrop.
   const [range, setRange] = useState<keyof typeof LINK_RANGES>('week');
   const [query, setQuery] = useState('');
+  const [showSmall, setShowSmall] = useState(false);
 
   // Likely other halves in range (same person first, then closest in value,
   // then in time), listed by date.
@@ -707,6 +733,9 @@ export function LinkPicker({
                 ? dt > -10 * 60_000 && dt < span
                 : dt < 10 * 60_000 && dt > -span;
           if (!inRange) return false;
+          // Dust and spam crowd out the real candidates.
+          const assetTx = b.type === 'received_asset' || b.type === 'sent_asset';
+          if (!showSmall && !assetTx && moneyOf(b) < SMALL_USD) return false;
           const q = query.trim().toLowerCase();
           return (
             !q ||
@@ -721,14 +750,17 @@ export function LinkPicker({
         .sort(
           (x, y) =>
             Number(y.samePerson) - Number(x.samePerson) ||
-            Math.abs(1 - x.ratio) - Math.abs(1 - y.ratio) ||
+            // Nothing to compare against (an airdrop has no value): bigger payments first.
+            (value > 0
+              ? Math.abs(1 - x.ratio) - Math.abs(1 - y.ratio)
+              : moneyOf(y.b) - moneyOf(x.b)) ||
             Math.abs(x.dt) - Math.abs(y.dt),
         )
         .slice(0, range === 'week' ? 12 : 40)
         // The likeliest ones make the list; they're shown in date order.
         .sort((x, y) => x.dt - y.dt)
     );
-  }, [report, source, sourceIsOut, assetSource, range, query]);
+  }, [report, source, sourceIsOut, assetSource, range, query, showSmall]);
 
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const togglePick = (key: string) =>
@@ -769,6 +801,21 @@ export function LinkPicker({
           last = await addCashflowLink(token, { kind: 'link', ...pairFor(o) }, view);
         return last!;
       },
+      (response) => {
+        if (response.status !== 'ready') return null;
+        const key = (c1: string, h1: string, c2: string, h2: string) =>
+          `${c1}:${h1.toLowerCase()}>${c2}:${h2.toLowerCase()}`;
+        const pairs = new Set(
+          others.map((o) => {
+            const p = pairFor(o);
+            return key(p.fromChain, p.fromTxHash, p.toChain, p.toTxHash);
+          }),
+        );
+        const issue = response.report.linkIssues.find((i) =>
+          pairs.has(key(i.fromChain, i.fromTxHash, i.toChain, i.toTxHash)),
+        );
+        return issue ? linkIssueMessage(issue) : null;
+      },
     ).then((ok) => ok && onDone());
   };
 
@@ -806,6 +853,14 @@ export function LinkPicker({
           aria-label="Filter transactions"
           className="w-52 rounded-md border border-gray-700 bg-gray-900 px-2 py-0.5 text-gray-200"
         />
+        <label className="flex items-center gap-1.5 text-gray-400">
+          <input
+            type="checkbox"
+            checked={showSmall}
+            onChange={(e) => setShowSmall(e.target.checked)}
+          />
+          Include transfers under ${SMALL_USD}
+        </label>
       </div>
       {candidates.length > 0 ? (
         <>

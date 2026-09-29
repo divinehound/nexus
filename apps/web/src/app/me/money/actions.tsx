@@ -8,6 +8,8 @@ import type { CashflowView } from '@/lib/api';
 type Run = (
   label: string,
   fn: (token: string, view: CashflowView) => Promise<CashflowResponse>,
+  /** A problem to show instead of the success message (the change was still saved). */
+  warn?: (response: CashflowResponse) => string | null,
 ) => Promise<boolean>;
 
 const ActionsContext = createContext<{ run: Run; busy: boolean } | null>(null);
@@ -30,12 +32,15 @@ export function CashflowActionsProvider({
 }) {
   const [busy, setBusy] = useState(false);
   const run = useCallback<Run>(
-    async (label, fn) => {
+    async (label, fn, warn) => {
       if (!token) return false;
       setBusy(true);
       try {
-        onResponse(await fn(token, view));
-        toast.success(label);
+        const response = await fn(token, view);
+        onResponse(response);
+        const problem = warn?.(response);
+        if (problem) toast.warning(problem, { duration: 12_000 });
+        else toast.success(label);
         return true;
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Something went wrong');
