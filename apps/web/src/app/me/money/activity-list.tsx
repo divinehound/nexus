@@ -13,6 +13,7 @@ import type {
 import { addCashflowLink, removeCashflowContactLabel } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
 import { useCashflowActions } from './actions';
+import { ExplorerIcon } from './ui';
 import { FlagControl, flagKey, flagsByTx } from './flags';
 import {
   BulkNameBar,
@@ -620,6 +621,26 @@ function TxDetails({
 const moneyOf = (a: CashflowActivity) =>
   OUTGOING.includes(a.type) ? a.outUsd - a.feeUsd : a.inUsd;
 
+/** " to AbCd…x9JZ (Bob)" — who the other side of a candidate transaction was. */
+function PartyNote({ a, report }: { a: CashflowActivity; report: CashflowReport }) {
+  const party = a.counterparty;
+  if (!party || party === 'contract') return null;
+  const out = OUTGOING.includes(a.type) || a.type === 'sent_asset' || a.type === 'trade_payment';
+  const name =
+    findContactLabel(report, 'tx', a.chain, a.txHash)?.label ??
+    findContactLabel(report, 'address', a.chain, party)?.label ??
+    (a.exchange ? `${a.exchange}` : null);
+  return (
+    <span className="text-gray-400">
+      {out ? ' to ' : ' from '}
+      <span className="font-mono" title={party}>
+        {party.length > 16 ? truncateAddress(party) : party}
+      </span>
+      {name && <span className="text-sky-300/90"> ({name})</span>}
+    </span>
+  );
+}
+
 const DAY_MS = 86_400_000;
 const LINK_RANGES = {
   week: { label: 'Within a week', ms: 7 * DAY_MS },
@@ -689,6 +710,9 @@ export function LinkPicker({
           !q ||
           b.label.toLowerCase().includes(q) ||
           (b.counterparty ?? '').toLowerCase().includes(q) ||
+          (findContactLabel(report, 'address', b.chain, b.counterparty ?? '')?.label ?? '')
+            .toLowerCase()
+            .includes(q) ||
           b.txHash.toLowerCase().includes(q)
         );
       })
@@ -699,7 +723,7 @@ export function LinkPicker({
           Math.abs(x.dt) - Math.abs(y.dt),
       )
       .slice(0, range === 'week' ? 8 : 25);
-  }, [report.activity, source, sourceIsOut, assetSource, range, query]);
+  }, [report, source, sourceIsOut, assetSource, range, query]);
 
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const togglePick = (key: string) =>
@@ -795,8 +819,18 @@ export function LinkPicker({
                     <span className="min-w-0 flex-1 truncate text-gray-200">
                       <span className="text-gray-500">{CHAIN_LABELS[b.chain] ?? b.chain} · </span>
                       {b.label}
+                      <PartyNote a={b} report={report} />
                     </span>
-                    <span className="shrink-0 text-xs tabular-nums text-gray-400">
+                    {txExplorerUrl(b.chain, b.txHash) && (
+                      <ExplorerIcon
+                        url={txExplorerUrl(b.chain, b.txHash)!}
+                        label={`Open this transaction on ${explorerName(b.chain)}`}
+                      />
+                    )}
+                    <span
+                      className="shrink-0 text-xs tabular-nums text-gray-400"
+                      title={new Date(b.timestamp).toLocaleString()}
+                    >
                       {usd(moneyOf(b))} · {formatGap(dt)}
                     </span>
                   </label>
