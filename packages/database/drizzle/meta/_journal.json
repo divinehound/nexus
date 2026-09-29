@@ -239,6 +239,13 @@
       "when": 1790950000000,
       "tag": "0033_cashflow_lost_txs",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791050000000,
+      "tag": "0034_cashflow_asset_prefs",
+      "breakpoints": true
     }
   ]
 }

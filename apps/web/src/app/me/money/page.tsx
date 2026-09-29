@@ -21,6 +21,7 @@ import { CounterpartiesTable } from './counterparties';
 import { FlagsPanel } from './flags';
 import { ScanPanel } from './scan-panel';
 import { NftItemsTable } from './nft-items';
+import { AssetMenu, HiddenAssets } from './labels';
 import { TokenTradesTable } from './token-trades';
 import { AfterGas, Dual, ExplorerIcon, Stat } from './ui';
 import {
@@ -884,6 +885,7 @@ function PositionsTable({
                             </span>
                           </button>
                           <ContractLink chain={r.chain} contract={r.contract} />
+                          <AssetMenu report={report} assetKey={r.key} />
                         </div>
                         <button
                           type="button"
@@ -906,6 +908,7 @@ function PositionsTable({
                         <div className="flex items-center gap-1.5">
                           <span className="font-medium text-gray-200">{r.name}</span>
                           <ContractLink chain={r.chain} contract={r.contract} />
+                          <AssetMenu report={report} assetKey={r.key} />
                         </div>
                         <div className="text-xs text-gray-500">
                           {CHAIN_LABELS[r.chain] ?? r.chain}
@@ -1036,6 +1039,7 @@ function PositionsTable({
           (airdrops, free mints, spam)
         </button>
       )}
+      <HiddenAssets report={report} kind={kind} />
     </div>
   );
 }

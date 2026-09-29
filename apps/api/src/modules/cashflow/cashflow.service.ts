@@ -4,6 +4,7 @@ import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import {
   cashflowAddressTags,
+  cashflowAssetPrefs,
   cashflowContactLabels,
   cashflowFlags,
   cashflowLostTxs,
@@ -12,7 +13,10 @@ import {
   cashflowTxLinks,
   cashflowTxNotes,
   cashflowWalletChains,
+  chainEnum,
   collections,
+  spamAllowlist,
+  spamReports,
   wallets,
   watchedWallets,
   type Database,
@@ -159,6 +163,12 @@ export interface TxNoteInput {
   note: string;
 }
 
+export interface AssetPrefInput {
+  assetKey: string;
+  /** null clears your choice (back to the automatic spam check). */
+  pref: 'hidden' | 'shown' | null;
+}
+
 export interface LostInput {
   chain: string;
   txHash: string;
@@ -172,6 +182,8 @@ export interface FlagInput {
 }
 
 export const ALL_CHAINS = [...EVM_CHAINS, 'solana'];
+/** Chains NEXUS tracks collections (and their spam flags) on. */
+const COLLECTION_CHAINS = new Set<string>(chainEnum.enumValues);
 /** A scan whose instance hasn't checked in for this long is treated as abandoned (e.g. a deploy restarted it). */
 const HEARTBEAT_STALE_MS = 90_000;
 const HEARTBEAT_EVERY_MS = 20_000;
@@ -589,6 +601,112 @@ export class CashflowService {
     return this.rebuild(userId, view);
   }
 
+  /** Hide a token/collection from the report (spam, dust), keep one the spam check hid, or undo. */
+  async setAssetPref(userId: string, input: AssetPrefInput, view: ReportView = {}): Promise<CashflowResponse> {
+    const [chain, ...rest] = input.assetKey.split(':');
+    const contract = rest.join(':');
+    const assetKey = `${chain}:${chain === 'solana' ? contract : contract.toLowerCase()}`;
+    if (input.pref) {
+      await this.db
+        .insert(cashflowAssetPrefs)
+        .values({ userId, assetKey, pref: input.pref })
+        .onConflictDoUpdate({
+          target: [cashflowAssetPrefs.userId, cashflowAssetPrefs.assetKey],
+          set: { pref: input.pref },
+        });
+    } else {
+      await this.db
+        .delete(cashflowAssetPrefs)
+        .where(and(eq(cashflowAssetPrefs.userId, userId), eq(cashflowAssetPrefs.assetKey, assetKey)));
+    }
+    if (input.pref) await this.reportSpam(userId, chain, contract, input.pref === 'hidden' ? 'spam' : 'not_spam');
+    return this.rebuild(userId, view);
+  }
+
+  /**
+   * Hiding a collection NEXUS tracks (or keeping one as "not spam") files a
+   * spam report for the admins to review — it doesn't change the platform's
+   * verdict by itself. Once per user, collection and verdict.
+   */
+  private async reportSpam(userId: string, chain: string, contract: string, reportType: 'spam' | 'not_spam') {
+    if (!COLLECTION_CHAINS.has(chain)) return;
+    try {
+      const [collection] = await this.db
+        .select({ id: collections.id })
+        .from(collections)
+        .where(
+          and(
+            sql`${collections.chain} = ${chain}`,
+            chain === 'solana'
+              ? eq(collections.contractAddress, contract)
+              : sql`lower(${collections.contractAddress}) = ${contract.toLowerCase()}`,
+          ),
+        )
+        .limit(1);
+      if (!collection) return;
+      const [already] = await this.db
+        .select({ id: spamReports.id })
+        .from(spamReports)
+        .where(
+          and(
+            eq(spamReports.collectionId, collection.id),
+            eq(spamReports.reportedByUserId, userId),
+            eq(spamReports.reportType, reportType),
+          ),
+        )
+        .limit(1);
+      if (already) return;
+      await this.db.insert(spamReports).values({
+        collectionId: collection.id,
+        reportedByUserId: userId,
+        reportType,
+        reason: reportType === 'spam' ? 'hidden_in_money_dashboard' : 'kept_in_money_dashboard',
+      });
+    } catch (err) {
+      // A report is a courtesy to the admins; never fail the user's action over it.
+      this.logger.warn(`Spam report for ${chain}:${contract} failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * NFT collections in these movements that NEXUS has flagged as spam
+   * (Alchemy, an admin, or the community) and not allowlisted, by asset key.
+   */
+  private async platformSpamKeys(movements: LedgerMovement[]): Promise<Set<string>> {
+    const byChain = new Map<string, Set<string>>();
+    for (const m of movements) {
+      if (m.asset.kind !== 'nft' || !m.asset.contract || !COLLECTION_CHAINS.has(m.asset.chain)) continue;
+      const set = byChain.get(m.asset.chain) ?? new Set<string>();
+      set.add(m.asset.chain === 'solana' ? m.asset.contract : m.asset.contract.toLowerCase());
+      byChain.set(m.asset.chain, set);
+    }
+    const keys = new Set<string>();
+    for (const [chain, contracts] of byChain) {
+      const list = [...contracts];
+      try {
+        const rows = await this.db
+          .select({ contractAddress: collections.contractAddress })
+          .from(collections)
+          .leftJoin(spamAllowlist, eq(spamAllowlist.collectionId, collections.id))
+          .where(
+            and(
+              sql`${collections.chain} = ${chain}`,
+              eq(collections.isSpam, true),
+              sql`${spamAllowlist.id} is null`,
+              chain === 'solana'
+                ? inArray(collections.contractAddress, list)
+                : inArray(sql`lower(${collections.contractAddress})`, list),
+            ),
+          );
+        for (const r of rows)
+          keys.add(`${chain}:${chain === 'solana' ? r.contractAddress : r.contractAddress.toLowerCase()}`);
+      } catch (err) {
+        this.logger.warn(`Spam flag lookup failed on ${chain}: ${(err as Error).message}`);
+      }
+    }
+    return keys;
+  }
+
   /** Mark what a transaction sent away as lost for good (a realized loss), or undo that. */
   async setLost(userId: string, input: LostInput, view: ReportView = {}): Promise<CashflowResponse> {
     const txHash = input.chain === 'solana' ? input.txHash : input.txHash.toLowerCase();
@@ -646,13 +764,14 @@ export class CashflowService {
 
   private async buildFromScan(userId: string, scan: ScanData, view: ReportView = {}): Promise<CashflowReport> {
     const { wallet, chain } = view;
-    const [linkRows, tagRows, flagRows, labelRows, noteRows, lostRows] = await Promise.all([
+    const [linkRows, tagRows, flagRows, labelRows, noteRows, lostRows, prefRows] = await Promise.all([
       this.db.select().from(cashflowTxLinks).where(eq(cashflowTxLinks.userId, userId)),
       this.db.select().from(cashflowAddressTags).where(eq(cashflowAddressTags.userId, userId)),
       this.db.select().from(cashflowFlags).where(eq(cashflowFlags.userId, userId)),
       this.db.select().from(cashflowContactLabels).where(eq(cashflowContactLabels.userId, userId)),
       this.db.select().from(cashflowTxNotes).where(eq(cashflowTxNotes.userId, userId)),
       this.db.select().from(cashflowLostTxs).where(eq(cashflowLostTxs.userId, userId)),
+      this.db.select().from(cashflowAssetPrefs).where(eq(cashflowAssetPrefs.userId, userId)),
     ]);
     const contactLabels: CashflowContactLabel[] = labelRows.map((r) => ({
       id: r.id,
@@ -716,6 +835,7 @@ export class CashflowService {
     }
 
     const mine = (address: string) => !wallet || sameWallet(address, wallet);
+    const platformSpam = await this.platformSpamKeys(scan.movements);
     const report = buildCashflowReport({
       movements: scan.movements.filter((m) => mine(m.wallet)),
       fees: scan.fees.filter((f) => mine(f.wallet)),
@@ -731,6 +851,10 @@ export class CashflowService {
       addressContacts,
       txContacts,
       lostTxs: new Set(lostRows.map((r) => txKey(r.chain, r.txHash))),
+      platformSpam,
+      assetPrefs: new Map(
+        prefRows.map((r) => [r.assetKey, r.pref === 'shown' ? ('shown' as const) : ('hidden' as const)]),
+      ),
       chainScope: chain ? (c) => c === chain : undefined,
       crossChainPayees: new Set(RELAY_PAYEES.map((p) => addressIdentity(p.chain, p.address))),
     });
@@ -755,6 +879,7 @@ export class CashflowService {
     report.links = links;
     report.addressTags = addressTags;
     report.contactLabels = contactLabels;
+    report.shownAssets = prefRows.filter((r) => r.pref === 'shown').map((r) => r.assetKey);
     report.lostTxs = lostRows.map((r) => ({ id: r.id, chain: r.chain, txHash: r.txHash }));
     report.txNotes = noteRows.map(
       (r): CashflowTxNote => ({
