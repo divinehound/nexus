@@ -1161,6 +1161,28 @@ describe("links that can't be applied", () => {
     ]);
   });
 
+  it("applies the right link even when a wrong guess on the same airdrop doesn't fit", () => {
+    const BASE_ETH: LedgerAsset = { ...ETH, key: 'base:native', chain: 'base' };
+    const wrong = mv('0xwrong', '2024-01-12T00:00:00Z', 'in', BASE_ETH, 0.2, FRIEND, { chain: 'base' });
+    const r = buildCashflowReport({
+      movements: [...movements, wrong],
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      explicitLinks: [
+        { fromChain: 'base', fromTxHash: '0xwrong', toChain: 'ethereum', toTxHash: '0xdrop', source: 'manual' },
+        link('0xpay', '0xdrop'),
+      ],
+    });
+    expect(r.tokens.find((t) => t.symbol === 'PEPE')!.spentUsd).toBeCloseTo(1000);
+    expect(r.linkIssues).toEqual([
+      expect.objectContaining({ fromTxHash: '0xwrong', reason: 'not_a_trade', fromKind: 'receipt', toKind: 'arrival' }),
+    ]);
+  });
+
   it('says why two transactions found together are not a trade', () => {
     expect(run(link('0xpay', '0xpay2')).linkIssues).toEqual([
       expect.objectContaining({ reason: 'not_a_trade', fromKind: 'payment', toKind: 'payment' }),
