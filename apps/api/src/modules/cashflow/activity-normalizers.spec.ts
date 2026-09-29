@@ -206,6 +206,30 @@ describe('Solana history (Helius)', () => {
     expect(cursors).toEqual([null, sig(151), sig(51), sig(1)]);
   });
 
+  it("asks for token-account activity, so tokens another wallet sent in aren't missed", async () => {
+    const urls: string[] = [];
+    jest.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.helius.xyz') {
+        urls.push(url.toString());
+        // Signed and paid for by the sender; only the wallet's token account is touched.
+        return new Response(
+          JSON.stringify(
+            url.searchParams.get('before-signature')
+              ? []
+              : [tx(1, { tokenTransfers: [{ fromUserAccount: SELLER, toUserAccount: W, tokenAmount: 66291, mint: 'PoxMint', tokenStandard: 'Fungible' }] })],
+          ),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ result: [] }), { status: 200 });
+    });
+    const r = await new SolanaActivityFetcher('key').fetch(W, new Map());
+    expect(urls[0]).toContain('token-accounts=balanceChanged');
+    expect(r.movements).toEqual([expect.objectContaining({ direction: 'in', amount: 66291, counterparty: SELLER })]);
+    expect(r.fees).toEqual([]); // the sender paid the fee
+  });
+
   it('stops instead of re-reading the same page if the cursor is ignored', async () => {
     const page = Array.from({ length: 100 }, (_, i) => tx(100 - i));
     const cursors = mockHelius(() => page);

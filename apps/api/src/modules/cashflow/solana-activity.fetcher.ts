@@ -450,6 +450,9 @@ export class SolanaActivityFetcher {
       const url = new URL(`https://api.helius.xyz/v0/addresses/${address}/transactions`);
       url.searchParams.set('api-key', this.apiKey);
       url.searchParams.set('limit', '100');
+      // Tokens sent to the wallet land in its token accounts, not on its own
+      // address — without this, transfers in from other wallets are missed.
+      url.searchParams.set('token-accounts', 'balanceChanged');
       // Helius' pagination cursor is `before-signature` (a plain `before` is ignored,
       // which silently returns the newest page over and over).
       if (before) url.searchParams.set('before-signature', before);
