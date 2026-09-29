@@ -1875,7 +1875,17 @@ export function matchLinkedTrades(
   ) => {
     const legsOf = (g: TxGroup) => (trade === 'purchase' ? an(g).pricedOut : an(g).pricedIn);
     const legs = moneyTxs.flatMap(legsOf);
-    const weights = assetTxs.map((g) => Math.max(itemsIn(g, trade), 1));
+    // One token delivered in several parts (e.g. presale unlocks) splits by
+    // amount; NFTs, or a mix, by item count.
+    const assetLegs = (g: TxGroup) => (trade === 'purchase' ? an(g).unIn : an(g).unOut);
+    const keys = new Set(assetTxs.flatMap((g) => assetLegs(g).map((m) => m.asset.key)));
+    const oneToken =
+      keys.size === 1 && assetTxs.every((g) => assetLegs(g).every((m) => m.asset.kind !== 'nft'));
+    const weights = assetTxs.map((g) =>
+      oneToken
+        ? Math.max(assetLegs(g).reduce((n, m) => n + m.amount, 0), EPSILON)
+        : Math.max(itemsIn(g, trade), 1),
+    );
     const total = weights.reduce((a, b) => a + b, 0);
     const [moneyDir, assetDir] =
       trade === 'purchase' ? (['out', 'in'] as const) : (['in', 'out'] as const);

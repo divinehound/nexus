@@ -1056,6 +1056,48 @@ describe('cross-chain purchases (paid on one chain, delivered on another)', () =
   });
 });
 
+describe('presale: paid one wallet, tokens airdropped later from another', () => {
+  const PRESALE = '0xp4e5a1e000000000000000000000000000000007';
+  const DISTRIBUTOR = '0xd15t000000000000000000000000000000000008';
+  const movements = [
+    mv('0xpay', '2024-01-10T00:00:00Z', 'out', ETH, 0.5, PRESALE),
+    // Airdropped in two unlocks, weeks later, from a different address.
+    mv('0xdrop1', '2024-02-15T00:00:00Z', 'in', PEPE, 600_000, DISTRIBUTOR),
+    mv('0xdrop2', '2024-02-25T00:00:00Z', 'in', PEPE, 400_000, DISTRIBUTOR),
+  ];
+  const link = (to: string) => ({
+    fromChain: 'ethereum',
+    fromTxHash: '0xpay',
+    toChain: 'ethereum',
+    toTxHash: to,
+    source: 'manual' as const,
+  });
+
+  it('counts the presale payment as the cost of the tokens once linked', () => {
+    const r = buildCashflowReport({
+      movements,
+      fees: [],
+      wallets: [{ chain: 'ethereum', address: ME }],
+      pricer,
+      coverage: [],
+      notes: [],
+      now: new Date('2024-03-01T00:00:00Z'),
+      explicitLinks: [link('0xdrop1'), link('0xdrop2')],
+    });
+    const pepe = r.tokens.find((t) => t.symbol === 'PEPE')!;
+    expect(pepe.qtyHeld).toBe(1_000_000);
+    // 0.5 ETH at January's $2000 — the day it was paid.
+    expect(pepe.spentUsd).toBeCloseTo(1000);
+    expect(pepe.openCostBasisUsd).toBeCloseTo(1000);
+    expect(r.outByCategory.token_purchase).toBeCloseTo(1000);
+    expect(r.outByCategory.transfer_out).toBeUndefined();
+    expect(r.activity.find((a) => a.txHash === '0xpay')!.type).toBe('trade_payment');
+    // Split between the unlocks by amount: 60% / 40%.
+    expect(r.activity.find((a) => a.txHash === '0xdrop1')!.outUsd).toBeCloseTo(600);
+    expect(r.activity.find((a) => a.txHash === '0xdrop2')!.outUsd).toBeCloseTo(400);
+  });
+});
+
 describe('OTC deals (money and NFTs sent as separate transfers)', () => {
   const SELLER = '0xse11e40000000000000000000000000000000005';
   const BUYER = '0xb4ye400000000000000000000000000000000006';

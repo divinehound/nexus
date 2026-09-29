@@ -620,6 +620,15 @@ function TxDetails({
 const moneyOf = (a: CashflowActivity) =>
   OUTGOING.includes(a.type) ? a.outUsd - a.feeUsd : a.inUsd;
 
+const DAY_MS = 86_400_000;
+const LINK_RANGES = {
+  week: { label: 'Within a week', ms: 7 * DAY_MS },
+  month: { label: 'Within a month', ms: 31 * DAY_MS },
+  quarter: { label: 'Within 3 months', ms: 92 * DAY_MS },
+  year: { label: 'Within a year', ms: 366 * DAY_MS },
+  all: { label: 'Any time', ms: Number.POSITIVE_INFINITY },
+} as const;
+
 export function LinkPicker({
   source,
   report,
@@ -636,8 +645,11 @@ export function LinkPicker({
     assetSource ? source.chain : source.chain === 'solana' ? 'ethereum' : 'solana',
   );
   const [manualHash, setManualHash] = useState('');
+  // How far from this one to look — a presale can be paid weeks before the airdrop.
+  const [range, setRange] = useState<keyof typeof LINK_RANGES>('week');
+  const [query, setQuery] = useState('');
 
-  // Likely other halves within a week: same person first, then closest in value, then in time.
+  // Likely other halves in range: same person first, then closest in value, then in time.
   const candidates = useMemo(() => {
     // What the other half can be: money for assets and assets for money (a
     // trade — OTC or cross-chain), or money going the other way (a bridge).
@@ -662,22 +674,32 @@ export function LinkPicker({
         ratio: value > 0 ? moneyOf(b) / value : 0,
         samePerson: !!party && b.counterparty?.toLowerCase() === party,
       }))
-      .filter(({ b, dt }) =>
+      .filter(({ b, dt }) => {
+        const span = LINK_RANGES[range].ms;
         // Trades can come in either order; a bridge arrives after it leaves.
-        assetSource || b.type === 'received_asset' || b.type === 'sent_asset'
-          ? Math.abs(dt) < 7 * 86_400_000
-          : sourceIsOut
-            ? dt > -10 * 60_000 && dt < 7 * 86_400_000
-            : dt < 10 * 60_000 && dt > -7 * 86_400_000,
-      )
+        const inRange =
+          assetSource || b.type === 'received_asset' || b.type === 'sent_asset'
+            ? Math.abs(dt) < span
+            : sourceIsOut
+              ? dt > -10 * 60_000 && dt < span
+              : dt < 10 * 60_000 && dt > -span;
+        if (!inRange) return false;
+        const q = query.trim().toLowerCase();
+        return (
+          !q ||
+          b.label.toLowerCase().includes(q) ||
+          (b.counterparty ?? '').toLowerCase().includes(q) ||
+          b.txHash.toLowerCase().includes(q)
+        );
+      })
       .sort(
         (x, y) =>
           Number(y.samePerson) - Number(x.samePerson) ||
           Math.abs(1 - x.ratio) - Math.abs(1 - y.ratio) ||
           Math.abs(x.dt) - Math.abs(y.dt),
       )
-      .slice(0, 8);
-  }, [report.activity, source, sourceIsOut, assetSource]);
+      .slice(0, range === 'week' ? 8 : 25);
+  }, [report.activity, source, sourceIsOut, assetSource, range, query]);
 
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const togglePick = (key: string) =>
@@ -725,16 +747,40 @@ export function LinkPicker({
     <div className="mt-3 rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-sm">
       <div className="mb-2 text-xs text-gray-400">
         {source.type === 'received_asset'
-          ? 'Paid for separately — an OTC deal, or a cross-chain (Relay) mint? Pick the payment.'
+          ? 'Paid for separately — a presale, an OTC deal, or a cross-chain (Relay) mint? Pick the payment.'
           : source.type === 'sent_asset'
             ? 'Sold this in an OTC deal? Pick the payment you received for it.'
             : sourceIsOut
               ? 'Where did this money arrive — or what did it pay for (OTC deal, cross-chain mint)?'
               : 'Where did this money come from — or what did you sell for it?'}
       </div>
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+        <label className="text-gray-500" htmlFor={`link-range-${source.txHash}`}>
+          Look
+        </label>
+        <select
+          id={`link-range-${source.txHash}`}
+          value={range}
+          onChange={(e) => setRange(e.target.value as keyof typeof LINK_RANGES)}
+          className="rounded-md border border-gray-700 bg-gray-900 px-2 py-0.5 text-gray-200"
+        >
+          {Object.entries(LINK_RANGES).map(([id, r]) => (
+            <option key={id} value={id}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Filter: amount, address, tx…"
+          aria-label="Filter transactions"
+          className="w-52 rounded-md border border-gray-700 bg-gray-900 px-2 py-0.5 text-gray-200"
+        />
+      </div>
       {candidates.length > 0 ? (
         <>
-          <ul className="space-y-1">
+          <ul className="max-h-80 space-y-1 overflow-y-auto">
             {candidates.map(({ b, dt }) => {
               const key = `${b.chain}:${b.txHash}`;
               return (
@@ -774,11 +820,15 @@ export function LinkPicker({
           </button>
           <p className="mt-1 text-[11px] text-gray-500">
             Tick every transaction in the deal — e.g. one payment for NFTs sent in several
-            transactions. The money is split across them by number of NFTs and counted once.
+            transactions, or a presale paid once and airdropped in unlocks. The money is split
+            across them (by number of NFTs, or by amount of one token) and counted once.
           </p>
         </>
       ) : (
-        <p className="text-xs text-gray-500">No transfers in the week around this one.</p>
+        <p className="text-xs text-gray-500">
+          Nothing {LINK_RANGES[range].label.toLowerCase()}
+          {query.trim() ? ' matching that' : ''} — look further, or paste the transaction below.
+        </p>
       )}
       <form
         className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-800 pt-3"
