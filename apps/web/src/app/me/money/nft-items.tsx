@@ -10,7 +10,7 @@ import type {
   CashflowReport,
 } from '@nexus/types';
 import { LinkPicker } from './activity-list';
-import { cn } from '@/lib/utils';
+import { cn, truncateAddress } from '@/lib/utils';
 import { explorerName, nativeAmount, pnlClass, txExplorerUrl, usd, usdSigned } from './format';
 import { LostMenu, RowMenu, useWriteOff } from './labels';
 import { Dual } from './ui';
@@ -21,6 +21,7 @@ const ACQUIRED_LABELS: Record<CashflowNftAcquiredVia, string> = {
   free_mint: 'Free mint',
   received: 'Received',
   swap: 'Swapped in',
+  moved: 'From your wallet',
   unknown: 'Origin unknown',
 };
 
@@ -30,6 +31,7 @@ const DISPOSED_LABELS: Record<CashflowNftDisposedVia, string> = {
   burned: 'Burned',
   swap: 'Swapped out',
   lost: 'Lost for good',
+  moved: 'To your wallet',
 };
 
 type Filter = 'all' | 'sold' | 'held';
@@ -159,6 +161,7 @@ export function NftItemsTable({
       avgHold: holds.length ? holds.reduce((a, b) => a + b, 0) / holds.length : null,
       held: items.filter((i) => i.disposedAt === null).length,
       lost: items.filter((i) => i.disposedVia === 'lost').length,
+      moved: items.filter((i) => i.disposedVia === 'moved').length,
     };
   }, [items]);
 
@@ -237,6 +240,11 @@ export function NftItemsTable({
         {summary.lost > 0 && (
           <span>
             <span className="text-red-300">{summary.lost}</span> lost for good
+          </span>
+        )}
+        {summary.moved > 0 && (
+          <span title="Moved to another of your wallets — its sale (if any) shows under that wallet.">
+            <span className="text-gray-200">{summary.moved}</span> moved to your other wallets
           </span>
         )}
       </div>
@@ -333,6 +341,12 @@ export function NftItemsTable({
                     <td className="whitespace-nowrap py-1.5 pr-3 text-gray-400">
                       <TxLink chain={position.chain} hash={i.acquireTxHash}>
                         {ACQUIRED_LABELS[i.acquiredVia]}
+                        {i.movedFrom && (
+                          <span className="font-mono" title={i.movedFrom}>
+                            {' '}
+                            {truncateAddress(i.movedFrom)}
+                          </span>
+                        )}
                         {i.acquiredAt && (
                           <span className="text-gray-500"> · {shortDate(i.acquiredAt)}</span>
                         )}
@@ -371,6 +385,12 @@ export function NftItemsTable({
                           <TxLink chain={position.chain} hash={i.disposeTxHash}>
                             <span className={cn(i.disposedVia === 'lost' && 'text-red-300')}>
                               {DISPOSED_LABELS[i.disposedVia]}
+                              {i.movedTo && (
+                                <span className="font-mono" title={i.movedTo}>
+                                  {' '}
+                                  {truncateAddress(i.movedTo)}
+                                </span>
+                              )}
                             </span>
                             <span className="text-gray-500"> · {shortDate(i.disposedAt)}</span>
                           </TxLink>

@@ -134,7 +134,10 @@ export type CashflowTokenTradeKind =
   | 'swap_in'
   | 'swap_out'
   /** Sent away and gone for good (marked lost): its cost is a realized loss. */
-  | 'lost';
+  | 'lost'
+  /** One-wallet view: moved to or from another of your wallets, cost basis carried along. */
+  | 'moved_in'
+  | 'moved_out';
 
 /** One buy, sale or move of a fungible token. */
 export interface CashflowTokenTrade {
@@ -161,8 +164,16 @@ export interface CashflowTokenTrade {
   qtyWithoutBasis?: number;
 }
 
-export type CashflowNftAcquiredVia = 'purchase' | 'mint' | 'free_mint' | 'received' | 'swap' | 'unknown';
-export type CashflowNftDisposedVia = 'sale' | 'sent' | 'burned' | 'swap' | 'lost';
+/** 'moved': one-wallet view only — came from / went to another of your wallets. */
+export type CashflowNftAcquiredVia =
+  | 'purchase'
+  | 'mint'
+  | 'free_mint'
+  | 'received'
+  | 'swap'
+  | 'moved'
+  | 'unknown';
+export type CashflowNftDisposedVia = 'sale' | 'sent' | 'burned' | 'swap' | 'lost' | 'moved';
 
 export interface CashflowNftItem {
   tokenId: string;
@@ -194,6 +205,9 @@ export interface CashflowNftItem {
   /** The buy or the sale had no USD price for its day, so USD figures are missing (coin figures aren't). */
   usdPriceMissing: boolean;
   holdSeconds: number | null;
+  /** One-wallet view: the other wallet of yours it came from ('moved' in) or went to ('moved' out). */
+  movedFrom?: string;
+  movedTo?: string;
 }
 
 export type CashflowExchangeSource = 'known' | 'detected' | 'tagged';

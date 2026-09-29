@@ -41,6 +41,7 @@ import {
   txKey,
   type ExplicitLink,
   type LedgerAsset,
+  type CarriedBasis,
   type LedgerFee,
   type LedgerMovement,
   type UsdPricer,
@@ -867,14 +868,10 @@ export class CashflowService {
 
     const mine = (address: string) => !wallet || sameWallet(address, wallet);
     const platformSpam = await this.platformSpamKeys(scan.movements);
-    const report = buildCashflowReport({
-      movements: scan.movements.filter((m) => mine(m.wallet)),
-      fees: scan.fees.filter((f) => mine(f.wallet)),
+    const shared = {
       // All linked wallets stay "own", so moves to the others aren't counted as spending.
       wallets: scan.wallets,
       pricer: scan.pricer,
-      coverage: scan.coverage.filter((c) => mine(c.address) && (!chain || c.chain === chain)),
-      notes: [...scan.notes],
       now: new Date(),
       explicitLinks,
       rejectedLinks: rejected,
@@ -889,6 +886,28 @@ export class CashflowService {
       ),
       chainScope: chain ? (c) => c === chain : undefined,
       crossChainPayees: new Set(RELAY_PAYEES.map((p) => addressIdentity(p.chain, p.address))),
+    } satisfies Partial<Parameters<typeof buildCashflowReport>[0]>;
+    // One wallet in view: what it got from your other wallets arrives with the
+    // cost basis it had there, so first run all of them to note those.
+    const carriedBasis = new Map<string, CarriedBasis>();
+    if (wallet) {
+      buildCashflowReport({
+        ...shared,
+        movements: scan.movements,
+        fees: scan.fees,
+        coverage: [],
+        notes: [],
+        recordOwnMoves: carriedBasis,
+      });
+    }
+    const report = buildCashflowReport({
+      ...shared,
+      movements: scan.movements.filter((m) => mine(m.wallet)),
+      fees: scan.fees.filter((f) => mine(f.wallet)),
+      coverage: scan.coverage.filter((c) => mine(c.address) && (!chain || c.chain === chain)),
+      notes: [...scan.notes],
+      focusWallet: wallet,
+      carriedBasis,
     });
     if (report.totals.unpricedMovements > 0) {
       report.notes.push(

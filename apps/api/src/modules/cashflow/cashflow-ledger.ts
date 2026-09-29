@@ -151,7 +151,29 @@ export interface BuildReportInput {
    * written off at `at`, its cost booked as a realized loss.
    */
   writeOffs?: Array<{ assetKey: string; tokenId: string | null; at: Date }>;
+  /**
+   * One-wallet view: the wallet being looked at. Assets it moves to or from
+   * the user's other wallets leave or arrive here (with their cost basis,
+   * from `carriedBasis`) instead of being ignored as internal moves.
+   */
+  focusWallet?: string;
+  /** Cost basis of each own-wallet move, from the all-wallets run (`recordOwnMoves`). */
+  carriedBasis?: Map<string, CarriedBasis>;
+  /** Filled with the cost basis of every asset moved between own wallets, for `carriedBasis`. */
+  recordOwnMoves?: Map<string, CarriedBasis>;
 }
+
+/** Per-unit cost of an asset as it moved between the user's wallets. */
+export interface CarriedBasis {
+  usd: number;
+  native: number;
+  gas: number;
+  gasNative: number;
+  usdMissing: boolean;
+}
+
+export const ownMoveKey = (chain: string, txHash: string, assetKey: string, tokenId: string | null) =>
+  `${txKey(chain, txHash)}|${assetKey}|${tokenId ?? '*'}`;
 
 /**
  * Airdropped spam names itself after a link to click: "SHIB - [ t.ly/uSHIB ]
@@ -229,6 +251,8 @@ interface NftTrip {
   sellGasNative: number;
   /** No USD price on the acquisition day — the USD cost is unknown (the coin cost is still exact). */
   usdMissing: boolean;
+  movedFrom?: string;
+  movedTo?: string;
 }
 
 class Position {
@@ -278,6 +302,19 @@ class Position {
   /** How much is held of one NFT (or of the token, tokenId null). */
   heldOf(tokenId: string | null): number {
     return this.lots.get(this.lotKey(tokenId))?.qty ?? 0;
+  }
+
+  /** Per-unit cost of what's held (one NFT, or the token), or null when nothing is. */
+  unitBasis(tokenId: string | null): CarriedBasis | null {
+    const lot = this.lots.get(this.lotKey(tokenId));
+    if (!lot || lot.qty <= EPSILON) return null;
+    return {
+      usd: lot.cost / lot.qty,
+      native: lot.costNative / lot.qty,
+      gas: lot.gas / lot.qty,
+      gasNative: lot.gasNative / lot.qty,
+      usdMissing: lot.usdMissingQty > EPSILON,
+    };
   }
 
   lotKey(tokenId: string | null): string {
@@ -756,6 +793,66 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     return c;
   };
 
+  // Assets moved between own wallets. With all wallets in view they never
+  // left, so the move only notes their basis (for the one-wallet view). With
+  // one wallet in view they leave it, or arrive carrying the basis noted.
+  const focus = input.focusWallet;
+  const moveBetweenOwnWallets = (g: TxGroup, at: Date) => {
+    for (const m of g.movements) {
+      if (m.valuation || m.asset.price || !isOwn(m.chain, m.counterparty)) continue;
+      const key = ownMoveKey(g.chain, g.txHash, m.asset.key, m.tokenId);
+      if (!focus) {
+        if (m.direction !== 'out' || !input.recordOwnMoves) continue;
+        const b = positions.get(m.asset.key)?.unitBasis(m.tokenId);
+        if (b) input.recordOwnMoves.set(key, b);
+        continue;
+      }
+      if (addressIdentity(m.chain, m.counterparty) === addressIdentity(m.chain, focus)) continue;
+      const p = positionFor(m.asset, at);
+      if (m.direction === 'out') {
+        const d = p.dispose(m.amount, m.tokenId);
+        p.trade({
+          txHash: g.txHash,
+          at: at.toISOString(),
+          kind: 'moved_out',
+          qty: m.amount,
+          usd: 0,
+          native: 0,
+          costBasisUsd: d.usdMissing > 0 ? null : d.basis,
+          pnlUsd: null,
+          pnlNative: null,
+          gasUsd: 0,
+          qtyWithoutBasis: d.missing,
+        });
+        for (const t of p.closeTrips(m.tokenId, m.amount, at, 'moved', g.txHash))
+          t.movedTo = m.counterparty;
+      } else {
+        const b = input.carriedBasis?.get(key);
+        const usd = (b?.usd ?? 0) * m.amount;
+        const native = (b?.native ?? 0) * m.amount;
+        const gas = (b?.gas ?? 0) * m.amount;
+        const gasNative = (b?.gasNative ?? 0) * m.amount;
+        const usdMissing = b?.usdMissing ?? false;
+        p.acquire(m.amount, usd, m.tokenId, gas, native, gasNative, usdMissing);
+        p.trade({
+          txHash: g.txHash,
+          at: at.toISOString(),
+          kind: 'moved_in',
+          qty: m.amount,
+          usd: usdMissing ? null : usd,
+          native,
+          costBasisUsd: usdMissing ? null : usd,
+          pnlUsd: null,
+          pnlNative: null,
+          gasUsd: 0,
+        });
+        p.openTrip(m.tokenId, m.amount, at, 'moved', g.txHash, usd, native, gas, gasNative, usdMissing);
+        const trip = p.trips[p.trips.length - 1];
+        if (trip && trip.acquireTxHash === g.txHash) trip.movedFrom = m.counterparty;
+      }
+    }
+  };
+
   const feesByChain = new Map<string, CashflowChainFees>();
   const ownTransfers = { count: 0, usd: 0 };
   const bridges = { count: 0, usd: 0, feesUsd: 0 };
@@ -767,6 +864,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
   for (const g of ordered) {
     if (input.chainScope && !input.chainScope(g.chain)) continue;
     const at = g.timestamp;
+    moveBetweenOwnWallets(g, at);
     const bookTransfers = (legs: PricedLeg[], dir: 'in' | 'out') => {
       for (const l of legs) {
         const usd = l.usd ?? 0;
@@ -2262,6 +2360,8 @@ function toNftItem(t: NftTrip): CashflowNftItem {
       t.acquiredAt && t.disposedAt
         ? Math.round((t.disposedAt.getTime() - t.acquiredAt.getTime()) / 1000)
         : null,
+    ...(t.movedFrom ? { movedFrom: t.movedFrom } : {}),
+    ...(t.movedTo ? { movedTo: t.movedTo } : {}),
   };
 }
 
