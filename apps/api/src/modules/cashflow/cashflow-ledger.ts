@@ -1614,25 +1614,41 @@ function analyze(
     string,
     { in: LedgerMovement[]; out: LedgerMovement[]; net: number }
   >();
+  // Other tokens are netted too: a route that pays you a token and takes its
+  // fee back out in the same token (Jupiter) is one purchase of the net amount,
+  // not a swap of the token for itself. NFTs are kept per item.
+  const netTokens = new Map<
+    string,
+    { in: LedgerMovement[]; out: LedgerMovement[]; net: number }
+  >();
   for (const m of external) {
     if (m.asset.price) {
       const e = netByAsset.get(m.asset.key) ?? { in: [], out: [], net: 0 };
       e[m.direction].push(m);
       e.net += m.direction === 'in' ? m.amount : -m.amount;
       netByAsset.set(m.asset.key, e);
+    } else if (m.asset.kind !== 'nft') {
+      const e = netTokens.get(m.asset.key) ?? { in: [], out: [], net: 0 };
+      e[m.direction].push(m);
+      e.net += m.direction === 'in' ? m.amount : -m.amount;
+      netTokens.set(m.asset.key, e);
     } else {
       (m.direction === 'in' ? unIn : unOut).push(m);
     }
   }
-  for (const e of netByAsset.values()) {
-    if (Math.abs(e.net) <= EPSILON) continue;
+  /** The legs on the side that won, scaled down to the net amount. */
+  const netted = (e: { in: LedgerMovement[]; out: LedgerMovement[]; net: number }) => {
+    if (Math.abs(e.net) <= EPSILON) return [];
     const dominant = e.net > 0 ? e.in : e.out;
     const gross = dominant.reduce((sum, m) => sum + m.amount, 0);
     const scale = gross > 0 ? Math.abs(e.net) / gross : 0;
-    for (const m of dominant) {
-      const scaled: LedgerMovement = { ...m, amount: m.amount * scale };
-      (e.net > 0 ? pricedIn : pricedOut).push(leg(scaled, priceLeg(scaled)));
-    }
+    return dominant.map((m): LedgerMovement => (scale === 1 ? m : { ...m, amount: m.amount * scale }));
+  };
+  for (const e of netByAsset.values()) {
+    for (const m of netted(e)) (e.net > 0 ? pricedIn : pricedOut).push(leg(m, priceLeg(m)));
+  }
+  for (const e of netTokens.values()) {
+    for (const m of netted(e)) (e.net > 0 ? unIn : unOut).push(m);
   }
   const sumUsd = (legs: PricedLeg[]) => legs.reduce((sum, l) => sum + (l.usd ?? 0), 0);
   const sumNative = (legs: PricedLeg[]) =>

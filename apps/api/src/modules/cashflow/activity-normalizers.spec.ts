@@ -676,3 +676,79 @@ describe('token-for-token swaps on Solana (Jupiter routes)', () => {
     expect(swapValuation(ME, swapTx, [], new Map())).toBeNull();
   });
 });
+
+describe('buying a token with SOL on Solana', () => {
+  const { buildCashflowReport } = jest.requireActual('./cashflow-ledger');
+  const ME = '8fMKrjeijyqQZGSerwYiARA7GfkJYsv1PbnyQZr9347E';
+  const POOL = 'RaydiumV4Poo11111111111111111111111111111111';
+  const JUP = 'JupAuthority1611111111111111111111111111111';
+  const POX = 'PoxMint111111111111111111111111111111111111';
+  const WSOL = 'So11111111111111111111111111111111111111112';
+  const TEMP_WSOL = 'TempWso1Account1111111111111111111111111111';
+  const POX_ATA = 'MyPoxAta111111111111111111111111111111111111';
+  const mintInfo = new Map<string, MintInfo>([
+    [POX, { isNft: false, name: 'POX', symbol: 'POX', collection: null, collectionName: null }],
+  ]);
+  const report = (txs: Parameters<typeof normalizeSolanaTx>[1][]) => {
+    const assets = new Map();
+    return buildCashflowReport({
+      movements: txs.flatMap((tx) => normalizeSolanaTx(ME, tx, mintInfo, assets).movements),
+      fees: [],
+      wallets: [{ chain: 'solana', address: ME }],
+      pricer: { usdPerUnit: () => 150 },
+      coverage: [],
+      notes: [],
+      now: new Date('2026-01-01T00:00:00Z'),
+    });
+  };
+
+  it("doesn't count SOL wrapped into your own wSOL account (or token-account rent) as a second payment", () => {
+    // Raydium: 0.25 SOL wrapped into a temporary wSOL account, paid to the pool as wSOL; rent for the new POX account.
+    const tx = {
+      signature: '2LedT57x',
+      timestamp: 1_724_800_000,
+      fee: 5000,
+      feePayer: ME,
+      type: 'SWAP',
+      nativeTransfers: [
+        { fromUserAccount: ME, toUserAccount: TEMP_WSOL, amount: 250_000_000 },
+        { fromUserAccount: ME, toUserAccount: POX_ATA, amount: 2_039_280 },
+      ],
+      tokenTransfers: [
+        { fromUserAccount: ME, toUserAccount: POOL, fromTokenAccount: TEMP_WSOL, toTokenAccount: 'PoolWsol', mint: WSOL, tokenAmount: 0.25 },
+        { fromUserAccount: POOL, toUserAccount: ME, fromTokenAccount: 'PoolPox', toTokenAccount: POX_ATA, mint: POX, tokenAmount: 10030.77 },
+      ],
+    };
+    const legs = normalizeSolanaTx(ME, tx, mintInfo, new Map()).movements;
+    expect(legs.map((m) => [m.direction, m.asset.symbol, m.amount])).toEqual([
+      ['out', 'wSOL', 0.25],
+      ['in', 'POX', 10030.77],
+    ]);
+    const pox = report([tx]).tokens.find((t: { symbol: string }) => t.symbol === 'POX');
+    expect(pox.trades).toEqual([expect.objectContaining({ kind: 'buy', qty: 10030.77, native: expect.closeTo(0.25) })]);
+  });
+
+  it('books a buy whose route takes its fee in the bought token as one purchase of the net amount', () => {
+    // Jupiter: 0.5 SOL → 12,761.28 POX, then 107.557 POX taken back out as the platform fee.
+    const tx = {
+      signature: '5ghMWEh5',
+      timestamp: 1_724_990_000,
+      fee: 5000,
+      feePayer: ME,
+      type: 'SWAP',
+      nativeTransfers: [{ fromUserAccount: ME, toUserAccount: TEMP_WSOL, amount: 500_000_000 }],
+      tokenTransfers: [
+        { fromUserAccount: ME, toUserAccount: POOL, fromTokenAccount: TEMP_WSOL, mint: WSOL, tokenAmount: 0.5 },
+        { fromUserAccount: POOL, toUserAccount: ME, toTokenAccount: POX_ATA, mint: POX, tokenAmount: 12761.277 },
+        { fromUserAccount: ME, toUserAccount: JUP, fromTokenAccount: POX_ATA, mint: POX, tokenAmount: 107.557 },
+      ],
+    };
+    const r = report([tx]);
+    const pox = r.tokens.find((t: { symbol: string }) => t.symbol === 'POX');
+    expect(pox.trades).toEqual([
+      expect.objectContaining({ kind: 'buy', qty: expect.closeTo(12653.72), native: expect.closeTo(0.5) }),
+    ]);
+    expect(r.activity[0].type).toBe('token_purchase');
+    expect(r.totals.outUsd).toBeCloseTo(75);
+  });
+});

@@ -50,10 +50,18 @@ export interface HeliusEnhancedTx {
   tokenTransfers?: Array<{
     fromUserAccount?: string | null;
     toUserAccount?: string | null;
+    /** The token accounts themselves (owned by fromUserAccount/toUserAccount). */
+    fromTokenAccount?: string | null;
+    toTokenAccount?: string | null;
     tokenAmount?: number;
     mint?: string;
     tokenStandard?: string;
     decimals?: number;
+  }>;
+  /** Per-account balance changes; tokenBalanceChanges name each token account's owner. */
+  accountData?: Array<{
+    account?: string;
+    tokenBalanceChanges?: Array<{ userAccount?: string | null; tokenAccount?: string | null }>;
   }>;
   /** Helius classification, e.g. NFT_SALE, NFT_BID, SWAP. */
   type?: string;
@@ -160,12 +168,27 @@ export function normalizeSolanaTx(
   // money changing pockets, not spending — record it as an own-wallet move
   // (the filled bid is charged when the NFT arrives, below).
   const escrowMove = ESCROW_EVENT.test(eventType);
+  // The wallet's own token accounts in this tx. SOL moving between the wallet
+  // and one of them is the wallet's own money changing pockets: wrapping SOL
+  // for a swap (the wSOL transfer then carries the payment), the rent for a
+  // new token account, or closing one. Counting it would double the payment.
+  const ownTokenAccounts = new Set<string>();
+  for (const t of tx.tokenTransfers ?? []) {
+    if (t.fromUserAccount === wallet && t.fromTokenAccount) ownTokenAccounts.add(t.fromTokenAccount);
+    if (t.toUserAccount === wallet && t.toTokenAccount) ownTokenAccounts.add(t.toTokenAccount);
+  }
+  for (const a of tx.accountData ?? []) {
+    for (const c of a.tokenBalanceChanges ?? []) {
+      if (c.userAccount === wallet && c.tokenAccount) ownTokenAccounts.add(c.tokenAccount);
+    }
+  }
   let nativeOut = 0;
   let nativeIn = 0;
   for (const n of tx.nativeTransfers ?? []) {
     const from = n.fromUserAccount ?? '';
     const to = n.toUserAccount ?? '';
     if ((from === wallet) === (to === wallet) || !n.amount) continue;
+    if (ownTokenAccounts.has(from === wallet ? to : from)) continue;
     const direction = from === wallet ? 'out' : 'in';
     const amount = n.amount / LAMPORTS_PER_SOL;
     if (direction === 'out') nativeOut += amount;
