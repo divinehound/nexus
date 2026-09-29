@@ -6,6 +6,7 @@ import {
   cashflowAddressTags,
   cashflowContactLabels,
   cashflowFlags,
+  cashflowLostTxs,
   cashflowScanState,
   cashflowScans,
   cashflowTxLinks,
@@ -156,6 +157,12 @@ export interface TxNoteInput {
   chain: string;
   txHash: string;
   note: string;
+}
+
+export interface LostInput {
+  chain: string;
+  txHash: string;
+  lost: boolean;
 }
 
 export interface FlagInput {
@@ -582,6 +589,28 @@ export class CashflowService {
     return this.rebuild(userId, view);
   }
 
+  /** Mark what a transaction sent away as lost for good (a realized loss), or undo that. */
+  async setLost(userId: string, input: LostInput, view: ReportView = {}): Promise<CashflowResponse> {
+    const txHash = input.chain === 'solana' ? input.txHash : input.txHash.toLowerCase();
+    if (input.lost) {
+      await this.db
+        .insert(cashflowLostTxs)
+        .values({ userId, chain: input.chain, txHash })
+        .onConflictDoNothing();
+    } else {
+      await this.db
+        .delete(cashflowLostTxs)
+        .where(
+          and(
+            eq(cashflowLostTxs.userId, userId),
+            eq(cashflowLostTxs.chain, input.chain),
+            eq(cashflowLostTxs.txHash, txHash),
+          ),
+        );
+    }
+    return this.rebuild(userId, view);
+  }
+
   /** Save the user's note on a transaction; an empty note removes it. */
   async setTxNote(userId: string, input: TxNoteInput, view: ReportView = {}): Promise<CashflowResponse> {
     const txHash = input.chain === 'solana' ? input.txHash : input.txHash.toLowerCase();
@@ -617,12 +646,13 @@ export class CashflowService {
 
   private async buildFromScan(userId: string, scan: ScanData, view: ReportView = {}): Promise<CashflowReport> {
     const { wallet, chain } = view;
-    const [linkRows, tagRows, flagRows, labelRows, noteRows] = await Promise.all([
+    const [linkRows, tagRows, flagRows, labelRows, noteRows, lostRows] = await Promise.all([
       this.db.select().from(cashflowTxLinks).where(eq(cashflowTxLinks.userId, userId)),
       this.db.select().from(cashflowAddressTags).where(eq(cashflowAddressTags.userId, userId)),
       this.db.select().from(cashflowFlags).where(eq(cashflowFlags.userId, userId)),
       this.db.select().from(cashflowContactLabels).where(eq(cashflowContactLabels.userId, userId)),
       this.db.select().from(cashflowTxNotes).where(eq(cashflowTxNotes.userId, userId)),
+      this.db.select().from(cashflowLostTxs).where(eq(cashflowLostTxs.userId, userId)),
     ]);
     const contactLabels: CashflowContactLabel[] = labelRows.map((r) => ({
       id: r.id,
@@ -700,6 +730,7 @@ export class CashflowService {
       exchangeAddresses,
       addressContacts,
       txContacts,
+      lostTxs: new Set(lostRows.map((r) => txKey(r.chain, r.txHash))),
       chainScope: chain ? (c) => c === chain : undefined,
       crossChainPayees: new Set(RELAY_PAYEES.map((p) => addressIdentity(p.chain, p.address))),
     });
@@ -724,6 +755,7 @@ export class CashflowService {
     report.links = links;
     report.addressTags = addressTags;
     report.contactLabels = contactLabels;
+    report.lostTxs = lostRows.map((r) => ({ id: r.id, chain: r.chain, txHash: r.txHash }));
     report.txNotes = noteRows.map(
       (r): CashflowTxNote => ({
         id: r.id,

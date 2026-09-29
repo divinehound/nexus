@@ -6,6 +6,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -151,6 +152,19 @@ export class ContactLabelRemoveDto {
   @ArrayMaxSize(500)
   @IsUUID('all', { each: true })
   ids!: string[];
+}
+
+export class LostDto {
+  @IsIn(CHAINS)
+  chain!: string;
+
+  @IsString()
+  @Length(10, 128)
+  @Matches(HASH_OR_ADDRESS)
+  txHash!: string;
+
+  @IsBoolean()
+  lost!: boolean;
 }
 
 export class TxNoteDto {
@@ -301,6 +315,17 @@ export class CashflowController {
     @Query('chain') chain?: string,
   ): Promise<CashflowResponse> {
     return this.cashflowService.addAddressTag(req.user.sub, body, view(wallet, chain));
+  }
+
+  @Put('lost')
+  @ApiOperation({ summary: 'Mark what a transaction sent away as lost for good (booked as a realized loss), or undo' })
+  setLost(
+    @Req() req: AuthRequest,
+    @Body() body: LostDto,
+    @Query('wallet') wallet?: string,
+    @Query('chain') chain?: string,
+  ): Promise<CashflowResponse> {
+    return this.cashflowService.setLost(req.user.sub, body, view(wallet, chain));
   }
 
   @Put('tx-notes')

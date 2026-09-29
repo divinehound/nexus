@@ -131,6 +131,11 @@ export interface BuildReportInput {
    */
   addressContacts?: Map<string, string>;
   txContacts?: Map<string, string>;
+  /**
+   * Transactions (by `txKey`) whose assets sent away are gone for good — e.g.
+   * stuck in a locked escrow. Their cost is booked as a realized loss.
+   */
+  lostTxs?: Set<string>;
 }
 
 export interface TxPair {
@@ -996,6 +1001,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
             pnlUsd: usdOk ? share - d.basis : null,
             pnlNative,
             gasUsd: gasShare,
+            qtyWithoutBasis: d.missing,
           });
           p.sellCount++;
           p.qtySold += m.amount;
@@ -1022,32 +1028,57 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
         type = unOut.some((m) => m.asset.kind === 'nft') ? 'nft_sale' : 'token_sale';
       } else {
         // ── Gave an asset away (gift, move to an unlinked wallet, burn) ──
+        // Marked lost (e.g. a locked escrow): its cost is a realized loss.
+        const lost = input.lostTxs?.has(txKey(g.chain, g.txHash)) ?? false;
+        const lostRate = lost ? nativeRate(g.chain, at) : null;
+        let lostUsd = 0;
+        let realizedAfterGas = 0;
         for (const m of unOut) {
           const p = positionFor(m.asset, at);
           const d = p.dispose(m.amount, m.tokenId);
-          p.gasUsd += feeUsd / unOut.length;
+          const gasShare = feeUsd / unOut.length;
+          const gasShareNative = feeNative / unOut.length;
+          p.gasUsd += gasShare;
+          const kind = lost ? 'lost' : m.counterparty === '' ? 'burned' : 'sent';
+          const usdOk = d.usdMissing === 0;
+          if (lost) {
+            bookSplit(p, usdOk ? -d.basis : null, -d.basisNative, lostRate);
+            p.realizedPnlAfterGasNative += -d.basisNative - d.gasNative - gasShareNative;
+            if (usdOk) {
+              p.realizedPnlUsd -= d.basis;
+              p.realizedPnlAfterGasUsd += -d.basis - d.gas - gasShare;
+              lostUsd -= d.basis;
+              realizedAfterGas += -d.basis - d.gas - gasShare;
+            } else {
+              p.usdPriceMissing++;
+            }
+          }
           p.trade({
             txHash: g.txHash,
             at: at.toISOString(),
-            kind: m.counterparty === '' ? 'burned' : 'sent',
+            kind,
             qty: m.amount,
             usd: 0,
             native: 0,
             costBasisUsd: d.usdMissing > 0 ? null : d.basis,
-            pnlUsd: null,
-            pnlNative: null,
-            gasUsd: feeUsd / unOut.length,
+            pnlUsd: lost && usdOk ? -d.basis : null,
+            pnlNative: lost ? -d.basisNative : null,
+            gasUsd: gasShare,
+            qtyWithoutBasis: d.missing,
           });
-          for (const t of p.closeTrips(
-            m.tokenId,
-            m.amount,
-            at,
-            m.counterparty === '' ? 'burned' : 'sent',
-            g.txHash,
-          )) {
-            t.sellGasUsd = (feeUsd / unOut.length) * (t.qty / m.amount);
-            t.sellGasNative = (feeNative / unOut.length) * (t.qty / m.amount);
+          for (const t of p.closeTrips(m.tokenId, m.amount, at, kind, g.txHash)) {
+            t.sellGasUsd = gasShare * (t.qty / m.amount);
+            t.sellGasNative = gasShareNative * (t.qty / m.amount);
+            if (lost) {
+              t.proceedsUsd = 0;
+              t.proceedsNative = 0;
+            }
           }
+        }
+        if (lost) {
+          realized = lostUsd;
+          bookRealized(at, lostUsd, realizedAfterGas);
+          labelNote = ' · marked lost';
         }
         type = 'sent_asset';
         counterparty = unOut[0].counterparty || null;
@@ -1136,6 +1167,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           pnlUsd: usdOk ? outUsd! - d.basis : null,
           pnlNative,
           gasUsd: gasShare,
+          qtyWithoutBasis: d.missing,
         });
         p.sellCount++;
         p.qtySold += m.amount;
@@ -1221,6 +1253,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
           pnlUsd: null,
           pnlNative: null,
           gasUsd: feeUsd / (unIn.length + unOut.length),
+          qtyWithoutBasis: d.missing,
         });
         carried += d.basis;
         carriedGas += d.gas;
@@ -1337,6 +1370,9 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
       outUsd: txOut,
       feeUsd,
       realizedPnlUsd: realized,
+      ...(type === 'sent_asset' && input.lostTxs?.has(txKey(g.chain, g.txHash))
+        ? { lost: true }
+        : {}),
       counterparty,
       exchange,
       linkedTo: funder
@@ -1460,6 +1496,7 @@ export function buildCashflowReport(input: BuildReportInput): CashflowReport {
     ),
     contactLabels: [],
     txNotes: [],
+    lostTxs: [],
     fees: [...feesByChain.values()].sort((a, b) => b.feesUsd - a.feesUsd),
     ownWalletTransfers: ownTransfers,
     bridges,

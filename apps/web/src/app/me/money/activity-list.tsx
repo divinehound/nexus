@@ -25,6 +25,7 @@ import {
   contactMenuItems,
   findContactLabel,
   notesByTx,
+  useLostMenuItem,
   type MenuItem,
 } from './labels';
 import {
@@ -342,6 +343,7 @@ function ActivityRow({
       : undefined;
   const removeName = (id: string) =>
     void run('Name removed', (token, view) => removeCashflowContactLabel(token, id, view));
+  const lostItem = useLostMenuItem(report);
   const menu: MenuItem[] = personal
     ? [
         ...contactMenuItems(own, 'tx', () => setEditing('name'), removeName, addressLabel?.label),
@@ -363,6 +365,8 @@ function ActivityRow({
         { label: note ? 'Edit note…' : 'Add note…', onSelect: () => setEditing('note') },
       ]
     : [];
+  // Sent away and never coming back (e.g. a locked escrow): book its cost as a loss.
+  if (a.type === 'sent_asset') menu.push(lostItem(a.chain, a.txHash));
 
   return (
     <div>

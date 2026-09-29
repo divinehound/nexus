@@ -172,3 +172,22 @@ export const cashflowTxNotes = pgTable(
   },
   (table) => [uniqueIndex('cashflow_tx_notes_unique').on(table.userId, table.chain, table.txHash)],
 );
+
+/**
+ * Transactions whose assets the user sent away and lost for good (e.g. stuck
+ * in a locked escrow); their cost is booked as a realized loss. EVM hashes
+ * lowercased.
+ */
+export const cashflowLostTxs = pgTable(
+  'cashflow_lost_txs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    chain: varchar('chain', { length: 32 }).notNull(),
+    txHash: varchar('tx_hash', { length: 128 }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex('cashflow_lost_txs_unique').on(table.userId, table.chain, table.txHash)],
+);
