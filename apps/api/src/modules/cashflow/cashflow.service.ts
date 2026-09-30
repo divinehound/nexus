@@ -1041,7 +1041,8 @@ export class CashflowService {
       await this.saveRow(userId, 'activity', t.chain, t.address, saved);
     }
 
-    if (relayKey) {
+    {
+      // Relay's public history needs no key; the key adds requests made through our own integration.
       const relay = new RelayLinksFetcher(relayKey);
       for (const address of new Set(targets.map((t) => t.address))) {
         job.progress = `Checking bridge records for ${shortAddress(address)}…`;
@@ -1069,7 +1070,7 @@ export class CashflowService {
     rescanned: ScanTarget[],
   ): Promise<ScanData> {
     job.progress = 'Loading saved scans…';
-    const { alchemyKey, heliusKey, relayKey } = this.apiKeys();
+    const { alchemyKey, heliusKey } = this.apiKeys();
     const rows = await this.db.select().from(cashflowScans).where(eq(cashflowScans.userId, userId));
     const wanted = new Set(targets.map(targetKey));
     const addresses = new Set(targets.map((t) => t.address));
@@ -1120,10 +1121,22 @@ export class CashflowService {
         'Outside Ethereum and Polygon, NFT sale proceeds paid out by a contract in native ETH/APE are found from your balance change around the sale.',
       );
     }
-    if (!relayKey) {
-      notes.push(
-        "Relay bridges are paired by amount and timing; set RELAY_API_KEY to pair them exactly from Relay's records.",
-      );
+    {
+      // A Relay record can only pair txs the scan saw; say when a side is missing
+      // (e.g. ETH delivered inside a contract call on a chain without internal tracing).
+      const scannedChains = new Set(targets.map((t) => t.chain));
+      const seen = new Set(movements.map((m) => txKey(m.chain, m.txHash)));
+      const unseen = relayLinks.filter(
+        (l) =>
+          scannedChains.has(l.fromChain) &&
+          scannedChains.has(l.toChain) &&
+          (!seen.has(txKey(l.fromChain, l.fromTxHash)) || !seen.has(txKey(l.toChain, l.toTxHash))),
+      ).length;
+      if (unseen > 0) {
+        notes.push(
+          `${unseen} Relay transfer${unseen === 1 ? ' has' : 's have'} a side that isn't in your scanned activity, so ${unseen === 1 ? "it isn't" : "they aren't"} paired from Relay's records.`,
+        );
+      }
     }
     for (const address of relayFailed) {
       notes.push(`Couldn't load Relay history for ${shortAddress(address)}; its bridges fall back to amount/timing matching.`);

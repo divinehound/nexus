@@ -21,9 +21,9 @@ export default () => ({
     apiKey: process.env.COINGECKO_API_KEY || '',
   },
   relay: {
-    // Optional. Lets the Money dashboard pair Relay bridge transfers exactly
-    // (from Relay's own records) instead of by amount/timing. Self-serve key
-    // from dashboard.relay.link.
+    // Optional. Relay bridges are paired from Relay's public history without a
+    // key; with one, requests made through this key's own integration (GET
+    // /requests/v3) are read too. Self-serve key from dashboard.relay.link.
     apiKey: process.env.RELAY_API_KEY || '',
   },
   solana: {

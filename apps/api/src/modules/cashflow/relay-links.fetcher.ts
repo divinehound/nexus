@@ -52,10 +52,13 @@ export const RELAY_PAYEES: Array<{ chain: 'ethereum' | 'solana'; address: string
   { chain: 'solana', address: 'F7p3dFrjRTbtRp8FRF6qHLomXbKRBzpvBLjtQcfcgmNe' }, // SVM solver
 ];
 
-const MAX_PAGES = 20; // × 50 requests per address
+const MAX_PAGES = 20; // × a page of requests per address, per endpoint
 
 interface RelayTx {
+  /** v3 name for the tx hash. */
   txHash?: string;
+  /** v2 name for the tx hash. */
+  hash?: string;
   chainId?: number;
 }
 
@@ -68,52 +71,90 @@ export interface RelayRequest {
 /**
  * Turn one Relay request into a link between its origin (deposit) tx and its
  * destination (fill) tx. Only successful, single-hop requests on chains we
- * scan are usable.
+ * scan are usable. Reads both the v3 (`txHash`) and v2 (`hash`) shapes.
  */
 export function relayRequestToLink(r: RelayRequest): ExplicitLink | null {
   if (r.status !== 'success') return null;
   const from = r.data?.inTxs?.[0];
   const to = r.data?.outTxs?.[0];
-  if (!from?.txHash || !to?.txHash || from.chainId === undefined || to.chainId === undefined) return null;
+  const fromHash = from?.txHash ?? from?.hash;
+  const toHash = to?.txHash ?? to?.hash;
+  if (!fromHash || !toHash || from?.chainId === undefined || to?.chainId === undefined) return null;
   const fromChain = RELAY_CHAIN_IDS[from.chainId];
   const toChain = RELAY_CHAIN_IDS[to.chainId];
   if (!fromChain || !toChain || fromChain === toChain) return null;
-  return { fromChain, fromTxHash: from.txHash, toChain, toTxHash: to.txHash, source: 'relay' };
+  return { fromChain, fromTxHash: fromHash, toChain, toTxHash: toHash, source: 'relay' };
 }
 
+type RelayPage = { requests?: RelayRequest[]; continuation?: string | null };
+
 /**
- * Pulls a wallet's Relay history (GET /requests/v3, which requires an API key)
- * so bridges through Relay are paired from Relay's own records — exact even
- * when the trip is slow or the fee is large.
+ * Pulls a wallet's Relay history so bridges and cross-chain purchases through
+ * Relay are paired from Relay's own records — exact even when the trip is slow
+ * or the fee is large.
+ *
+ * GET /requests/v3 only returns requests made through the API key's own
+ * integration, so it misses everything done on relay.link or in other apps.
+ * The public GET /requests/v2 still returns a wallet's whole history (until
+ * Relay retires it on 2026-11-24), so both are read and merged.
  */
 export class RelayLinksFetcher {
   private readonly logger = new Logger(RelayLinksFetcher.name);
 
-  constructor(private readonly apiKey: string) {}
+  constructor(private readonly apiKey?: string) {}
 
   async fetchLinks(address: string): Promise<ExplicitLink[]> {
-    const links: ExplicitLink[] = [];
+    const byRequest = new Map<string, ExplicitLink>();
+    const errors: string[] = [];
+    const sources: Array<{ version: 'v2' | 'v3'; limit: number; headers: Record<string, string> }> = [
+      { version: 'v2', limit: 20, headers: { accept: 'application/json' } },
+    ];
+    if (this.apiKey) {
+      sources.push({ version: 'v3', limit: 50, headers: { accept: 'application/json', 'x-api-key': this.apiKey } });
+    }
+    for (const src of sources) {
+      try {
+        for (const r of await this.fetchRequests(address, src.version, src.limit, src.headers)) {
+          const link = relayRequestToLink(r);
+          if (!link) continue;
+          byRequest.set(r.id ?? `${link.fromChain}:${link.fromTxHash.toLowerCase()}`, link);
+        }
+      } catch (err) {
+        errors.push(`${src.version}: ${(err as Error).message}`);
+      }
+    }
+    // Only a total failure is an error; one endpoint answering is enough.
+    if (errors.length === sources.length) throw new Error(errors.join('; '));
+    for (const e of errors) this.logger.warn(`Relay requests ${e} (for ${address})`);
+    const links = [...byRequest.values()];
+    this.logger.debug(`Relay: ${links.length} bridge records for ${address}`);
+    return links;
+  }
+
+  private async fetchRequests(
+    address: string,
+    version: 'v2' | 'v3',
+    limit: number,
+    headers: Record<string, string>,
+  ): Promise<RelayRequest[]> {
+    const requests: RelayRequest[] = [];
     let continuation: string | undefined;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const url = new URL('https://api.relay.link/requests/v3');
+      const url = new URL(`https://api.relay.link/requests/${version}`);
       url.searchParams.set('user', address);
-      url.searchParams.set('limit', '50');
+      url.searchParams.set('limit', String(limit));
       if (continuation) url.searchParams.set('continuation', continuation);
-      const json = await fetchJsonWithRetry<{ requests?: RelayRequest[]; continuation?: string | null }>(
+      const json = await fetchJsonWithRetry<RelayPage>(
         url.toString(),
-        { headers: { accept: 'application/json', 'x-api-key': this.apiKey } },
-        'Relay requests',
+        { headers },
+        `Relay requests ${version}`,
         { retries: 3 },
       );
-      for (const r of json.requests ?? []) {
-        const link = relayRequestToLink(r);
-        if (link) links.push(link);
-      }
+      requests.push(...(json.requests ?? []));
       continuation = json.continuation ?? undefined;
       if (!continuation || (json.requests ?? []).length === 0) break;
       await sleep(250);
     }
-    this.logger.debug(`Relay: ${links.length} bridge records for ${address}`);
-    return links;
+    return requests;
   }
 }

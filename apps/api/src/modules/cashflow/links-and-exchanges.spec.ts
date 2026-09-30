@@ -21,6 +21,15 @@ describe('relayRequestToLink', () => {
     ).toEqual({ fromChain: 'ethereum', fromTxHash: '0xabc', toChain: 'solana', toTxHash: '5SoLsig', source: 'relay' });
   });
 
+  it('reads the public v2 shape (hash instead of txHash), e.g. a bridge out of Robinhood Chain', () => {
+    expect(
+      relayRequestToLink({
+        status: 'success',
+        data: { inTxs: [{ hash: '0xrh', chainId: 4663 }], outTxs: [{ hash: '0xbase', chainId: 8453 }] },
+      }),
+    ).toEqual({ fromChain: 'robinhood', fromTxHash: '0xrh', toChain: 'base', toTxHash: '0xbase', source: 'relay' });
+  });
+
   it('skips unfinished requests, unknown chains and same-chain swaps', () => {
     const data = { inTxs: [{ txHash: '0xa', chainId: 1 }], outTxs: [{ txHash: '0xb', chainId: 8453 }] };
     expect(relayRequestToLink({ status: 'refunded', data })).toBeNull();
