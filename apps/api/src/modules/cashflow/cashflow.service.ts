@@ -54,7 +54,7 @@ import {
 import { EVM_EXCHANGE_WALLETS, EXCHANGE_NAMES } from './exchange-wallets';
 import { RELAY_PAYEES, RelayLinksFetcher } from './relay-links.fetcher';
 import { SolanaActivityFetcher } from './solana-activity.fetcher';
-import type { PriceRef } from './base-assets';
+import { USD_NATIVE_SYMBOLS, type PriceRef } from './base-assets';
 import {
   failedScan,
   fromSaved,
@@ -78,6 +78,7 @@ const CHAIN_NAMES: Record<string, string> = {
   blast: 'Blast',
   linea: 'Linea',
   robinhood: 'Robinhood Chain',
+  arc: 'Arc',
   solana: 'Solana',
 };
 
@@ -1373,7 +1374,7 @@ export class CashflowService {
 
     return {
       usdPerUnit(ref: PriceRef, day: string): number | null {
-        if (ref.kind === 'usd') return 1;
+        if (ref.kind === 'usd' || USD_NATIVE_SYMBOLS.has(ref.symbol)) return 1;
         const r = rates.get(ref.symbol);
         if (!r || r.days.length === 0) return null;
         const exact = r.byDay.get(day);

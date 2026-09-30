@@ -2331,6 +2331,7 @@ const CHAIN_NAMES: Record<string, string> = {
   blast: 'Blast',
   linea: 'Linea',
   robinhood: 'Robinhood Chain',
+  arc: 'Arc',
   solana: 'Solana',
 };
 const chainName = (chain: string) => CHAIN_NAMES[chain] ?? chain;

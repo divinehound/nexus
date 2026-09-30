@@ -295,10 +295,17 @@ function ActivityRow({
   const unsold = a.type === 'sent_asset';
   // A trade's payment can take more transfers (one payment, NFTs sent in several txs).
   const tradePayment = a.type === 'trade_payment';
-  const linkable =
-    OUTGOING.includes(a.type) || INCOMING.includes(a.type) || unpaid || unsold || tradePayment;
   const linked = a.linkedTxs ?? (a.linkedTo ? [a.linkedTo] : []);
   const isBridge = a.type === 'bridge';
+  // A paired bridge can be pointed at a different transaction when it was matched wrong.
+  const relinkable = isBridge && a.linkSide !== null && linked.length > 0;
+  const linkable =
+    OUTGOING.includes(a.type) ||
+    INCOMING.includes(a.type) ||
+    unpaid ||
+    unsold ||
+    tradePayment ||
+    relinkable;
 
   const unlink = () => {
     if (linked.length === 0) return;
@@ -307,23 +314,8 @@ function ActivityRow({
     // pair the same two transactions straight back up.
     void run('Unlinked — counted as separate transfers again', async (token, view) => {
       let last: CashflowResponse | null = null;
-      for (const other of linked) {
-        const pair =
-          a.linkSide === 'out'
-            ? {
-                fromChain: a.chain,
-                fromTxHash: a.txHash,
-                toChain: other.chain,
-                toTxHash: other.txHash,
-              }
-            : {
-                fromChain: other.chain,
-                fromTxHash: other.txHash,
-                toChain: a.chain,
-                toTxHash: a.txHash,
-              };
+      for (const pair of linkedPairs(a))
         last = await addCashflowLink(token, { kind: 'unlink', ...pair }, view);
-      }
       return last!;
     });
   };
@@ -446,13 +438,15 @@ function ActivityRow({
               >
                 {linkOpen
                   ? 'Cancel'
-                  : unpaid
-                    ? 'Link to its payment…'
-                    : unsold
-                      ? 'Link to what you were paid…'
-                      : tradePayment
-                        ? 'Link more transfers…'
-                        : 'Link…'}
+                  : relinkable
+                    ? 'Change link…'
+                    : unpaid
+                      ? 'Link to its payment…'
+                      : unsold
+                        ? 'Link to what you were paid…'
+                        : tradePayment
+                          ? 'Link more transfers…'
+                          : 'Link…'}
               </button>
             )}
           </div>
@@ -621,7 +615,26 @@ function TxDetails({
 
 /** Money value of a transfer row, without the gas. */
 const moneyOf = (a: CashflowActivity) =>
-  OUTGOING.includes(a.type) ? a.outUsd - a.feeUsd : a.inUsd;
+  // A paired bridge books only its fee; what it moved is in its legs.
+  a.type === 'bridge'
+    ? a.legs.reduce((sum, l) => sum + (l.usd ?? 0), 0)
+    : OUTGOING.includes(a.type)
+      ? a.outUsd - a.feeUsd
+      : a.inUsd;
+
+/** The saved-link pairs (from → to) a linked row is part of, for unlinking it. */
+function linkedPairs(a: CashflowActivity) {
+  const linked = a.linkedTxs ?? (a.linkedTo ? [a.linkedTo] : []);
+  return linked.map((other) =>
+    a.linkSide === 'out'
+      ? { fromChain: a.chain, fromTxHash: a.txHash, toChain: other.chain, toTxHash: other.txHash }
+      : { fromChain: other.chain, fromTxHash: other.txHash, toChain: a.chain, toTxHash: a.txHash },
+  );
+}
+
+/** Which way money went: a paired bridge keeps the side it was on. */
+const isOutgoing = (a: CashflowActivity) =>
+  OUTGOING.includes(a.type) || (a.type === 'bridge' && a.linkSide === 'out');
 
 /** " to AbCd…x9JZ (Bob)" — who the other side of a candidate transaction was. */
 function PartyNote({ a, report }: { a: CashflowActivity; report: CashflowReport }) {
@@ -755,7 +768,14 @@ export function LinkPicker({
   onDone: () => void;
 }) {
   const { run, busy } = useCashflowActions();
-  const sourceIsOut = OUTGOING.includes(source.type);
+  const sourceIsOut = isOutgoing(source);
+  // Re-pointing a bridge that was matched to the wrong transaction.
+  const relinking = source.type === 'bridge';
+  const currentPartners = new Set(
+    (source.linkedTxs ?? (source.linkedTo ? [source.linkedTo] : [])).map(
+      (t) => `${t.chain}:${t.txHash.toLowerCase()}`,
+    ),
+  );
   const assetSource = source.type === 'received_asset' || source.type === 'sent_asset';
   const [manualChain, setManualChain] = useState(
     assetSource ? source.chain : source.chain === 'solana' ? 'ethereum' : 'solana',
@@ -779,14 +799,24 @@ export function LinkPicker({
           : source.type === 'sent_asset'
             ? INCOMING
             : sourceIsOut
-              ? [...INCOMING, 'received_asset']
-              : [...OUTGOING, 'sent_asset'];
+              ? // A bridge arrival already (wrongly) paired with something else can be taken over.
+                [...INCOMING, 'received_asset', 'bridge']
+              : [...OUTGOING, 'sent_asset', 'bridge'];
     const t0 = new Date(source.timestamp).getTime();
     const value = moneyOf(source);
     const party = source.counterparty?.toLowerCase() ?? null;
     return (
       report.activity
-        .filter((b) => partnerTypes.includes(b.type) && b !== source)
+        .filter(
+          (b) =>
+            partnerTypes.includes(b.type) &&
+            b !== source &&
+            // Only the other side of a bridge, and not the one it's already paired with.
+            (b.type !== 'bridge' ||
+              (b.linkSide !== null &&
+                isOutgoing(b) !== sourceIsOut &&
+                !currentPartners.has(`${b.chain}:${b.txHash.toLowerCase()}`))),
+        )
         .map((b) => ({
           b,
           dt: new Date(b.timestamp).getTime() - t0,
@@ -862,11 +892,26 @@ export function LinkPicker({
         ? 'Linked — that payment now counts as what you paid for this'
         : source.type === 'sent_asset'
           ? 'Linked — counted as a sale for that payment'
-          : others.length > 1
-            ? `Linked ${others.length} transactions as one trade`
-            : 'Linked',
+          : relinking
+            ? 'Link changed'
+            : others.length > 1
+              ? `Linked ${others.length} transactions as one trade`
+              : 'Linked',
       async (token, view) => {
         let last: CashflowResponse | null = null;
+        // Reject the wrong pairings first — this bridge's, and any the picked
+        // transactions are in — so neither the matcher nor Relay's records
+        // pair them back up, and a saved link doesn't block the new one.
+        const stale = [
+          source,
+          ...others.map((o) =>
+            report.activity.find((b) => sameTx(b.chain, b.txHash, o.chain, o.txHash)),
+          ),
+        ]
+          .filter((b): b is CashflowActivity => !!b && b.type === 'bridge')
+          .flatMap(linkedPairs);
+        for (const pair of stale)
+          last = await addCashflowLink(token, { kind: 'unlink', ...pair }, view);
         for (const o of others)
           last = await addCashflowLink(token, { kind: 'link', ...pairFor(o) }, view);
         return last!;
@@ -892,13 +937,15 @@ export function LinkPicker({
   return (
     <div className="mt-3 rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-sm">
       <div className="mb-2 text-xs text-gray-400">
-        {source.type === 'received_asset'
-          ? 'Paid for separately — a presale, an OTC deal, or a cross-chain (Relay) mint? Pick the payment.'
-          : source.type === 'sent_asset'
-            ? 'Sold this in an OTC deal? Pick the payment you received for it.'
-            : sourceIsOut
-              ? 'Where did this money arrive — or what did it pay for (OTC deal, cross-chain mint)?'
-              : 'Where did this money come from — or what did you sell for it?'}
+        {relinking
+          ? 'Matched to the wrong transaction? Pick the right one — the current match is undone.'
+          : source.type === 'received_asset'
+            ? 'Paid for separately — a presale, an OTC deal, or a cross-chain (Relay) mint? Pick the payment.'
+            : source.type === 'sent_asset'
+              ? 'Sold this in an OTC deal? Pick the payment you received for it.'
+              : sourceIsOut
+                ? 'Where did this money arrive — or what did it pay for (OTC deal, cross-chain mint)?'
+                : 'Where did this money come from — or what did you sell for it?'}
       </div>
       <SavedLinks source={source} report={report} />
       <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
