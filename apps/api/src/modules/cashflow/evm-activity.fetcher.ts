@@ -1,5 +1,5 @@
 import { Logger } from '@nestjs/common';
-import { knownAsset } from './base-assets';
+import { knownAsset, USD_NATIVE_SYMBOLS, type PriceRef } from './base-assets';
 import type { LedgerAsset, LedgerFee, LedgerMovement } from './cashflow-ledger';
 import { chunk, fetchJsonWithRetry, NonRetryableError } from './http';
 
@@ -19,6 +19,7 @@ const ALCHEMY_NETWORK: Record<string, string> = {
   blast: 'blast-mainnet',
   linea: 'linea-mainnet',
   robinhood: 'robinhood-mainnet',
+  arc: 'arc-mainnet',
 };
 
 export const EVM_NATIVE: Record<string, { symbol: string; name: string }> = {
@@ -33,6 +34,7 @@ export const EVM_NATIVE: Record<string, { symbol: string; name: string }> = {
   blast: { symbol: 'ETH', name: 'Ether' },
   linea: { symbol: 'ETH', name: 'Ether' },
   robinhood: { symbol: 'ETH', name: 'Ether' },
+  arc: { symbol: 'USDC', name: 'USD Coin' },
 };
 
 export const EVM_CHAINS = Object.keys(ALCHEMY_NETWORK);
@@ -41,6 +43,11 @@ export const EVM_CHAINS = Object.keys(ALCHEMY_NETWORK);
 const ZKSYNC_CHAINS = new Set(['abstract']);
 const ZKSYNC_ETH = '0x000000000000000000000000000000000000800a';
 const ZKSYNC_BOOTLOADER = '0x0000000000000000000000000000000000008001';
+
+/** Arc: USDC is the native coin, also reachable through an ERC-20 interface (6 decimals). */
+const ARC_USDC = '0x3600000000000000000000000000000000000000';
+/** Arc logs every USDC move (native sends, contract payouts, ERC-20 calls) from this address, 18 decimals (EIP-7708). */
+const ARC_SYSTEM_EMITTER = '0xfffffffffffffffffffffffffffffffffffffffe';
 
 /** Transactions per wallet+chain checked for payments hidden inside contract calls. */
 const MAX_BALANCE_PROBES = 1000;
@@ -96,7 +103,9 @@ export function evmAssetFor(chain: string, t: AlchemyTransfer, assets: Map<strin
   let asset: LedgerAsset;
   if (isNative) {
     const native = EVM_NATIVE[chain] ?? { symbol: 'ETH', name: 'Ether' };
-    asset = { key, chain, kind: 'native', contract: '', name: native.name, symbol: native.symbol, price: { kind: 'native', symbol: native.symbol } };
+    // A dollar native coin (Arc's USDC) is priced like any stablecoin.
+    const price: PriceRef = USD_NATIVE_SYMBOLS.has(native.symbol) ? { kind: 'usd' } : { kind: 'native', symbol: native.symbol };
+    asset = { key, chain, kind: 'native', contract: '', name: native.name, symbol: native.symbol, price };
   } else if (t.category === 'erc20') {
     const known = knownAsset(chain, contract);
     const symbol = known?.symbol ?? t.asset ?? null;
@@ -294,7 +303,7 @@ export class EvmActivityFetcher {
       return true;
     });
 
-    const transfers = ZKSYNC_CHAINS.has(chain) ? normalizeZkSyncEth(all) : all;
+    const transfers = ZKSYNC_CHAINS.has(chain) ? normalizeZkSyncEth(all) : chain === 'arc' ? normalizeArcUsdc(all) : all;
 
     // Fill missing block timestamps (some networks, e.g. Abstract, omit them).
     const missingBlocks = [...new Set(transfers.filter((t) => !t.metadata?.blockTimestamp).map((t) => t.blockNum))];
@@ -573,6 +582,50 @@ export function normalizeZkSyncEth(transfers: AlchemyTransfer[]): AlchemyTransfe
     if (from === ZKSYNC_BOOTLOADER || to === ZKSYNC_BOOTLOADER) continue;
     if (nativeKeys.has(`${t.hash}:${from}:${to}:${hexToBigInt(t.rawContract?.value) ?? ''}`)) continue;
     out.push({ ...t, category: 'internal', asset: 'ETH', rawContract: { value: t.rawContract?.value ?? null, address: null, decimal: '0x12' } });
+  }
+  return out;
+}
+
+/**
+ * On Arc one USDC move can show up as up to three records: the native value
+ * ('external'), the ERC-20 interface's Transfer (6 decimals), and the
+ * system emitter's EIP-7708 Transfer (18 decimals) — which also covers USDC a
+ * contract paid out, with no other record. Count each move once, as native
+ * USDC: the emitter's record when there is one, otherwise whichever other
+ * record there is.
+ */
+export function normalizeArcUsdc(transfers: AlchemyTransfer[]): AlchemyTransfer[] {
+  const contractOf = (t: AlchemyTransfer) => (t.rawContract?.address ?? '').toLowerCase();
+  /** Amount in 18-decimal units, so the three records compare equal. */
+  const wei = (t: AlchemyTransfer) => {
+    const raw = hexToBigInt(t.rawContract?.value);
+    if (raw === null) return '';
+    return String(t.category === 'erc20' && contractOf(t) === ARC_USDC ? raw * 10n ** 12n : raw);
+  };
+  const keyOf = (t: AlchemyTransfer) =>
+    `${t.hash}:${(t.from ?? '').toLowerCase()}:${(t.to ?? '').toLowerCase()}:${wei(t)}`;
+  const isEmitter = (t: AlchemyTransfer) => t.category === 'erc20' && contractOf(t) === ARC_SYSTEM_EMITTER;
+  const emitted = new Set(transfers.filter(isEmitter).map(keyOf));
+  const nativeSeen = new Set<string>();
+  const out: AlchemyTransfer[] = [];
+  for (const t of transfers) {
+    const viaErc20 = t.category === 'erc20' && contractOf(t) === ARC_USDC;
+    const native = t.category === 'external' || t.category === 'internal';
+    if (isEmitter(t)) {
+      out.push({ ...t, category: 'internal', asset: 'USDC', rawContract: { value: t.rawContract?.value ?? null, address: null, decimal: '0x12' } });
+    } else if (viaErc20 || native) {
+      const key = keyOf(t);
+      // Already counted from the emitter, or (ERC-20 call with native value) from the other record.
+      if (emitted.has(key) || nativeSeen.has(key)) continue;
+      nativeSeen.add(key);
+      out.push(
+        viaErc20
+          ? { ...t, category: 'internal', asset: 'USDC', rawContract: { value: t.rawContract?.value ?? null, address: null, decimal: '0x6' } }
+          : t,
+      );
+    } else {
+      out.push(t);
+    }
   }
   return out;
 }

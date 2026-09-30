@@ -71,6 +71,10 @@ const KNOWN_ASSETS: Record<string, Record<string, KnownAsset>> = {
     // Global Dollar (Paxos) — the chain's main stablecoin; Relay routes NFT buys through it.
     '0x5fc5360d0400a0fd4f2af552add042d716f1d168': { symbol: 'USDG', price: USD },
   },
+  arc: {
+    // USDC's ERC-20 interface to the native coin (6 decimals); folded into native USDC when scanned.
+    '0x3600000000000000000000000000000000000000': { symbol: 'USDC', price: USD },
+  },
   linea: {
     '0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f': { symbol: 'WETH', price: ETH },
     '0x176211869ca2b568f2a7d4ee941e073a821ee1ff': { symbol: 'USDC', price: USD },
@@ -88,7 +92,10 @@ export function knownAsset(chain: string, contract: string): KnownAsset | null {
   return table[chain === 'solana' ? contract : contract.toLowerCase()] ?? null;
 }
 
-const NATIVE_SYMBOL: Record<string, string> = { polygon: 'POL', apechain: 'APE', solana: 'SOL' };
+const NATIVE_SYMBOL: Record<string, string> = { polygon: 'POL', apechain: 'APE', arc: 'USDC', solana: 'SOL' };
+
+/** Native coins that are dollars (Arc pays gas in USDC): always worth $1. */
+export const USD_NATIVE_SYMBOLS = new Set(['USDC']);
 
 /** The coin a chain's gas and native transfers are denominated in (ETH for Ethereum and its L2s). */
 export function nativeSymbolFor(chain: string): string {

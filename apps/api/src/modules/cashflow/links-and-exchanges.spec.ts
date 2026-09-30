@@ -315,3 +315,47 @@ describe('Robinhood Chain', () => {
     expect(r.inByCategory.nft_sale).toBeCloseTo(90);
   });
 });
+
+describe('Arc', () => {
+  const { EVM_CHAINS, evmAssetFor, normalizeArcUsdc, normalizeEvmTransfer } = jest.requireActual('./evm-activity.fetcher');
+  const { RELAY_CHAIN_IDS } = jest.requireActual('./relay-links.fetcher');
+  const { nativeSymbolFor } = jest.requireActual('./base-assets');
+  const me = '0x00000000000000000000000000000000000000aa';
+  const shop = '0x00000000000000000000000000000000000000bb';
+  const usdc = '0x3600000000000000000000000000000000000000';
+  const emitter = '0xfffffffffffffffffffffffffffffffffffffffe';
+  const ten18 = '0x8ac7230489e80000'; // 10 USDC at 18 decimals
+  const ten6 = '0x989680'; // 10 USDC at 6 decimals
+
+  it('is scanned as a USDC-gas EVM chain priced at $1 and maps from its chain id', () => {
+    expect(EVM_CHAINS).toContain('arc');
+    expect(evmAssetFor('arc', { category: 'external' }, new Map()).price).toEqual({ kind: 'usd' });
+    expect(nativeSymbolFor('arc')).toBe('USDC');
+    expect(RELAY_CHAIN_IDS[5042]).toBe('arc');
+  });
+
+  it('counts a USDC move once whether it shows as native value, the ERC-20 interface or the system emitter', () => {
+    const t = (hash: string, category: string, contract: string | null, value: string) => ({
+      hash, category, from: me, to: shop, blockNum: '0x1',
+      rawContract: { address: contract, value, decimal: contract === usdc ? '0x6' : '0x12' },
+    });
+    const out = normalizeArcUsdc([
+      // Native send: value + emitter log.
+      t('0x1', 'external', null, ten18),
+      t('0x1', 'erc20', emitter, ten18),
+      // ERC-20 transfer(): interface log + emitter log.
+      t('0x2', 'erc20', usdc, ten6),
+      t('0x2', 'erc20', emitter, ten18),
+      // Emitter records not indexed: the ERC-20 record alone still counts.
+      t('0x3', 'erc20', usdc, ten6),
+      // A contract paid out USDC: only the emitter saw it.
+      { ...t('0x4', 'erc20', emitter, ten18), from: shop, to: me },
+    ]);
+    expect(out.map((x: { hash: string }) => x.hash)).toEqual(['0x1', '0x2', '0x3', '0x4']);
+    expect(out.every((x: { category: string }) => x.category !== 'erc20')).toBe(true);
+    const moves = out.flatMap((x: object) => normalizeEvmTransfer('arc', me, x, new Date(), new Map()));
+    expect(moves.map((m: { amount: number; direction: string }) => [m.amount, m.direction])).toEqual([
+      [10, 'out'], [10, 'out'], [10, 'out'], [10, 'in'],
+    ]);
+  });
+});
