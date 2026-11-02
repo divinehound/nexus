@@ -12,7 +12,6 @@ import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
 import {
   chainEnum,
   collections,
-  projects,
   type Database,
   walletHoldingsSnapshots,
   walletIndexingJobs,
@@ -239,22 +238,12 @@ export class HoldingsService {
       this.logger.warn(`Failed to enrich ${contractAddress} on ${chain}: ${err}`);
     }
 
-    const baseSlug = `auto-${chain}-${short}`;
-
-    const [project] = await this.db
-      .insert(projects)
-      .values({
-        name: metadata?.name || `Auto ${chain.toUpperCase()} ${short}`,
-        slug: `${baseSlug}-${Date.now()}`,
-        imageUrl: metadata?.imageUrl,
-        isVerified: false,
-      })
-      .returning();
-
+    // No project of its own: most contracts found in wallets are one-offs or
+    // spam. It stays unmapped until an admin groups it into a project.
     const [created] = await this.db
       .insert(collections)
       .values({
-        projectId: project.id,
+        projectId: null,
         contractAddress,
         chain,
         name: metadata?.name || `Collection ${short}`,
