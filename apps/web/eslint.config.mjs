@@ -1,7 +1,7 @@
-import nextConfig from '@nexus/eslint-config/next';
+import baseConfig from '@nexus/eslint-config/base';
 
 export default [
-  ...nextConfig,
+  ...baseConfig,
   {
     rules: {
       'no-restricted-globals': ['error',

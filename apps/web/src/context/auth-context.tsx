@@ -1,5 +1,3 @@
-'use client';
-
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import type {

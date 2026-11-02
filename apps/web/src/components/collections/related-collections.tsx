@@ -1,7 +1,5 @@
-'use client';
-
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { Link } from 'react-router';
 import { getRelatedCollections, type RelatedCollection } from '@/lib/api';
 
 interface RelatedCollectionsProps {
@@ -71,7 +69,7 @@ export function RelatedCollections({ collectionId }: RelatedCollectionsProps) {
         {related.map((collection) => (
           <Link
             key={collection.id}
-            href={`/collection/${collection.chain}/${collection.contractAddress}`}
+            to={`/collection/${collection.chain}/${collection.contractAddress}`}
             className="group rounded-lg border border-gray-800 bg-gray-950 p-4 transition-all hover:border-purple-600 hover:bg-gray-900"
           >
             <div className="flex items-start gap-3">

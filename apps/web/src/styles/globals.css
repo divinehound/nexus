@@ -1,8 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  --font-heading: var(--font-heading);
-  --font-body: var(--font-body);
+  /* Self-hosted variable fonts, imported in src/main.tsx */
+  --font-heading: 'Plus Jakarta Sans Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
   
   /* Map font families to Tailwind utilities */
   --font-sans: var(--font-body);

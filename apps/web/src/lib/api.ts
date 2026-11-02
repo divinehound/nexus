@@ -1,11 +1,8 @@
 import type { CashflowResponse } from '@nexus/types';
 
-// Server-side: use the internal Docker network URL to reach the API directly.
-// Client-side: use a relative path that Next.js rewrites to the API server.
-const API_BASE =
-  typeof window === 'undefined'
-    ? (process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api')
-    : (process.env.NEXT_PUBLIC_API_URL || '/api');
+// The API is served on the same origin under /api (nginx in production, the Vite dev server
+// locally, both proxying to NestJS). VITE_API_URL points somewhere else at build time.
+export const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 export class ApiError extends Error {
   status: number;

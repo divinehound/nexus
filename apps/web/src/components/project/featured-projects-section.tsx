@@ -1,6 +1,4 @@
-'use client';
-
-import Link from 'next/link';
+import { Link } from 'react-router';
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 
@@ -59,7 +57,7 @@ export function FeaturedProjectsSection() {
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((p) => (
-            <Link key={p.id} href={`/project/${p.slug}`} className="flex items-center gap-3 rounded-xl border border-gray-800 px-4 py-3 hover:border-gray-600">
+            <Link key={p.id} to={`/project/${p.slug}`} className="flex items-center gap-3 rounded-xl border border-gray-800 px-4 py-3 hover:border-gray-600">
               {p.imageUrl && <img src={p.imageUrl} alt={p.name} className="h-10 w-10 rounded-lg object-cover" />}
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{p.name}</p>

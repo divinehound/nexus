@@ -1,5 +1,3 @@
-'use client';
-
 import { type ReactNode } from 'react';
 import { ReownProvider } from '@/context/reown-provider';
 import { AuthProvider } from '@/context/auth-context';

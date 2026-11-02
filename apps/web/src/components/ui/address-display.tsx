@@ -1,5 +1,3 @@
-'use client';
-
 import { useState, useRef, useEffect } from 'react';
 import { useResolveDomain } from '@/hooks/use-resolve-domain';
 import { useWalletNicknames, useSetNickname } from '@/hooks/use-wallet-nicknames';

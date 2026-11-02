@@ -1,15 +1,12 @@
-'use client';
-
 import { useState } from 'react';
-import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { Link, useLocation } from 'react-router';
 import { ConnectButton } from '@/components/wallet/connect-button-unified';
 import { useAuth } from '@/context/auth-context';
 
 export function Navbar() {
   const { user } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const pathname = usePathname();
+  const { pathname } = useLocation();
 
   const navLinks = [
     { href: '/discover', label: 'Discover' },
@@ -24,7 +21,7 @@ export function Navbar() {
       <div className="mx-auto max-w-7xl px-4">
         <div className="flex items-center justify-between py-3">
           {/* Logo */}
-          <Link href="/" className="text-xl font-bold tracking-tight text-white">
+          <Link to="/" className="text-xl font-bold tracking-tight text-white">
             NEXUS
           </Link>
 
@@ -69,7 +66,7 @@ export function Navbar() {
               {navLinks.map((link) => (
                 <Link
                   key={link.href}
-                  href={link.href}
+                  to={link.href}
                   onClick={() => setMobileMenuOpen(false)}
                   className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                     pathname === link.href
@@ -94,7 +91,7 @@ export function Navbar() {
 function NavLink({ href, children, active }: { href: string; children: React.ReactNode; active?: boolean }) {
   return (
     <Link
-      href={href}
+      to={href}
       className={`text-sm font-medium transition-colors ${
         active ? 'text-purple-400' : 'text-gray-400 hover:text-white'
       }`}

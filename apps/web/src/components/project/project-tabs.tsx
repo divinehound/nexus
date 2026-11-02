@@ -1,5 +1,3 @@
-'use client';
-
 import { useState } from 'react';
 import { ActivityFeed } from '@/components/activity/activity-feed';
 import { FlexForm } from '@/components/activity/flex-form';

@@ -1,7 +1,5 @@
-'use client';
-
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useNavigate } from 'react-router';
 import { useAuth } from '@/context/auth-context';
 import { apiFetch } from '@/lib/api';
 import { AddressDisplay } from '@/components/ui/address-display';
@@ -51,7 +49,7 @@ export function BlockchainResults({
 
 function BlockchainResultCard({ info }: { info: BlockchainContractInfo }) {
   const { accessToken: token } = useAuth();
-  const router = useRouter();
+  const navigate = useNavigate();
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [imported, setImported] = useState<ImportResult | null>(null);
@@ -99,7 +97,7 @@ function BlockchainResultCard({ info }: { info: BlockchainContractInfo }) {
         </div>
         <button
           onClick={() =>
-            router.push(
+            navigate(
               imported.project
                 ? `/project/${imported.project.slug}/${info.contractAddress}`
                 : `/collection/${imported.collection.chain ?? info.chain}/${imported.collection.contractAddress}`,

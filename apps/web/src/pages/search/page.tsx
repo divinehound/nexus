@@ -1,0 +1,244 @@
+import { Link, Navigate, useSearchParams } from 'react-router';
+import { useQuery } from '@tanstack/react-query';
+import { SearchBar } from '@/components/search/search-bar';
+import { BlockchainResults } from '@/components/search/blockchain-results';
+import { apiFetch, trackCollection, type CollectionVerificationStatus } from '@/lib/api';
+import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
+import { truncateAddress, formatPrice, chainCurrency } from '@/lib/utils';
+import type { BlockchainContractInfo } from '@nexus/types';
+import { PageSpinner } from '@/components/ui/page-spinner';
+
+interface SearchResults {
+  projects: {
+    id: string;
+    name: string;
+    slug: string;
+    description: string | null;
+    imageUrl: string | null;
+    healthScore: number | null;
+    collections: { id: string; name: string; chain: string; floorPrice: number | null }[];
+  }[];
+  collections: {
+    id: string;
+    name: string;
+    contractAddress: string;
+    chain: string;
+    floorPrice: number | null;
+    holderCount: number | null;
+    imageUrl: string | null;
+    project: { id: string; name: string; slug: string } | null;
+    verificationStatus: CollectionVerificationStatus;
+  }[];
+  blockchainResults: BlockchainContractInfo[];
+}
+
+const EVM_CONTRACT_PATTERN = /^0x[a-fA-F0-9]{40}$/;
+const SOLANA_ADDRESS_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+function getContractInput(
+  query: string,
+  chain?: string,
+): { chain: string; contractAddress: string } | null {
+  const normalized = query.trim();
+  const normalizedChain = (chain || 'ethereum').toLowerCase();
+
+  if (normalizedChain === 'solana') {
+    return SOLANA_ADDRESS_PATTERN.test(normalized)
+      ? { chain: 'solana', contractAddress: normalized }
+      : null;
+  }
+
+  if (!EVM_CONTRACT_PATTERN.test(normalized)) return null;
+
+  return {
+    chain: normalizedChain,
+    contractAddress: normalized.toLowerCase(),
+  };
+}
+
+interface SearchOutcome {
+  results: SearchResults | null;
+  searchError: boolean;
+  /** Set when nothing matched but the query is a contract address we've now started tracking. */
+  trackedPath: string | null;
+}
+
+async function runSearch(q: string, chain: string | undefined): Promise<SearchOutcome> {
+  let results: SearchResults | null = null;
+  let searchError = false;
+  try {
+    const params = new URLSearchParams({ q });
+    if (chain) params.set('chain', chain);
+    results = await apiFetch<SearchResults>(`/search?${params.toString()}`);
+  } catch (err) {
+    console.error('Search API request failed:', err);
+    searchError = true;
+  }
+
+  const hasResults = Boolean(
+    results &&
+    (results.projects.length > 0 ||
+      results.collections.length > 0 ||
+      results.blockchainResults?.length > 0),
+  );
+  if (!hasResults) {
+    const contractInput = getContractInput(q, chain);
+    if (contractInput) {
+      try {
+        await trackCollection(contractInput);
+        return {
+          results,
+          searchError,
+          trackedPath: `/collection/${contractInput.chain}/${contractInput.contractAddress}`,
+        };
+      } catch {
+        // Keep normal "No results" UX if tracking fails
+      }
+    }
+  }
+  return { results, searchError, trackedPath: null };
+}
+
+export default function SearchPage() {
+  const [searchParams] = useSearchParams();
+  const q = searchParams.get('q') ?? undefined;
+  const chain = searchParams.get('chain') ?? undefined;
+
+  const { data, isFetching, refetch } = useQuery({
+    queryKey: ['search', q, chain],
+    queryFn: () => runSearch(q!, chain),
+    enabled: Boolean(q),
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+
+  if (data?.trackedPath) return <Navigate to={data.trackedPath} replace />;
+
+  const results = data?.results ?? null;
+  const searchError = data?.searchError ?? false;
+  const hasLocalResults =
+    results && (results.projects.length > 0 || results.collections.length > 0);
+  const hasBlockchainResults = results && results.blockchainResults?.length > 0;
+
+  return (
+    <main className="mx-auto max-w-7xl px-4 py-8">
+      <div className="mb-8">
+        {/* Keyed so the box shows the current query after a navigation. */}
+        <SearchBar key={`${q ?? ''}|${chain ?? ''}`} />
+      </div>
+
+      {q && isFetching && <PageSpinner />}
+
+      {!q && (
+        <p className="text-gray-500">Search for a project, collection, or contract address.</p>
+      )}
+
+      {searchError && (
+        <div className="mb-6 rounded-xl border border-red-900/50 bg-red-950/30 p-4">
+          <p className="text-sm text-red-200">Search failed. Please try again.</p>
+          <button
+            onClick={() => refetch()}
+            className="mt-2 inline-block text-sm text-red-200 underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {q && data && !searchError && !hasLocalResults && !hasBlockchainResults && (
+        <p className="text-gray-500">No results found for &ldquo;{q}&rdquo;</p>
+      )}
+
+      {results && results.projects.length > 0 && (
+        <section className="mb-10">
+          <h2 className="mb-4 text-lg font-semibold text-gray-300">Projects</h2>
+          <div className="space-y-3">
+            {results.projects.map((p) => (
+              <Link
+                key={p.id}
+                to={`/project/${p.slug}`}
+                className="flex items-center gap-4 rounded-xl border border-gray-800 px-4 py-3 transition-colors hover:border-gray-600"
+              >
+                {p.imageUrl && (
+                  <img
+                    src={p.imageUrl}
+                    alt={p.name}
+                    className="h-12 w-12 rounded-lg object-cover"
+                  />
+                )}
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-medium">{p.name}</h3>
+                    {p.healthScore !== null && (
+                      <span className="text-xs text-gray-500">Score: {p.healthScore}</span>
+                    )}
+                  </div>
+                  {p.description && (
+                    <p className="mt-0.5 text-sm text-gray-500 line-clamp-1">{p.description}</p>
+                  )}
+                </div>
+                <span className="text-sm text-gray-500">
+                  {p.collections.length} collection{p.collections.length !== 1 ? 's' : ''}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {results && results.collections.length > 0 && (
+        <section>
+          <h2 className="mb-4 text-lg font-semibold text-gray-300">Collections</h2>
+          <div className="space-y-3">
+            {results.collections.map((c) => {
+              // Collections-first: some collections may not have projects yet
+              const href = c.project
+                ? `/project/${c.project.slug}/${c.contractAddress}`
+                : `/collection/${c.chain}/${c.contractAddress}`;
+
+              return (
+                <Link
+                  key={c.id}
+                  to={href}
+                  className="flex items-center gap-4 rounded-xl border border-gray-800 px-4 py-3 transition-colors hover:border-gray-600"
+                >
+                  {c.imageUrl && (
+                    <img
+                      src={c.imageUrl}
+                      alt={c.name}
+                      className="h-12 w-12 rounded-lg object-cover"
+                    />
+                  )}
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-medium">{c.name}</h3>
+                      <TrustBadge status={c.verificationStatus} />
+                    </div>
+                    <p className="text-sm text-gray-500">
+                      {c.project ? `${c.project.name} · ` : ''}
+                      {c.chain} · {truncateAddress(c.contractAddress)}
+                    </p>
+                    {(c.verificationStatus === 'tracked_unverified' ||
+                      c.verificationStatus === 'rejected') && (
+                      <TrustDisclaimer status={c.verificationStatus} />
+                    )}
+                  </div>
+                  <div className="text-right text-sm">
+                    {c.floorPrice !== null && (
+                      <p>{formatPrice(c.floorPrice, chainCurrency(c.chain))}</p>
+                    )}
+                    {c.holderCount !== null && (
+                      <p className="text-gray-500">{c.holderCount.toLocaleString()} holders</p>
+                    )}
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {hasBlockchainResults && <BlockchainResults results={results!.blockchainResults} />}
+    </main>
+  );
+}

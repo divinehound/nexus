@@ -1,9 +1,7 @@
-'use client';
-
 import { useEffect, useState } from 'react';
 import { getRecommendations, type Recommendation } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
-import Link from 'next/link';
+import { Link } from 'react-router';
 
 interface RecommendationsProps {
   limit?: number;
@@ -154,7 +152,7 @@ export function PersonalizedRecommendations({ limit = 10, minOverlap = 3 }: Reco
         {recommendations.map((rec) => (
           <Link
             key={rec.collection.id}
-            href={`/collection/${rec.collection.chain}/${rec.collection.contractAddress}`}
+            to={`/collection/${rec.collection.chain}/${rec.collection.contractAddress}`}
             className="group rounded-xl border border-gray-800 bg-gray-900/50 p-4 transition-colors hover:border-purple-700 hover:bg-gray-900"
           >
             <div className="flex items-start gap-3">

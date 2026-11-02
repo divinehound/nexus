@@ -1,5 +1,3 @@
-'use client';
-
 import { useState } from 'react';
 import { RelatedCollections } from './related-collections';
 import { NetworkGraphVisualization } from '../discovery/network-graph-enhanced';

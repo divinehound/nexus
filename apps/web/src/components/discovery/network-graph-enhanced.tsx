@@ -1,8 +1,6 @@
-'use client';
-
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { getNetworkGraph, getCollectionConnections, type NetworkGraph, type NetworkGraphNode } from '@/lib/api';
-import Link from 'next/link';
+import { Link } from 'react-router';
 import * as d3 from 'd3';
 
 interface NetworkGraphProps {
@@ -404,7 +402,7 @@ export function NetworkGraphVisualization({
               </p>
             </div>
             <Link
-              href={`/collection/${focusedNodeData.chain}/${focusedNodeData.contractAddress}`}
+              to={`/collection/${focusedNodeData.chain}/${focusedNodeData.contractAddress}`}
               className="ml-auto rounded bg-purple-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-600"
             >
               View Details →

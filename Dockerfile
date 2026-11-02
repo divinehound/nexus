@@ -38,21 +38,9 @@ WORKDIR /app/apps/api
 EXPOSE 4000
 CMD ["node", "dist/main"]
 
-# Stage 4: Web production image
-FROM node:22-slim AS web
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
-
-WORKDIR /app
-COPY --from=build /app/package.json /app/pnpm-workspace.yaml ./
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/packages ./packages
-COPY --from=build /app/apps/web/.next ./apps/web/.next
-COPY --from=build /app/apps/web/public ./apps/web/public
-COPY --from=build /app/apps/web/package.json ./apps/web/
-COPY --from=build /app/apps/web/node_modules ./apps/web/node_modules
-
-WORKDIR /app/apps/web
+# Stage 4: Web production image: the built SPA, served by nginx, which also proxies /api to the API
+FROM nginx:1.29-alpine AS web
+COPY apps/web/docker/nginx.conf.template /etc/nginx/nexus.conf.template
+COPY apps/web/docker/40-nexus-config.sh /docker-entrypoint.d/40-nexus-config.sh
+COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 EXPOSE 3000
-CMD ["pnpm", "start"]

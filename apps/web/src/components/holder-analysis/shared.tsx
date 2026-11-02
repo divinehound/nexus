@@ -1,6 +1,4 @@
-'use client';
-
-import Link from 'next/link';
+import { Link } from 'react-router';
 import { createContext, useContext } from 'react';
 import { type Overview, STATUS_LABEL, shortAddr, type Who } from '@/lib/holder-analysis';
 
@@ -22,7 +20,7 @@ export function WalletCell({ slug, address, who, full = false }: { slug: string;
   const name = who?.nickname || who?.ens || (who?.opensea ? `@${who.opensea}` : '');
   return (
     <span className="inline-flex min-w-0 flex-wrap items-center gap-x-2">
-      <Link href={`/project/${slug}/holders/wallet/${address}`} title={address} className="truncate text-purple-300 hover:text-purple-200">
+      <Link to={`/project/${slug}/holders/wallet/${address}`} title={address} className="truncate text-purple-300 hover:text-purple-200">
         {full ? <span className="font-mono">{address}</span> : name || <span className="font-mono">{shortAddr(address)}</span>}
       </Link>
       {name && !full && <span className="font-mono text-xs text-gray-500">{shortAddr(address)}</span>}
