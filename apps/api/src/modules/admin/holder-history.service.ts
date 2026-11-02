@@ -621,6 +621,7 @@ export class HolderHistoryService {
       if ((response.status === 429 || response.status >= 500) && transferRetries < 5) {
         // Throttling (e.g. right after a burst of sale-price lookups): back off and retry this page.
         transferRetries += 1;
+        await response.body?.cancel().catch(() => undefined);
         const delay = Math.min(2000 * Math.pow(2, transferRetries), 30000);
         this.logger.warn(`alchemy_getAssetTransfers page ${page}: HTTP ${response.status}, retrying in ${delay}ms`);
         await sleep(delay);
@@ -1511,6 +1512,7 @@ export class HolderHistoryService {
       if (attempt >= 5) {
         throw new Error(`${label} failed (${response.status}) after retries`);
       }
+      await response.body?.cancel().catch(() => undefined);
       const delay = Math.min(2000 * Math.pow(2, attempt), 30000);
       this.logger.warn(`${label}: HTTP ${response.status}, retrying in ${delay}ms (attempt ${attempt + 1})`);
       await sleep(delay);
@@ -1530,6 +1532,31 @@ export class HolderHistoryService {
       throw new Error(`${label} returned non-array response: ${message ?? JSON.stringify(data).slice(0, 300)}`);
     }
     return data;
+  }
+
+  /** One JSON-RPC call, shaped like a one-item batch response. Per-call errors come back as rows. */
+  private async evmRpcSingleWithRetry<R>(
+    endpoint: string,
+    payload: Record<string, unknown>,
+    label: string,
+  ): Promise<Array<{ id?: unknown; result?: R | null; error?: { code?: number; message?: string } }>> {
+    for (let attempt = 0; ; attempt++) {
+      const response = await this.withTimeout(
+        fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
+        30000,
+        label,
+      );
+      if ((response.status === 429 || response.status >= 500) && attempt < 5) {
+        await response.body?.cancel().catch(() => undefined);
+        await sleep(Math.min(2000 * Math.pow(2, attempt), 30000));
+        continue;
+      }
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`${label} failed (${response.status}): ${text.slice(0, 300)}`);
+      }
+      return [(await response.json()) as { id?: unknown; result?: R | null; error?: { code?: number; message?: string } }];
+    }
   }
 
   /**
@@ -1555,9 +1582,13 @@ export class HolderHistoryService {
         await sleep(delay);
       }
       const stillPending: string[] = [];
-      for (const batch of chunkArray(pending, batchSize)) {
+      const batches = chunkArray(pending, batchSize);
+      for (const [batchIndex, batch] of batches.entries()) {
         const payload = batch.map((key, id) => ({ jsonrpc: '2.0', id, method, params: paramsFor(key) }));
-        const rows = await this.evmRpcBatchWithRetry<R>(endpoint, payload, 0, `${method} batch (${batch.length})`);
+        const rows =
+          batchSize === 1
+            ? await this.evmRpcSingleWithRetry<R>(endpoint, payload[0], `${method}`)
+            : await this.evmRpcBatchWithRetry<R>(endpoint, payload, 0, `${method} batch (${batch.length})`);
         const resolved = new Set<number>();
         for (const row of rows) {
           if (typeof row?.id === 'number' && row.id < batch.length && row.result != null) {
@@ -1572,7 +1603,7 @@ export class HolderHistoryService {
         });
         // Keep under the free tier's compute-unit throughput (~20 receipts at
         // ~20 CU each per second), so the transfer feed isn't throttled after.
-        await sleep(pauseMs);
+        if (batchIndex < batches.length - 1) await sleep(pauseMs);
       }
       pending = stillPending;
     }
@@ -1809,7 +1840,7 @@ export class HolderHistoryService {
           }
         }
         if (keys.size) {
-          const results = await this.evmRpcMany<{ transfers?: Array<{ hash?: string; rawContract?: { value?: string | null } }> }>(
+          const results = await this.evmRpcMany<{ transfers?: Array<{ hash?: string; rawContract?: { value?: string | null } }>; pageKey?: string }>(
             endpoint,
             'alchemy_getAssetTransfers',
             Array.from(keys),
@@ -1817,20 +1848,24 @@ export class HolderHistoryService {
               const [block, address] = key.split('|');
               return [{ fromBlock: block, toBlock: block, toAddress: address, category: ['internal'], excludeZeroValue: true, maxCount: '0x64' }];
             },
-            // alchemy_getAssetTransfers is ~150 CU a call.
-            4,
+            // ~150 CU a call; sent one at a time (as the Money tab does), ~2 a second.
+            1,
+            500,
           );
-          for (const [key, r] of results) internal.set(key, r.transfers ?? []);
+          // A truncated result (more internal transfers in the block than one page) stays unknown.
+          for (const [key, r] of results) if (!r.pageKey) internal.set(key, r.transfers ?? []);
         }
-      } else if (needsTxValue(chain)) {
-        // No internal transfers (chain or project setting): a seller's plain-ETH payout is invisible,
-        // so the fallback only accepts sellers that are ordinary wallets.
+      }
+      if (needsTxValue(chain)) {
+        // Where a seller's plain-ETH payout is invisible (no internal-transfer
+        // lookup, or it failed), the fallback only accepts sellers that are
+        // ordinary wallets. eth_getCode is cheap and cached per scan.
         const sellers = new Set<string>();
         for (const h of fallbackHashes) for (const m of byTx.get(h)!) sellers.add(m.from);
         const unknown = Array.from(sellers).filter((a) => !stats.codeCache.has(a));
         if (unknown.length) {
           const code = await this.evmRpcMany<string>(endpoint, 'eth_getCode', unknown, (a) => [a, 'latest']);
-          for (const [a, c] of code) stats.codeCache.set(a, c !== '0x' && c !== '0x0');
+          for (const [a, c] of code) stats.codeCache.set(a, isContractCode(c));
         }
       }
     } catch (err) {
@@ -2043,6 +2078,15 @@ function normalizeTokenId(tokenId?: string): string {
 function normalizeCounterparty(addr: string | null): string {
   if (!addr) return '';
   return addr.toLowerCase() === ZERO_ADDRESS ? '' : addr;
+}
+
+/**
+ * True when eth_getCode returned contract code. An EIP-7702 delegation
+ * (0xef0100 + address) is still an ordinary wallet.
+ */
+function isContractCode(code: string | null | undefined): boolean {
+  if (!code || code === '0x' || code === '0x0') return false;
+  return !/^0xef0100[0-9a-f]{40}$/i.test(code);
 }
 
 function chunkArray<T>(items: T[], size: number): T[][] {

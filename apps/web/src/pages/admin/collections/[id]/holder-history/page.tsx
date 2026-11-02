@@ -242,7 +242,8 @@ export default function AdminCollectionHolderHistoryPage() {
             Exact seller payouts for <strong className="text-gray-200">{data.project.name}</strong>:{' '}
             <strong className="text-gray-200">{data.project.exactSalePayouts ? 'on' : 'off'}</strong>. When on,
             Blur and other non-OpenSea sales also look up the ETH paid out to the seller (about two extra Alchemy
-            calls per sale). When off, those sellers are assumed to have received the full price.
+            calls per sale) and any refund to the buyer. When off, a wallet seller is assumed to have received the full
+            price, and multi-NFT ETH sweeps stay unpriced.
           </span>
           <button
             type="button"

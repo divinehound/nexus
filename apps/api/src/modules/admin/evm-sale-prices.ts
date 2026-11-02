@@ -318,6 +318,8 @@ export function deriveSalePrices(
     }
     // ETH sent with the tx. With internal transfers known, refunds of it are
     // netted out; without them, only trust it for a single NFT bought alone.
+    // The buyer sent the tx but its ETH value couldn't be read: the price would be short.
+    if (!zksync && txFrom === buyer && txValue === null) continue;
     const sentValue = !zksync && txFrom === buyer && txValue !== null && txValue > 0n;
     if (sentValue) {
       if (!allToOneWallet || (!internalIn && units !== 1n)) continue;

@@ -174,6 +174,17 @@ describe('deriveSalePrices', () => {
       expect(prices.get(k(2, FRIEND))!.gross).toBeCloseTo(1, 9);
     });
 
+    it('leaves a sale unpriced when the buyer sent the tx but its ETH value is unknown', () => {
+      const r = receipt(BUYER, [nftTransfer(SELLER, BUYER, 7), tokenTransfer(BETH, BUYER, SELLER, eth(0.5))]);
+      expect(deriveSalePrices('ethereum', COLLECTION, r, [sale(7)], { txValue: null, isContract: () => false }).size).toBe(0);
+    });
+
+    it('falls back to the wallet check on Ethereum when the internal lookup is unavailable', () => {
+      const r = receipt(BUYER, [nftTransfer(SELLER, BUYER, 7)]);
+      const prices = deriveSalePrices('ethereum', COLLECTION, r, [sale(7)], { txValue: eth(1), internalIn: null, isContract: () => false });
+      expect(prices.get(k(7))).toEqual({ gross: 1, sellerNet: 1 });
+    });
+
     it('does not trust tx value for a multi-NFT sweep when refunds are invisible', () => {
       const r = receipt(BUYER, [nftTransfer(SELLER, BUYER, 1), nftTransfer(FRIEND, BUYER, 2)]);
       expect(deriveSalePrices('base', COLLECTION, r, [sale(1), sale(2, FRIEND)], { txValue: eth(3), isContract: () => false }).size).toBe(0);
