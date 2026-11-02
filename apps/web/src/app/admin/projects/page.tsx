@@ -1,6 +1,9 @@
 'use client';
 
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
 
@@ -32,6 +35,9 @@ interface ProjectOwner {
 
 export default function AdminProjectsPage() {
   const { accessToken } = useAuth();
+  const router = useRouter();
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
   const [data, setData] = useState<ProjectList | null>(null);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -53,6 +59,22 @@ export default function AdminProjectsPage() {
   };
 
   useEffect(fetchProjects, [accessToken, page]);
+
+  const createProject = async () => {
+    if (!accessToken || !newName.trim()) return;
+    setCreating(true);
+    try {
+      const created = await apiFetch<{ id: string }>(`/admin/projects`, {
+        method: 'POST',
+        token: accessToken,
+        body: JSON.stringify({ name: newName.trim() }),
+      });
+      router.push(`/admin/projects/${created.id}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not create the project');
+      setCreating(false);
+    }
+  };
 
   const toggleVerify = async (project: Project) => {
     if (!accessToken) return;
@@ -175,6 +197,28 @@ export default function AdminProjectsPage() {
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h2 className="text-xl font-semibold">Projects ({data?.total ?? 0})</h2>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            createProject();
+          }}
+          className="flex items-center gap-2"
+        >
+          <input
+            type="text"
+            placeholder="New project name"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            className="w-48 rounded border border-gray-700 bg-gray-900 px-2 py-1 text-sm text-white placeholder-gray-500 outline-none focus:border-purple-500"
+          />
+          <button
+            type="submit"
+            disabled={!newName.trim() || creating}
+            className="rounded bg-purple-600 px-3 py-1 text-sm font-medium text-white hover:bg-purple-500 disabled:opacity-50"
+          >
+            {creating ? 'Creating…' : 'New project'}
+          </button>
+        </form>
       </div>
 
       <div className="space-y-2">
@@ -183,7 +227,9 @@ export default function AdminProjectsPage() {
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-4">
                 <div>
-                  <span className="font-medium">{p.name}</span>
+                  <Link href={`/admin/projects/${p.id}`} className="font-medium hover:text-purple-300">
+                    {p.name}
+                  </Link>
                   <span className="ml-2 text-xs text-gray-500">/{p.slug}</span>
                   <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
                     <span className="font-mono">{p.id.slice(0, 8)}...</span>
@@ -233,6 +279,9 @@ export default function AdminProjectsPage() {
                       ? 'Featured'
                       : 'Not Featured'}
                 </button>
+                <Link href={`/admin/projects/${p.id}`} className="text-xs text-purple-400 hover:text-purple-300">
+                  Edit
+                </Link>
                 <button
                   onClick={() => toggleOwners(p.id)}
                   className="text-xs text-purple-400 hover:text-purple-300"
