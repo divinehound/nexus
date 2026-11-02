@@ -15,6 +15,7 @@ import {
   retryAdminIndexingJob,
 } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
+import { confirmDialog } from '@/components/ui/dialogs';
 
 const statusOptions: Array<{ label: string; value: '' | IndexingJobStatus }> = [
   { label: 'All', value: '' },
@@ -196,7 +197,12 @@ export default function AdminIndexingPage() {
 
   const retryJob = async (job: AdminIndexingJobListItem) => {
     if (!accessToken) return;
-    if (!confirm(`Retry indexing job ${job.id}?`)) return;
+    const ok = await confirmDialog({
+      title: 'Retry indexing job?',
+      message: `Job ${job.id} will be queued again.`,
+      confirmText: 'Retry',
+    });
+    if (!ok) return;
     try {
       await retryAdminIndexingJob(job.id, accessToken);
       await loadJobs();

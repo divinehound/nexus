@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { confirmDialog } from '@/components/ui/dialogs';
 import { type AdminStatus, day, holderAnalysis, minute, num } from '@/lib/holder-analysis';
 import { ImportOldApp } from './import-old-app';
 import { BUTTON, INPUT, SELECT } from './shared';
@@ -173,7 +174,7 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
                   <button
                     className={BUTTON}
                     disabled={busy === c.collectionId}
-                    onClick={() => {
+                    onClick={async () => {
                       const before = c.settings!;
                       const decimals = Number(d.decimals);
                       if (d.standard === 'erc20' && (!d.decimals.trim() || !Number.isInteger(decimals) || decimals < 0 || decimals > 36)) {
@@ -182,7 +183,12 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
                       }
                       if (
                         (d.standard !== before.standard || (d.standard === 'erc20' && decimals !== before.decimals)) &&
-                        !window.confirm('Changing the standard or decimals reads this collection from the chain again. Carry on?')
+                        !(await confirmDialog({
+                          title: 'Read this collection again?',
+                          message: 'Changing the standard or decimals reads this collection from the chain again.',
+                          confirmText: 'Save and re-read',
+                          variant: 'warning',
+                        }))
                       )
                         return;
                       run(

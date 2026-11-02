@@ -16,6 +16,7 @@ import {
   setCashflowWriteOff,
 } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
+import { confirmDialog } from '@/components/ui/dialogs';
 import { useCashflowActions } from './actions';
 import { flagKey } from './flags';
 import { CHAIN_LABELS, explorerName, qty, txExplorerUrl, usd } from './format';
@@ -185,11 +186,15 @@ export function useLostMenuItem(report: CashflowReport) {
           label: 'Mark as lost for good…',
           title:
             "What this sent away can't be recovered (e.g. stuck in a locked escrow): its cost is booked as a realized loss.",
-          onSelect: () => {
+          onSelect: async () => {
             if (
-              window.confirm(
-                'Mark what this transaction sent away as lost for good? Its cost will count as a realized loss. You can undo this.',
-              )
+              await confirmDialog({
+                title: 'Mark as lost for good?',
+                message:
+                  'What this transaction sent away will count as lost: its cost is booked as a realized loss. You can undo this.',
+                confirmText: 'Mark as lost',
+                variant: 'warning',
+              })
             )
               void run('Marked lost — its cost now counts as a realized loss', (tk, view) =>
                 setCashflowLost(tk, { chain, txHash, lost: true }, view),
@@ -746,11 +751,14 @@ export function useWriteOff(report: CashflowReport) {
           label: tokenId ? 'Mark as lost for good…' : 'Write off what’s still held…',
           title:
             'Still in your wallet but gone for good (frozen, can’t be moved or sold): its cost is booked as a realized loss today. You can undo this.',
-          onSelect: () => {
+          onSelect: async () => {
             if (
-              window.confirm(
-                `Write off ${what} as lost for good? Its cost will count as a realized loss today. You can undo this.`,
-              )
+              await confirmDialog({
+                title: 'Write off as lost?',
+                message: `Write off ${what} as lost for good? Its cost will count as a realized loss today. You can undo this.`,
+                confirmText: 'Write off',
+                variant: 'warning',
+              })
             )
               void run('Written off — its cost now counts as a realized loss', (tk, view) =>
                 setCashflowWriteOff(

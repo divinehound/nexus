@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
+import { confirmDialog } from '@/components/ui/dialogs';
 
 interface EventItem {
   id: string;
@@ -43,7 +44,14 @@ export default function AdminEventsPage() {
   };
 
   const handleDelete = async (event: EventItem) => {
-    if (!accessToken || !confirm(`Delete event "${event.title}"?`)) return;
+    if (!accessToken) return;
+    const ok = await confirmDialog({
+      title: 'Delete event?',
+      message: `"${event.title}" will be deleted.`,
+      confirmText: 'Delete',
+      variant: 'danger',
+    });
+    if (!ok) return;
     await apiFetch(`/admin/events/${event.id}`, {
       method: 'DELETE',
       token: accessToken,

@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import type { PublicKeyCredentialCreationOptionsJSON } from '@simplewebauthn/browser';
 import { apiFetch } from '@/lib/api';
+import { promptDialog } from '@/components/ui/dialogs';
 import { authErrorMessage } from '@/lib/auth-errors';
 import { useAuthMethods } from '@/hooks/use-auth-methods';
 import { GoogleButton } from '@/components/auth/google-button';
@@ -112,8 +113,14 @@ export function SignInMethodsSection({ accessToken }: { accessToken: string }) {
       await load();
     });
 
-  const onRename = (id: string, current: string | null) => {
-    const name = window.prompt('Name this passkey', current ?? '');
+  const onRename = async (id: string, current: string | null) => {
+    const name = await promptDialog({
+      title: 'Rename passkey',
+      label: 'Name',
+      defaultValue: current ?? '',
+      placeholder: 'e.g. MacBook Touch ID',
+      confirmText: 'Save',
+    });
     if (name === null) return;
     void run(`rename-${id}`, async () => {
       await call(`/passkeys/${id}`, 'PATCH', { name });
