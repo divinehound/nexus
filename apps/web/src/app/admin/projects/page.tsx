@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
+import { ConfirmModal } from '@/components/ui/confirm-modal';
 
 interface Project {
   id: string;
@@ -15,7 +16,33 @@ interface Project {
   isFeatured: boolean;
   healthScore: number | null;
   createdAt: string;
-  collections: { id: string; name: string; contractAddress: string; chain: string }[];
+  collections: { id: string; name: string; contractAddress: string; chain: string; isSpam: boolean | null }[];
+}
+
+type Filter = 'all' | 'auto' | 'spam' | 'empty';
+
+const FILTERS: { value: Filter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'auto', label: 'Auto-created' },
+  { value: 'spam', label: 'Has spam collection' },
+  { value: 'empty', label: 'No collections' },
+];
+
+/** The API takes at most this many projects per bulk delete. */
+const MAX_BULK_DELETE = 500;
+
+interface Selected {
+  name: string;
+  collections: number;
+  isVerified: boolean;
+}
+
+interface BulkDeleteResult {
+  deleted: { id: string; name: string }[];
+  unlinkedCollections: number;
+  flaggedSpam: number;
+  skipped: { id: string; name: string; reason: string }[];
+  notFound: string[];
 }
 
 interface ProjectList {
@@ -48,17 +75,97 @@ export default function AdminProjectsPage() {
   const [featurePending, setFeaturePending] = useState<Record<string, boolean>>({});
   const [featureError, setFeatureError] = useState<Record<string, string | null>>({});
   const [copiedProjectId, setCopiedProjectId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>('all');
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [pageSize, setPageSize] = useState(20);
+  const [selected, setSelected] = useState<Map<string, Selected>>(new Map());
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [markSpam, setMarkSpam] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [deletingOne, setDeletingOne] = useState(false);
+  const [removeOwnerTarget, setRemoveOwnerTarget] = useState<{ projectId: string; userId: string } | null>(null);
+
+  // Search as you type, without a request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setQuery(search.trim());
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const fetchProjects = () => {
     if (!accessToken) return;
     setLoading(true);
-    apiFetch<ProjectList>(`/admin/projects?page=${page}&limit=20`, { token: accessToken })
+    const params = new URLSearchParams({ page: String(page), limit: String(pageSize), filter });
+    if (query) params.set('q', query);
+    apiFetch<ProjectList>(`/admin/projects?${params}`, { token: accessToken })
       .then(setData)
       .catch(() => null)
       .finally(() => setLoading(false));
   };
 
-  useEffect(fetchProjects, [accessToken, page]);
+  useEffect(fetchProjects, [accessToken, page, pageSize, filter, query]);
+
+  const pageItems = data?.items ?? [];
+  const allOnPageSelected = pageItems.length > 0 && pageItems.every((p) => selected.has(p.id));
+  const selectedList = [...selected.entries()];
+  const selectedCollections = selectedList.reduce((sum, [, s]) => sum + s.collections, 0);
+  const selectedVerified = selectedList.filter(([, s]) => s.isVerified).length;
+
+  const toggleSelected = (p: Project) => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(p.id)) next.delete(p.id);
+      else next.set(p.id, { name: p.name, collections: p.collections.length, isVerified: p.isVerified });
+      return next;
+    });
+  };
+
+  const toggleSelectPage = () => {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (allOnPageSelected) pageItems.forEach((p) => next.delete(p.id));
+      else
+        pageItems.forEach((p) =>
+          next.set(p.id, { name: p.name, collections: p.collections.length, isVerified: p.isVerified }),
+        );
+      return next;
+    });
+  };
+
+  const bulkDelete = async () => {
+    if (!accessToken || selected.size === 0) return;
+    setBulkDeleting(true);
+    try {
+      const result = await apiFetch<BulkDeleteResult>(`/admin/projects/bulk-delete`, {
+        method: 'POST',
+        token: accessToken,
+        body: JSON.stringify({ projectIds: [...selected.keys()], markCollectionsSpam: markSpam }),
+      });
+      const parts = [
+        `Deleted ${result.deleted.length} project${result.deleted.length === 1 ? '' : 's'}`,
+        `unlinked ${result.unlinkedCollections} collection${result.unlinkedCollections === 1 ? '' : 's'}`,
+      ];
+      if (result.flaggedSpam) parts.push(`flagged ${result.flaggedSpam} as spam`);
+      toast.success(parts.join(', '));
+      for (const s of result.skipped) toast.warning(`Kept ${s.name}: ${s.reason}`);
+      setSelected(new Map());
+      setConfirmOpen(false);
+      setMarkSpam(false);
+      // The current page may now be past the end.
+      const remaining = (data?.total ?? 0) - result.deleted.length;
+      const lastPage = Math.max(1, Math.ceil(remaining / pageSize));
+      if (page > lastPage) setPage(lastPage);
+      else fetchProjects();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete the projects');
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
 
   const createProject = async () => {
     if (!accessToken || !newName.trim()) return;
@@ -127,10 +234,25 @@ export default function AdminProjectsPage() {
   };
 
   const deleteProject = async (project: Project) => {
-    if (!accessToken || !confirm(`Delete "${project.name}"? This cannot be undone.`)) return;
-    await apiFetch(`/admin/projects/${project.id}`, {
-      method: 'DELETE',
-      token: accessToken,
+    if (!accessToken) return;
+    setDeletingOne(true);
+    try {
+      await apiFetch(`/admin/projects/${project.id}`, {
+        method: 'DELETE',
+        token: accessToken,
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete the project');
+      return;
+    } finally {
+      setDeletingOne(false);
+    }
+    setDeleteTarget(null);
+    setSelected((prev) => {
+      if (!prev.has(project.id)) return prev;
+      const next = new Map(prev);
+      next.delete(project.id);
+      return next;
     });
     fetchProjects();
   };
@@ -175,7 +297,8 @@ export default function AdminProjectsPage() {
   };
 
   const removeOwner = async (projectId: string, userId: string) => {
-    if (!accessToken || !confirm('Remove this owner?')) return;
+    if (!accessToken) return;
+    setRemoveOwnerTarget(null);
     await apiFetch(`/admin/projects/${projectId}/owners/${userId}`, {
       method: 'DELETE',
       token: accessToken,
@@ -221,11 +344,95 @@ export default function AdminProjectsPage() {
         </form>
       </div>
 
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {FILTERS.map((f) => (
+          <button
+            key={f.value}
+            onClick={() => {
+              setFilter(f.value);
+              setPage(1);
+            }}
+            className={`rounded-full px-3 py-1 text-xs font-medium ${
+              filter === f.value ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+        <input
+          type="search"
+          placeholder="Search name or slug"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="ml-auto w-56 rounded border border-gray-700 bg-gray-900 px-2 py-1 text-sm text-white placeholder-gray-500 outline-none focus:border-purple-500"
+        />
+        <select
+          value={pageSize}
+          onChange={(e) => {
+            setPageSize(Number(e.target.value));
+            setPage(1);
+          }}
+          className="rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-white"
+          aria-label="Projects per page"
+        >
+          {[20, 50, 100].map((n) => (
+            <option key={n} value={n}>
+              {n} per page
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="mb-2 flex items-center gap-3 px-4 text-xs text-gray-400">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={allOnPageSelected}
+            onChange={toggleSelectPage}
+            disabled={pageItems.length === 0}
+            className="accent-purple-500"
+          />
+          Select this page
+        </label>
+        {selected.size > 0 && (
+          <>
+            <span className="text-gray-300">{selected.size} selected</span>
+            <button
+              onClick={() => setConfirmOpen(true)}
+              disabled={selected.size > MAX_BULK_DELETE}
+              className="rounded bg-red-600 px-3 py-1 font-medium text-white hover:bg-red-500 disabled:opacity-50"
+            >
+              Delete selected
+            </button>
+            <button onClick={() => setSelected(new Map())} className="text-purple-400 hover:text-purple-300">
+              Clear
+            </button>
+            {selected.size > MAX_BULK_DELETE && (
+              <span className="text-red-400">Select at most {MAX_BULK_DELETE} at a time.</span>
+            )}
+          </>
+        )}
+      </div>
+
+      {data && pageItems.length === 0 && (
+        <p className="px-4 py-6 text-sm text-gray-500">No projects match.</p>
+      )}
+
       <div className="space-y-2">
-        {data?.items.map((p) => (
-          <div key={p.id} className="rounded-xl border border-gray-800">
+        {pageItems.map((p) => (
+          <div
+            key={p.id}
+            className={`rounded-xl border ${selected.has(p.id) ? 'border-red-800 bg-red-950/10' : 'border-gray-800'}`}
+          >
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-4">
+                <input
+                  type="checkbox"
+                  checked={selected.has(p.id)}
+                  onChange={() => toggleSelected(p)}
+                  aria-label={`Select ${p.name}`}
+                  className="accent-purple-500"
+                />
                 <div>
                   <Link href={`/admin/projects/${p.id}`} className="font-medium hover:text-purple-300">
                     {p.name}
@@ -244,6 +451,11 @@ export default function AdminProjectsPage() {
                 <span className="text-xs text-gray-500">
                   {p.collections.length} collection{p.collections.length !== 1 ? 's' : ''}
                 </span>
+                {p.collections.some((c) => c.isSpam) && (
+                  <span className="rounded bg-red-900/30 px-1.5 py-0.5 text-xs text-red-400">
+                    {p.collections.filter((c) => c.isSpam).length} spam
+                  </span>
+                )}
                 {p.healthScore !== null && (
                   <span className={`text-xs ${
                     p.healthScore >= 70 ? 'text-green-400' :
@@ -289,7 +501,7 @@ export default function AdminProjectsPage() {
                   {expandedId === p.id ? 'Hide' : 'Owners'}
                 </button>
                 <button
-                  onClick={() => deleteProject(p)}
+                  onClick={() => setDeleteTarget(p)}
                   className="text-xs text-red-400 hover:text-red-300"
                 >
                   Delete
@@ -324,7 +536,7 @@ export default function AdminProjectsPage() {
                           </span>
                         </div>
                         <button
-                          onClick={() => removeOwner(p.id, o.userId)}
+                          onClick={() => setRemoveOwnerTarget({ projectId: p.id, userId: o.userId })}
                           className="text-xs text-red-400 hover:text-red-300"
                         >
                           Remove
@@ -362,6 +574,70 @@ export default function AdminProjectsPage() {
           </div>
         ))}
       </div>
+
+      <ConfirmModal
+        isOpen={confirmOpen}
+        onClose={() => !bulkDeleting && setConfirmOpen(false)}
+        onConfirm={bulkDelete}
+        title={`Delete ${selected.size} project${selected.size === 1 ? '' : 's'}?`}
+        message={
+          <>
+            <span className="block text-sm">
+              This cannot be undone. Their owners, wiki pages, events and holder-analysis data are deleted with
+              them. Their {selectedCollections} collection{selectedCollections === 1 ? '' : 's'} stay tracked,
+              without a project.
+            </span>
+            {selectedVerified > 0 && (
+              <span className="mt-2 block text-sm text-amber-400">
+                {selectedVerified} of these {selectedVerified === 1 ? 'is' : 'are'} verified.
+              </span>
+            )}
+            <span className="mt-3 block max-h-40 overflow-y-auto rounded border border-gray-800 p-2 text-xs text-gray-400">
+              {selectedList.slice(0, 50).map(([id, s]) => (
+                <span key={id} className="block truncate">
+                  {s.name}
+                </span>
+              ))}
+              {selectedList.length > 50 && <span className="block">and {selectedList.length - 50} more</span>}
+            </span>
+            <label className="mt-3 flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={markSpam}
+                onChange={(e) => setMarkSpam(e.target.checked)}
+                className="accent-red-500"
+              />
+              Also flag their collections as spam
+            </label>
+          </>
+        }
+        confirmText={`Delete ${selected.size}`}
+        variant="danger"
+        loading={bulkDeleting}
+      />
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        onClose={() => !deletingOne && setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && deleteProject(deleteTarget)}
+        title={`Delete ${deleteTarget?.name ?? 'this project'}?`}
+        message={
+          deleteTarget?.collections.length
+            ? 'This cannot be undone. Its collections stay tracked, without a project.'
+            : 'This cannot be undone.'
+        }
+        confirmText="Delete"
+        variant="danger"
+        loading={deletingOne}
+      />
+      <ConfirmModal
+        isOpen={!!removeOwnerTarget}
+        onClose={() => setRemoveOwnerTarget(null)}
+        onConfirm={() => removeOwnerTarget && removeOwner(removeOwnerTarget.projectId, removeOwnerTarget.userId)}
+        title="Remove this owner?"
+        message="They will no longer be able to manage this project."
+        confirmText="Remove"
+        variant="danger"
+      />
 
       {/* Pagination */}
       {data && data.total > data.limit && (

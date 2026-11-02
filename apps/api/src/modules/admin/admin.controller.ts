@@ -38,12 +38,28 @@ export class AdminController {
   // --- Projects ---
 
   @Get('projects')
-  @ApiOperation({ summary: 'List all projects (paginated)' })
-  listProjects(@Query('page') page?: string, @Query('limit') limit?: string) {
+  @ApiOperation({ summary: 'List projects (paginated), optionally searched and filtered (all, auto, spam, empty)' })
+  listProjects(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('q') q?: string,
+    @Query('filter') filter?: string,
+  ) {
     return this.adminService.listProjects(
       page ? parseInt(page) : 1,
       limit ? parseInt(limit) : 50,
+      { q, filter },
     );
+  }
+
+  @Post('projects/bulk-delete')
+  @ApiOperation({
+    summary: 'Delete several projects. Their collections are kept and unlinked; optionally flagged as spam.',
+  })
+  bulkDeleteProjects(@Body() body: { projectIds?: unknown; markCollectionsSpam?: unknown }) {
+    return this.adminProjectsService.deleteProjects(body?.projectIds, {
+      markCollectionsSpam: body?.markCollectionsSpam === true,
+    });
   }
 
   @Post('projects')
@@ -102,9 +118,9 @@ export class AdminController {
   }
 
   @Delete('projects/:id')
-  @ApiOperation({ summary: 'Delete a project' })
+  @ApiOperation({ summary: 'Delete a project. Its collections are kept and unlinked.' })
   deleteProject(@Param('id') id: string) {
-    return this.adminService.deleteProject(id);
+    return this.adminProjectsService.deleteProject(id);
   }
 
   // --- Wiki Suggestions ---
