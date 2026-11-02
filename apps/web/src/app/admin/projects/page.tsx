@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
@@ -87,24 +87,43 @@ export default function AdminProjectsPage() {
   const [deletingOne, setDeletingOne] = useState(false);
   const [removeOwnerTarget, setRemoveOwnerTarget] = useState<{ projectId: string; userId: string } | null>(null);
 
+  const requestSeq = useRef(0);
+
   // Search as you type, without a request per keystroke.
   useEffect(() => {
     const t = setTimeout(() => {
-      setQuery(search.trim());
+      const next = search.trim();
+      if (next === query) return;
+      setQuery(next);
       setPage(1);
+      // A selection belongs to the list it was made in.
+      setSelected(new Map());
     }, 300);
     return () => clearTimeout(t);
-  }, [search]);
+  }, [search, query]);
 
   const fetchProjects = () => {
     if (!accessToken) return;
+    const seq = ++requestSeq.current;
     setLoading(true);
     const params = new URLSearchParams({ page: String(page), limit: String(pageSize), filter });
     if (query) params.set('q', query);
     apiFetch<ProjectList>(`/admin/projects?${params}`, { token: accessToken })
-      .then(setData)
+      .then((result) => {
+        // Ignore a response that a newer request has overtaken.
+        if (seq !== requestSeq.current) return;
+        // Deleting can leave us past the last page; go to the new last page.
+        const lastPage = Math.max(1, Math.ceil(result.total / result.limit));
+        if (result.items.length === 0 && page > lastPage) {
+          setPage(lastPage);
+          return;
+        }
+        setData(result);
+      })
       .catch(() => null)
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (seq === requestSeq.current) setLoading(false);
+      });
   };
 
   useEffect(fetchProjects, [accessToken, page, pageSize, filter, query]);
@@ -152,14 +171,13 @@ export default function AdminProjectsPage() {
       if (result.flaggedSpam) parts.push(`flagged ${result.flaggedSpam} as spam`);
       toast.success(parts.join(', '));
       for (const s of result.skipped) toast.warning(`Kept ${s.name}: ${s.reason}`);
+      if (result.notFound.length) {
+        toast.info(`${result.notFound.length} had already been deleted`);
+      }
       setSelected(new Map());
       setConfirmOpen(false);
       setMarkSpam(false);
-      // The current page may now be past the end.
-      const remaining = (data?.total ?? 0) - result.deleted.length;
-      const lastPage = Math.max(1, Math.ceil(remaining / pageSize));
-      if (page > lastPage) setPage(lastPage);
-      else fetchProjects();
+      fetchProjects();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not delete the projects');
     } finally {
@@ -349,8 +367,10 @@ export default function AdminProjectsPage() {
           <button
             key={f.value}
             onClick={() => {
+              if (f.value === filter) return;
               setFilter(f.value);
               setPage(1);
+              setSelected(new Map());
             }}
             className={`rounded-full px-3 py-1 text-xs font-medium ${
               filter === f.value ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'

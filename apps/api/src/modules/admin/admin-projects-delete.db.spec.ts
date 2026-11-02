@@ -81,13 +81,39 @@ describeDb('deleting projects (database)', () => {
     expect(await db.query.holderReports.findFirst({ where: eq(holderReports.projectId, a.id) })).toBeUndefined();
   });
 
-  it('flags the unlinked collections as spam when asked', async () => {
+  it('flags the unlinked collections as spam when asked, keeping earlier detections', async () => {
     const p = await project();
     const c = await collection({ projectId: p.id });
+    const already = await collection({ projectId: p.id, isSpam: true, spamDetectedBy: 'alchemy', spamReason: 'alchemy_says' });
     const result = await service.deleteProjects([p.id], { markCollectionsSpam: true });
     expect(result.flaggedSpam).toBe(1);
+    expect(result.unlinkedCollections).toBe(2);
     const row = await db.query.collections.findFirst({ where: eq(collections.id, c.id) });
     expect(row).toMatchObject({ projectId: null, isSpam: true, spamScore: 100, spamDetectedBy: 'manual' });
+    const kept = await db.query.collections.findFirst({ where: eq(collections.id, already.id) });
+    expect(kept).toMatchObject({ projectId: null, isSpam: true, spamDetectedBy: 'alchemy', spamReason: 'alchemy_says' });
+  });
+
+  it('leaves a suggestion for another project and a rejection alone', async () => {
+    const doomed = await project();
+    const other = await project();
+    const suggestedElsewhere = await collection({
+      projectId: doomed.id,
+      proposedProjectId: other.id,
+      mappingStatus: 'suggested',
+      mappingConfidence: '0.900',
+    });
+    const rejected = await collection({ projectId: doomed.id, mappingStatus: 'rejected' });
+    await service.deleteProjects([doomed.id]);
+    expect(await db.query.collections.findFirst({ where: eq(collections.id, suggestedElsewhere.id) })).toMatchObject({
+      projectId: null,
+      proposedProjectId: other.id,
+      mappingStatus: 'suggested',
+    });
+    expect(await db.query.collections.findFirst({ where: eq(collections.id, rejected.id) })).toMatchObject({
+      projectId: null,
+      mappingStatus: 'rejected',
+    });
   });
 
   it('keeps the intake bucket and reports ids it did not find', async () => {

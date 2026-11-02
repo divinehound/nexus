@@ -48,7 +48,8 @@ export class AdminController {
     return this.adminService.listProjects(
       page ? parseInt(page) : 1,
       limit ? parseInt(limit) : 50,
-      { q, filter },
+      // A repeated parameter arrives as an array; only a plain string counts.
+      { q: typeof q === 'string' ? q : undefined, filter: typeof filter === 'string' ? filter : undefined },
     );
   }
 

@@ -98,7 +98,7 @@ export class AdminService {
    */
   async listProjects(page = 1, limit = 50, opts: { q?: string; filter?: string } = {}) {
     page = Number.isFinite(page) && page >= 1 ? Math.floor(page) : 1;
-    limit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 100) : 50;
+    limit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 500) : 50;
     const offset = (page - 1) * limit;
 
     const conditions: SQL[] = [];

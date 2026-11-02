@@ -261,21 +261,30 @@ export class AdminProjectsService {
       }
 
       const now = new Date();
+      // Flag first, and only collections not already flagged, so an earlier
+      // detection keeps its source, reason and time.
+      const flagged = opts.markCollectionsSpam
+        ? await tx
+            .update(collections)
+            .set({
+              isSpam: true,
+              spamScore: 100,
+              spamReason: 'project_deleted_as_spam',
+              spamDetectedAt: now,
+              spamDetectedBy: 'manual',
+            })
+            .where(and(inArray(collections.projectId, targetIds), sql`${collections.isSpam} IS NOT TRUE`))
+            .returning({ id: collections.id })
+        : [];
+
+      // Only "mapped" means mapped to this project; a "suggested" (for another
+      // project) or "rejected" status is left as it is.
       const unlinked = await tx
         .update(collections)
         .set({
           projectId: null,
-          mappingStatus: 'unmapped',
+          mappingStatus: sql`CASE WHEN ${collections.mappingStatus} = 'mapped' THEN 'unmapped'::mapping_status ELSE ${collections.mappingStatus} END`,
           lastSeenAt: now,
-          ...(opts.markCollectionsSpam
-            ? {
-                isSpam: true,
-                spamScore: 100,
-                spamReason: 'project_deleted_as_spam',
-                spamDetectedAt: now,
-                spamDetectedBy: 'manual' as const,
-              }
-            : {}),
         })
         .where(inArray(collections.projectId, targetIds))
         .returning({ id: collections.id });
@@ -299,7 +308,7 @@ export class AdminProjectsService {
       return {
         deleted,
         unlinkedCollections: unlinked.length,
-        flaggedSpam: opts.markCollectionsSpam ? unlinked.length : 0,
+        flaggedSpam: flagged.length,
         skipped,
         notFound,
       };
