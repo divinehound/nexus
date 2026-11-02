@@ -37,12 +37,14 @@ export default function HoldersPage() {
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<Paged<HolderRow> | null>(null);
 
+  // Rows from another view don't fit this view's columns: clear them while the new ones load.
+  useEffect(() => setRows(null), [view]);
   useEffect(() => {
     if (!overview.report) return;
     let stale = false;
     const req =
       view === 'core' ? holderAnalysis.holders(projectId, { q: search, show, sort, page }, token) : holderAnalysis.side(projectId, view, page, token);
-    req.then((r) => !stale && setRows(r)).catch((err) => toast.error(err instanceof Error ? err.message : 'Could not load holders'));
+    req.then((r) => !stale && setRows(r)).catch((err) => !stale && toast.error(err instanceof Error ? err.message : 'Could not load holders'));
     return () => {
       stale = true;
     };

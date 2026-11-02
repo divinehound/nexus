@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { BUTTON, INPUT, Pager, StatusChip, Tile, useAnalysis, WalletCell } from '@/components/holder-analysis/shared';
 import { useSetNickname } from '@/hooks/use-wallet-nicknames';
@@ -51,31 +51,37 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
   const byId = new Map(overview.collections.map((c) => [c.collectionId, c]));
   const chains = [...new Set(overview.collections.map((c) => c.chain))];
 
+  const [error, setError] = useState('');
+  const filled = useRef('');
+
   const load = useCallback(async () => {
     try {
       const d = await holderAnalysis.wallet(projectId, address, page, token);
       setW(d);
+      setError('');
+      // Fill the form once per wallet; paging the transfers keeps what's typed.
+      if (filled.current !== address) {
+        filled.current = address;
+        setLabel(d.who?.label ?? '');
+        setNote(d.who?.note ?? '');
+        setNick(d.who?.nickname ?? '');
+      }
       return d;
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not load the wallet');
+      const msg = err instanceof Error ? err.message : 'Could not load the wallet';
+      setError(msg);
+      toast.error(msg);
     }
   }, [projectId, address, page, token]);
 
   useEffect(() => {
-    load().then((d) => {
-      if (!d) return;
-      setLabel(d.who?.label ?? '');
-      setNote(d.who?.note ?? '');
-      setNick(d.who?.nickname ?? '');
-    });
-    // Only the first load fills the form; paging the transfers keeps what's typed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, address, token]);
-  useEffect(() => {
-    if (page > 1) load();
-  }, [page, load]);
+    load();
+  }, [load]);
 
-  if (!w) return <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-600 border-t-purple-500" />;
+  if (!w) {
+    if (error) return <p className="text-sm text-gray-400">Could not load this wallet: {error}</p>;
+    return <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-600 border-t-purple-500" />;
+  }
 
   const d = w.holder?.data ?? {};
   const name = w.who?.ens || (w.who?.opensea ? `@${w.who.opensea}` : '');
@@ -164,7 +170,7 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
                 <div key={i} className="flex flex-wrap gap-x-2">
                   <dt className="text-gray-500">Delegates to ({dl.src === 'warm' ? 'warm.xyz' : `delegate.xyz ${dl.src}`})</dt>
                   <dd>
-                    <WalletCell slug={slug} address={dl.to} who={w.others[dl.to]} />
+                    <WalletCell slug={slug} address={dl.to.toLowerCase()} who={w.others[dl.to.toLowerCase()]} />
                   </dd>
                 </div>
               ))}
@@ -267,7 +273,7 @@ export default function WalletPage({ params }: { params: Promise<{ address: stri
                 const other = t.from === address ? t.to : t.from;
                 const eth = t.txValueWei && t.txValueWei !== '0' ? Number(BigInt(t.txValueWei) / BigInt(1e12)) / 1e6 : 0;
                 return (
-                  <tr key={`${t.tx}-${t.block}-${t.tokenId}-${t.from}-${t.to}`} className="border-b border-gray-900 last:border-0">
+                  <tr key={`${t.tx}-${t.logIndex}-${t.tokenId}-${t.from}-${t.to}`} className="border-b border-gray-900 last:border-0">
                     <td className="whitespace-nowrap px-3 py-2 text-gray-400">{minute(t.at)}</td>
                     <td className="px-3 py-2">{c?.name ?? ''}</td>
                     <td className="px-3 py-2">

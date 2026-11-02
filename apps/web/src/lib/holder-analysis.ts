@@ -65,7 +65,7 @@ export type WalletDetail = {
   holder: { rank: number; firstAt: string | null; data: Data } | null;
   side: { collectionId: string; rank: number; data: Data }[];
   profiles: { chain: string; isContract: boolean | null; funder: string | null; fundedAt: string | null; lastOutAt: string | null; checkedAt: string | null; delegations: { src: string; type: number; to: string; contract: string | null }[] | null }[];
-  transfers: Paged<{ collectionId: string; block: number; at: string; tx: string; from: string; to: string; tokenId: string | null; amount: number; txFrom: string | null; txValueWei: string | null; kind: string }>;
+  transfers: Paged<{ collectionId: string; block: number; at: string; tx: string; from: string; to: string; logIndex: number; tokenId: string | null; amount: number; txFrom: string | null; txValueWei: string | null; kind: string }>;
   groups: { rank: number; data: Data }[];
   links: { other: string; score: number; evidence: string }[];
   funded: { address: string; fundedAt: string | null; holderRank: number | null }[];

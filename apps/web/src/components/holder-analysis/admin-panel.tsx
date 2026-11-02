@@ -17,10 +17,11 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
-  const apply = useCallback((s: AdminStatus) => {
+  // `keep`: keep unsaved edits on every collection except the one just saved.
+  const apply = useCallback((s: AdminStatus, keep?: { except?: string }) => {
     setStatus(s);
-    setDrafts(
-      Object.fromEntries(
+    setDrafts((prev) => {
+      const fresh: Record<string, Draft> = Object.fromEntries(
         s.collections
           .filter((c) => c.settings)
           .map((c) => [
@@ -33,8 +34,12 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
               staking: c.settings!.stakingContracts.join('\n'),
             },
           ]),
-      ),
-    );
+      );
+      if (!keep) return fresh;
+      const out = { ...fresh };
+      for (const id of Object.keys(fresh)) if (id !== keep.except && prev[id]) out[id] = prev[id];
+      return out;
+    });
   }, []);
 
   const load = useCallback(() => {
@@ -48,12 +53,12 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
 
   if (!status) return null;
 
-  const run = async (key: string, fn: () => Promise<unknown>, ok: string) => {
+  const run = async (key: string, fn: () => Promise<unknown>, ok: string | ((r: unknown) => string)) => {
     setBusy(key);
     try {
       const r = await fn();
-      if (r && typeof r === 'object' && 'collections' in r) apply(r as AdminStatus);
-      toast.success(ok);
+      if (r && typeof r === 'object' && 'collections' in r) apply(r as AdminStatus, { except: key });
+      toast.success(typeof ok === 'function' ? ok(r) : ok);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'That did not work');
     } finally {
@@ -97,7 +102,7 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
           <span>
             {num(status.wallets.read)} of {num(status.wallets.total)} wallets read · {num(status.wallets.delegations)} delegations · {num(status.wallets.named)} named
           </span>
-          <button className="text-purple-300 hover:text-purple-200" disabled={busy === 'sync'} onClick={() => run('sync', () => holderAnalysis.adminSync(token), 'Sync queued')}>
+          <button className="text-purple-300 hover:text-purple-200" disabled={busy === 'sync'} onClick={() => run('sync', () => holderAnalysis.adminSync(token), (r) => ((r as { queued?: boolean })?.queued ? 'Sync queued' : 'A sync is already queued or running'))}>
             Sync now
           </button>
           <button className="text-gray-400 hover:text-white" onClick={load}>
@@ -138,7 +143,13 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
                   </label>
                   <label className="flex flex-col gap-1">
                     <span className="text-xs text-gray-500">Standard</span>
-                    <select className={SELECT} value={d.standard} onChange={(e) => set(c.collectionId, { standard: e.target.value })}>
+                    <select className={SELECT} value={d.standard} onChange={(e) =>
+                        set(c.collectionId, {
+                          standard: e.target.value,
+                          // A collection switched to ERC-20 starts from the usual 18 decimals, not the 0 of an NFT.
+                          ...(e.target.value === 'erc20' && c.settings!.standard !== 'erc20' ? { decimals: '18' } : {}),
+                        })
+                      }>
                       <option value="erc721">ERC-721</option>
                       <option value="erc1155">ERC-1155</option>
                       <option value="erc20">ERC-20</option>
@@ -166,6 +177,10 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
                     onClick={() => {
                       const before = c.settings!;
                       const decimals = Number(d.decimals);
+                      if (d.standard === 'erc20' && (!d.decimals.trim() || !Number.isInteger(decimals) || decimals < 0 || decimals > 36)) {
+                        toast.error('Decimals must be a whole number from 0 to 36');
+                        return;
+                      }
                       if (
                         (d.standard !== before.standard || (d.standard === 'erc20' && decimals !== before.decimals)) &&
                         !window.confirm('Changing the standard or decimals reads this collection from the chain again. Carry on?')
@@ -181,7 +196,7 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
                               standard: d.standard,
                               core: d.core,
                               ...(d.standard === 'erc20' ? { decimals } : {}),
-                              stakingContracts: d.staking.split(/[\s,]+/).filter(Boolean),
+                              stakingContracts: d.standard === 'erc721' ? d.staking.split(/[\s,]+/).filter(Boolean) : [],
                             },
                             token,
                           ),

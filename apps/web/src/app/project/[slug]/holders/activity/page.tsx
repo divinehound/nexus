@@ -31,10 +31,14 @@ export default function ActivityPage() {
   const [data, setData] = useState<Paged<ActivityRow> | null>(null);
 
   useEffect(() => {
+    let stale = false;
     holderAnalysis
       .activity(projectId, { kind, collectionId, labelled: labelled ? '1' : '', page }, token)
-      .then(setData)
-      .catch((err) => toast.error(err instanceof Error ? err.message : 'Could not load the activity'));
+      .then((r) => !stale && setData(r))
+      .catch((err) => !stale && toast.error(err instanceof Error ? err.message : 'Could not load the activity'));
+    return () => {
+      stale = true;
+    };
   }, [projectId, token, kind, collectionId, labelled, page]);
 
   return (

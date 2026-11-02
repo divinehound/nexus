@@ -28,12 +28,25 @@ function Loaded({ children, params }: { children: React.ReactNode; params: Promi
   const [error, setError] = useState<string | null>(null);
   const [analysing, setAnalysing] = useState(false);
 
+  // Look the project up once per slug; a missing project is not the same as analysis being off.
+  useEffect(() => {
+    let stale = false;
+    apiFetch<{ id: string }>(`/projects/${slug}`)
+      .then((p) => !stale && setProjectId(p.id))
+      .catch((err) => {
+        if (stale) return;
+        const status = err instanceof ApiError ? err.status : 0;
+        setError(status === 404 ? 'There is no project here.' : err instanceof Error ? err.message : 'Could not load the project');
+      });
+    return () => {
+      stale = true;
+    };
+  }, [slug]);
+
   const load = useCallback(async () => {
-    if (!accessToken) return;
+    if (!accessToken || !projectId) return;
     try {
-      const id = projectId ?? (await apiFetch<{ id: string }>(`/projects/${slug}`)).id;
-      setProjectId(id);
-      setOverview(await holderAnalysis.overview(id, accessToken));
+      setOverview(await holderAnalysis.overview(projectId, accessToken));
       setError(null);
     } catch (err) {
       const status = err instanceof ApiError ? err.status : 0;

@@ -201,7 +201,13 @@ export class HolderAnalysisService {
     for (const t of transfers) for (const x of [t.from_address, t.to_address, t.tx_from]) if (x && x !== wallet && !BURN.has(x)) others.add(x);
     for (const l of links) others.add(l.a === wallet ? l.b : l.a);
     for (const f of funded) others.add(f.address);
-    for (const p of profiles) if (p.funder) others.add(p.funder);
+    for (const p of profiles) {
+      if (p.funder) others.add(p.funder);
+      for (const dl of (Array.isArray(p.delegations) ? p.delegations : []) as { to?: string }[]) {
+        const to = String(dl?.to ?? '').toLowerCase();
+        if (to && to !== wallet) others.add(to);
+      }
+    }
     for (const g of groups) for (const m of String(g.data.members ?? '').split(' ')) if (m && m !== wallet) others.add(m);
     const who = await this.who(projectId, userId, [wallet, ...others]);
 

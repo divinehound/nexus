@@ -23,10 +23,14 @@ export default function GroupsPage() {
   const core = overview.collections.filter((c) => c.core);
 
   useEffect(() => {
+    let stale = false;
     holderAnalysis
       .groups(projectId, page, token)
-      .then(setData)
-      .catch((err) => toast.error(err instanceof Error ? err.message : 'Could not load the groups'));
+      .then((r) => !stale && setData(r))
+      .catch((err) => !stale && toast.error(err instanceof Error ? err.message : 'Could not load the groups'));
+    return () => {
+      stale = true;
+    };
   }, [projectId, page, token]);
 
   const csv = (path: string, name: string) => downloadCsv(projectId, path, `${slug}-${name}`, token).catch((e) => toast.error(e.message));
