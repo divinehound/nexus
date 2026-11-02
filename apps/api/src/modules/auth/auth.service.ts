@@ -6,7 +6,7 @@ import { createPublicClient, http, hashMessage, encodeAbiParameters, concat, typ
 import { mainnet, base, abstract as abstractChain, polygon } from 'viem/chains';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, users, wallets } from '@nexus/database';
 import { CHAIN_META } from '@nexus/types';
@@ -282,7 +282,7 @@ export class AuthService {
     return newUser;
   }
 
-  private issueTokens(userId: string, address: string, role = 'user') {
+  private issueTokens(userId: string, address: string | null, role = 'user') {
     const payload = { sub: userId, address, role };
     return {
       accessToken: this.jwtService.sign(payload),
@@ -290,13 +290,47 @@ export class AuthService {
     };
   }
 
+  /**
+   * Tokens for a user who signed in without a wallet (email, Google, passkey).
+   * `address` is their primary wallet if they have one, else null.
+   */
+  async issueTokensForUser(userId: string) {
+    const user = await this.db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (!user) throw new UnauthorizedException('User not found');
+    return { user, ...this.issueTokens(user.id, await this.primaryAddress(user.id, user.primaryWalletId), user.role) };
+  }
+
   async refresh(refreshToken: string) {
+    let payload: { sub: string; address?: string | null };
     try {
-      const payload = this.jwtService.verify(refreshToken);
-      return this.issueTokens(payload.sub, payload.address, payload.role);
+      payload = this.jwtService.verify(refreshToken);
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
+    // Re-read the user so a removed account stops refreshing, and a wallet
+    // linked since (or a role change) shows up in the new tokens.
+    const user = await this.db.query.users.findFirst({ where: eq(users.id, payload.sub) });
+    if (!user) throw new UnauthorizedException('Invalid refresh token');
+    // Keep the wallet the user signed in with while it is still theirs; otherwise
+    // fall back to their primary wallet (or none), so a removed or moved wallet drops out.
+    let address: string | null = null;
+    if (payload.address) {
+      const stillOwned = await this.db.query.wallets.findFirst({
+        // EVM addresses are stored lowercase but signed in checksummed.
+        where: and(eq(wallets.userId, user.id), sql`lower(${wallets.address}) = lower(${payload.address})`),
+      });
+      address = stillOwned ? payload.address : null;
+    }
+    address ??= await this.primaryAddress(user.id, user.primaryWalletId);
+    return this.issueTokens(user.id, address, user.role);
+  }
+
+  private async primaryAddress(userId: string, primaryWalletId: string | null): Promise<string | null> {
+    if (!primaryWalletId) return null;
+    const wallet = await this.db.query.wallets.findFirst({
+      where: and(eq(wallets.id, primaryWalletId), eq(wallets.userId, userId)),
+    });
+    return wallet?.address ?? null;
   }
 
   async getMe(userId: string) {

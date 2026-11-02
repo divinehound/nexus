@@ -7,6 +7,7 @@ import type { EvmProvider } from '@/lib/evm-provider';
 import { useAuth } from '@/context/auth-context';
 import { truncateAddress } from '@/lib/utils';
 import bs58 from 'bs58';
+import { SignInDialog } from '@/components/auth/sign-in-dialog';
 
 export function ConnectButton() {
   const { user, isLoading, logout, loginEvm, loginSolana, getNonce } = useAuth();
@@ -19,6 +20,7 @@ export function ConnectButton() {
   const [signing, setSigning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSignIn, setShowSignIn] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const processedAddress = useRef<string | null>(null);
 
   // Reset state when disconnected
@@ -133,17 +135,18 @@ export function ConnectButton() {
   }
 
   if (user) {
-    const primaryWallet = user.wallets?.[0];
+    const primaryWallet = user.wallets?.find((w) => w.id === user.primaryWalletId) ?? user.wallets?.[0];
+    const label = primaryWallet
+      ? primaryWallet.ensName || primaryWallet.snsName || truncateAddress(primaryWallet.address)
+      : user.displayName || user.email || 'Signed in';
     return (
       <div className="flex items-center gap-3">
-        <span className="text-sm text-gray-300">
-          {primaryWallet?.ensName || primaryWallet?.snsName || truncateAddress(primaryWallet?.address || '')}
-        </span>
+        <span className="max-w-[12rem] truncate text-sm text-gray-300">{label}</span>
         <button
           onClick={handleDisconnect}
           className="rounded-lg border border-gray-700 px-3 py-1.5 text-sm text-gray-400 transition-colors hover:border-gray-500 hover:text-white"
         >
-          Disconnect
+          Sign out
         </button>
       </div>
     );
@@ -178,11 +181,12 @@ export function ConnectButton() {
   return (
     <div>
       <button
-        onClick={() => open()}
+        onClick={() => setDialogOpen(true)}
         className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-500"
       >
-        Connect Wallet
+        Sign in
       </button>
+      <SignInDialog open={dialogOpen} onOpenChange={setDialogOpen} onConnectWallet={() => open()} />
       {error && (
         <p className="mt-2 text-xs text-red-400">{error}</p>
       )}

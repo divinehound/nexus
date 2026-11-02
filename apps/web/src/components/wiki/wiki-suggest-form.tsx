@@ -18,7 +18,7 @@ export function WikiSuggestForm({ projectId }: WikiSuggestFormProps) {
 
   if (!accessToken) {
     return (
-      <p className="text-sm text-gray-500">Connect your wallet to suggest wiki edits.</p>
+      <p className="text-sm text-gray-500">Sign in to suggest wiki edits.</p>
     );
   }
 

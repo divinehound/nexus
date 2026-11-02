@@ -27,6 +27,7 @@ import {
 } from '@/lib/api';
 import { truncateAddress } from '@/lib/utils';
 import { WatchedWalletsSection } from './watched-wallets';
+import { SignInMethodsSection } from './sign-in-methods';
 
 interface ProfileFormState {
   email: string;
@@ -52,7 +53,7 @@ export default function MePage() {
 }
 
 function MePageContent() {
-  const { accessToken } = useAuth();
+  const { accessToken, user, refreshSession } = useAuth();
   const { walletProvider: solanaProvider } = useAppKitProvider('solana');
   const { walletProvider: evmProvider } = useAppKitProvider('eip155');
 
@@ -80,6 +81,14 @@ function MePageContent() {
   const [moveError, setMoveError] = useState<string | null>(null);
 
   const hasToken = Boolean(accessToken);
+
+  // Linking or removing a wallet (here or in the link-wallet popup) changes the
+  // address the session token carries, so get fresh tokens when the lists differ.
+  const sessionWalletCount = user?.wallets?.length ?? 0;
+  useEffect(() => {
+    if (!me || wallets.length === sessionWalletCount) return;
+    refreshSession().catch(() => undefined);
+  }, [me, wallets.length, sessionWalletCount, refreshSession]);
 
   const profileDisplayName = useMemo(() => me?.displayName || 'Unnamed user', [me?.displayName]);
 
@@ -378,6 +387,8 @@ function MePageContent() {
           </div>
         </div>
       </section>
+
+      <SignInMethodsSection accessToken={accessToken!} />
 
       <section className="rounded-xl border border-gray-800 p-6">
         <h2 className="text-xl font-semibold">Linked Wallets</h2>

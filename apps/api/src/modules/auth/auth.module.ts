@@ -6,6 +6,12 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { HoldingsModule } from '../holdings/holdings.module';
+import { EmailCodeService } from './email-code.service';
+import { EmailSenderService } from './email-sender.service';
+import { GoogleAuthService } from './google-auth.service';
+import { IdentitiesService } from './identities.service';
+import { PasskeyService } from './passkey.service';
+import { SignInMethodsController } from './sign-in-methods.controller';
 
 @Module({
   imports: [
@@ -19,8 +25,16 @@ import { HoldingsModule } from '../holdings/holdings.module';
     }),
     HoldingsModule,
   ],
-  controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
-  exports: [AuthService],
+  controllers: [AuthController, SignInMethodsController],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    EmailSenderService,
+    EmailCodeService,
+    GoogleAuthService,
+    IdentitiesService,
+    PasskeyService,
+  ],
+  exports: [AuthService, IdentitiesService],
 })
 export class AuthModule {}

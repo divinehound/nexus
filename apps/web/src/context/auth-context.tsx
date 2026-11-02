@@ -1,12 +1,19 @@
 'use client';
 
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
+import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
+import type {
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from '@simplewebauthn/browser';
 import { apiFetch } from '@/lib/api';
 
 interface AuthUser {
   id: string;
   primaryWalletId: string | null;
   role: string;
+  email: string | null;
+  displayName: string | null;
   echoScore: number | null;
   wallets: { id: string; address: string; chain: string; ensName: string | null; snsName: string | null }[];
 }
@@ -22,7 +29,18 @@ interface AuthContextValue extends AuthState {
   loginSolana: (address: string, signature: string) => Promise<void>;
   logout: () => void;
   getNonce: (address: string) => Promise<string>;
+  sendEmailCode: (email: string) => Promise<void>;
+  loginEmailCode: (email: string, code: string) => Promise<void>;
+  loginGoogle: (credential: string) => Promise<void>;
+  loginPasskey: () => Promise<void>;
+  signUpPasskey: () => Promise<void>;
+  /** Re-reads the signed-in user, e.g. after adding a sign-in method. */
+  reloadUser: () => Promise<void>;
+  /** Gets fresh tokens and user, e.g. after linking or removing a wallet (the token carries the wallet address). */
+  refreshSession: () => Promise<void>;
 }
+
+type AuthResponse = { user: AuthUser; accessToken: string; refreshToken: string };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -74,14 +92,86 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         'nexus_auth',
         JSON.stringify({ accessToken: response.accessToken, refreshToken: response.refreshToken }),
       );
-      setState({ user: response.user, accessToken: response.accessToken, isLoading: false });
+      // The sign-in responses carry the bare user; /auth/me adds the wallets.
+      const user = await apiFetch<AuthUser>('/auth/me', { token: response.accessToken }).catch(() => ({
+        ...response.user,
+        wallets: response.user.wallets ?? [],
+      }));
+      setState({ user, accessToken: response.accessToken, isLoading: false });
     },
     [],
   );
 
+  const post = useCallback(
+    <T,>(path: string, body: unknown) => apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) }),
+    [],
+  );
+
+  const sendEmailCode = useCallback(
+    async (email: string) => {
+      await post('/auth/email/send-code', { email });
+    },
+    [post],
+  );
+
+  const loginEmailCode = useCallback(
+    async (email: string, code: string) => {
+      await handleAuthResponse(await post<AuthResponse>('/auth/email/verify', { email, code }));
+    },
+    [post, handleAuthResponse],
+  );
+
+  const loginGoogle = useCallback(
+    async (credential: string) => {
+      await handleAuthResponse(await post<AuthResponse>('/auth/google', { credential }));
+    },
+    [post, handleAuthResponse],
+  );
+
+  const loginPasskey = useCallback(async () => {
+    const { challengeId, options } = await post<{
+      challengeId: string;
+      options: PublicKeyCredentialRequestOptionsJSON;
+    }>('/auth/passkey/options', {});
+    const response = await startAuthentication({ optionsJSON: options });
+    await handleAuthResponse(await post<AuthResponse>('/auth/passkey/verify', { challengeId, response }));
+  }, [post, handleAuthResponse]);
+
+  const signUpPasskey = useCallback(async () => {
+    const { challengeId, options } = await post<{
+      challengeId: string;
+      options: PublicKeyCredentialCreationOptionsJSON;
+    }>('/auth/passkey/register/options', {});
+    const response = await startRegistration({ optionsJSON: options });
+    await handleAuthResponse(await post<AuthResponse>('/auth/passkey/register/verify', { challengeId, response }));
+  }, [post, handleAuthResponse]);
+
+  const refreshSession = useCallback(async () => {
+    let refreshToken: string | undefined;
+    try {
+      refreshToken = JSON.parse(localStorage.getItem('nexus_auth') || '{}').refreshToken;
+    } catch {
+      refreshToken = undefined;
+    }
+    if (!refreshToken) return;
+    const tokens = await apiFetch<{ accessToken: string; refreshToken: string }>('/auth/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
+    });
+    localStorage.setItem('nexus_auth', JSON.stringify(tokens));
+    const user = await apiFetch<AuthUser>('/auth/me', { token: tokens.accessToken });
+    setState({ user, accessToken: tokens.accessToken, isLoading: false });
+  }, []);
+
+  const reloadUser = useCallback(async () => {
+    if (!state.accessToken) return;
+    const user = await apiFetch<AuthUser>('/auth/me', { token: state.accessToken });
+    setState((s) => ({ ...s, user }));
+  }, [state.accessToken]);
+
   const loginEvm = useCallback(
     async (message: string, signature: string) => {
-      const response = await apiFetch<{ user: AuthUser; accessToken: string; refreshToken: string }>(
+      const response = await apiFetch<AuthResponse>(
         '/auth/verify/evm',
         { method: 'POST', body: JSON.stringify({ message, signature }) },
       );
@@ -92,7 +182,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const loginSolana = useCallback(
     async (address: string, signature: string) => {
-      const response = await apiFetch<{ user: AuthUser; accessToken: string; refreshToken: string }>(
+      const response = await apiFetch<AuthResponse>(
         '/auth/verify/solana',
         { method: 'POST', body: JSON.stringify({ address, signature }) },
       );
@@ -107,7 +197,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ ...state, loginEvm, loginSolana, logout, getNonce }}>
+    <AuthContext.Provider value={{
+        ...state,
+        loginEvm,
+        loginSolana,
+        logout,
+        getNonce,
+        sendEmailCode,
+        loginEmailCode,
+        loginGoogle,
+        loginPasskey,
+        signUpPasskey,
+        reloadUser,
+        refreshSession,
+      }}>
       {children}
     </AuthContext.Provider>
   );

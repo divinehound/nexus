@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { AuthGate } from '@/components/wallet/auth-gate';
 import { useAuth } from '@/context/auth-context';
+import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
 import { truncateAddress } from '@/lib/utils';
 
@@ -29,7 +30,10 @@ function EchoCardContent() {
   const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!address) return;
+    if (!address) {
+      setLoading(false);
+      return;
+    }
     apiFetch<EchoScore>(`/discovery/echo-score/${address}`)
       .then(setEchoScore)
       .catch(() => null)
@@ -54,6 +58,20 @@ function EchoCardContent() {
     const url = `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`;
     window.open(url, '_blank');
   };
+
+  if (!address) {
+    return (
+      <main className="mx-auto max-w-7xl px-4 py-8">
+        <p className="text-gray-400">
+          Your Echo card is worked out from a wallet&apos;s holdings.{' '}
+          <Link href="/me" className="text-purple-400 hover:text-purple-300">
+            Link a wallet on your Me page
+          </Link>{' '}
+          to see it.
+        </p>
+      </main>
+    );
+  }
 
   if (loading) {
     return (

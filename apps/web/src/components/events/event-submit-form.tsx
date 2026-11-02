@@ -21,7 +21,7 @@ export function EventSubmitForm({ projectId }: EventSubmitFormProps) {
 
   if (!accessToken) {
     return (
-      <p className="text-sm text-gray-500">Connect your wallet to submit events.</p>
+      <p className="text-sm text-gray-500">Sign in to submit events.</p>
     );
   }
 

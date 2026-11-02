@@ -9,6 +9,21 @@ export default () => ({
   jwt: {
     secret: process.env.JWT_SECRET || 'nexus-dev-secret-change-in-production',
   },
+  auth: {
+    // Google sign-in: the OAuth client id (Web application) from Google Cloud console.
+    googleClientId: process.env.GOOGLE_CLIENT_ID || '',
+    // Emailed sign-in codes are sent through Resend. Without a key, codes are
+    // only written to the API log (outside production).
+    resendApiKey: process.env.RESEND_API_KEY || '',
+    emailFrom: process.env.EMAIL_FROM || 'Nexus <no-reply@nexus.local>',
+    // Passkeys: the site's domain (no scheme or port) and the web origins allowed
+    // to use them. Both default to WEB_URL.
+    webauthnRpId: process.env.WEBAUTHN_RP_ID || new URL(process.env.WEB_URL || 'http://localhost:3000').hostname,
+    webauthnOrigins: (process.env.WEBAUTHN_ORIGINS || process.env.WEB_URL || 'http://localhost:3000')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  },
   alchemy: {
     apiKey: process.env.ALCHEMY_API_KEY || '',
   },

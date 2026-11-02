@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module';
@@ -20,7 +21,13 @@ async function bootstrap() {
     console.log('⚠️  Skipping migrations:', { shouldRunMigrations, hasDatabaseUrl: !!process.env.DATABASE_URL });
   }
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // The web app proxies /api here over the private network. Trust forwarded
+  // client IPs only from private-network peers, so rate limits apply per
+  // visitor instead of to everyone behind the proxy, and can't be spoofed
+  // by a client that reaches the API directly.
+  app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 
   // Close BullMQ workers gracefully on SIGTERM/SIGINT so in-flight jobs
   // finish (or release their locks for another instance to pick up).
