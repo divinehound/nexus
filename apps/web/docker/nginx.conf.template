@@ -50,9 +50,13 @@ server {
         proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
         proxy_read_timeout 120s;
         proxy_cache nexus_media;
+        # The decoded path, without the query string, so ?random or re-encoded paths can't
+        # bypass the cache.
+        proxy_cache_key $scheme$proxy_host$uri;
         proxy_cache_valid 200 30d;
         proxy_cache_valid 404 5m;
         proxy_cache_lock on;
+        proxy_cache_lock_timeout 30s;
         proxy_cache_use_stale error timeout updating;
         add_header X-Cache-Status $upstream_cache_status;
     }

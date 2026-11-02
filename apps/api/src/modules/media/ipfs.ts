@@ -1,7 +1,7 @@
 /** CIDv0 (base58 "Qm…") or CIDv1 in base32 ("b…"), the two forms NFT metadata uses. */
 const CID = /^(Qm[1-9A-HJ-NP-Za-km-z]{44}|b[a-z2-7]{50,})$/;
 /** One path segment inside the CID's directory, still URL-encoded. */
-const SEGMENT = /^[A-Za-z0-9._~!$&'()*+,;=:@%-]+$/;
+const SEGMENT = /^[A-Za-z0-9._~!$&'()*+,;=:@%|[\]^-]+$/;
 
 /** A segment that stays one segment once decoded: no "/", "\\", "." or "..", even encoded. */
 function isSafeSegment(segment: string): boolean {

@@ -1,6 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { imageType, parseIpfsTarget } from './ipfs';
-import { MAX_IMAGE_BYTES, MediaService } from './media.service';
+import { MAX_CONCURRENT, MAX_IMAGE_BYTES, MediaService } from './media.service';
 
 const V0 = 'QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG';
 const V1 = 'bafybeiese3bgyfewt2r3dxvgups2blc3rwh2utvidirxgxq527mhcv3ydy';
@@ -22,6 +22,10 @@ describe('parseIpfsTarget', () => {
     expect(parseIpfsTarget(`${V1}/%2e%2e`)).toBeNull();
     expect(parseIpfsTarget(`${V1}/a%5Cb`)).toBeNull();
     expect(parseIpfsTarget(`${V1}/%zz`)).toBeNull();
+  });
+
+  it('accepts names the web app encodes', () => {
+    expect(parseIpfsTarget(`${V1}/My%20Image%20%5B1%5D.png`)?.path).toBe('My%20Image%20%5B1%5D.png');
     expect(parseIpfsTarget(`${V0.slice(0, -1)}`)).toBeNull();
   });
 });
@@ -43,31 +47,72 @@ describe('imageType', () => {
 });
 
 describe('MediaService', () => {
-  const service = new MediaService({ get: () => ['https://a.example', 'https://b.example'] } as unknown as ConfigService);
+  const service = () =>
+    new MediaService({ get: () => ['https://a.example', 'https://b.example'] } as unknown as ConfigService);
   const fetchMock = jest.fn();
   beforeEach(() => {
     fetchMock.mockReset();
     global.fetch = fetchMock as unknown as typeof fetch;
   });
 
-  const response = (body: Buffer, init: ResponseInit = {}) => new Response(new Uint8Array(body), init);
+  const response = (body: Buffer | null, init: ResponseInit = {}) =>
+    new Response(body && new Uint8Array(body), init);
+  const urls = () => fetchMock.mock.calls.map((c) => String(c[0]));
 
   it('falls back to the next gateway', async () => {
     fetchMock
-      .mockResolvedValueOnce(response(Buffer.from('nope'), { status: 403 }))
+      .mockResolvedValueOnce(response(Buffer.from('nope'), { status: 429 }))
       .mockResolvedValueOnce(response(PNG, { headers: { 'content-type': 'application/octet-stream' } }));
-    const image = await service.ipfsImage(V1, 'a.png');
-    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
-      `https://a.example/ipfs/${V1}/a.png`,
-      `https://b.example/ipfs/${V1}/a.png`,
-    ]);
-    expect(image?.type).toBe('image/png');
+    const result = await service().ipfsImage(V1, 'a.png');
+    expect(urls()).toEqual([`https://a.example/ipfs/${V1}/a.png`, `https://b.example/ipfs/${V1}/a.png`]);
+    expect(result.kind === 'image' && result.image.type).toBe('image/png');
   });
 
-  it('gives up on non-images and oversized files', async () => {
+  it('says missing when a gateway answered, unavailable when none did', async () => {
     fetchMock
       .mockResolvedValueOnce(response(Buffer.from('<html>'), { headers: { 'content-type': 'text/html' } }))
       .mockResolvedValueOnce(response(Buffer.alloc(MAX_IMAGE_BYTES + 1)));
-    expect(await service.ipfsImage(V1, '')).toBeNull();
+    expect((await service().ipfsImage(V1, '')).kind).toBe('missing');
+
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce(response(null, { status: 502 }));
+    expect((await service().ipfsImage(V1, '')).kind).toBe('unavailable');
+  });
+
+  it('follows redirects only within the gateway', async () => {
+    fetchMock
+      .mockResolvedValueOnce(response(null, { status: 301, headers: { location: `https://${V1}.ipfs.a.example/` } }))
+      .mockResolvedValueOnce(response(PNG))
+      .mockResolvedValueOnce(response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest' } }));
+    const s = service();
+    expect((await s.ipfsImage(V1, '')).kind).toBe('image');
+    expect(urls()[1]).toBe(`https://${V1}.ipfs.a.example/`);
+
+    fetchMock.mockReset();
+    fetchMock
+      .mockResolvedValueOnce(response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest' } }))
+      .mockResolvedValueOnce(response(null, { status: 404 }));
+    expect((await s.ipfsImage(V0, '')).kind).toBe('missing');
+    expect(urls()).not.toContain('http://169.254.169.254/latest');
+  });
+
+  it('shares one fetch between identical requests and caps how many run at once', async () => {
+    const releases: (() => void)[] = [];
+    fetchMock.mockImplementation(
+      () => new Promise((resolve) => releases.push(() => resolve(response(PNG)))),
+    );
+    const s = service();
+    const same = [s.ipfsImage(V1, 'x.png'), s.ipfsImage(V1, 'x.png')];
+    const others = Array.from({ length: MAX_CONCURRENT + 4 }, (_, i) => s.ipfsImage(V1, `${i}.png`));
+    await new Promise((r) => setImmediate(r));
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_CONCURRENT);
+
+    while (releases.length) {
+      releases.shift()!();
+      await new Promise((r) => setImmediate(r));
+    }
+    const results = await Promise.all([...same, ...others]);
+    expect(results.every((r) => r.kind === 'image')).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_CONCURRENT + 5);
   });
 });
