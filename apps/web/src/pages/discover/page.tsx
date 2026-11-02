@@ -5,6 +5,7 @@ import { useAuth } from '@/context/auth-context';
 import { apiFetch } from '@/lib/api';
 import { NetworkGraphVisualization } from '@/components/discovery/network-graph-enhanced';
 import { PersonalizedRecommendations } from '@/components/discovery/recommendations';
+import { mediaUrl } from '@/lib/media';
 
 interface Recommendation {
   project: {
@@ -147,7 +148,7 @@ function DiscoverContent() {
                   className="flex items-center gap-4 rounded-xl border border-gray-800 px-4 py-3 transition-colors hover:border-gray-600"
                 >
                   {rec.project.imageUrl && (
-                    <img src={rec.project.imageUrl} alt={rec.project.name} className="h-12 w-12 rounded-lg object-cover" />
+                    <img src={mediaUrl(rec.project.imageUrl)} alt={rec.project.name} className="h-12 w-12 rounded-lg object-cover" />
                   )}
                   <div className="flex-1">
                     <div className="flex items-center gap-2">

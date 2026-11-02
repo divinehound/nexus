@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api';
+import { mediaUrl } from '@/lib/media';
 
 interface FeaturedProject {
   id: string;
@@ -58,7 +59,7 @@ export function FeaturedProjectsSection() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((p) => (
             <Link key={p.id} to={`/project/${p.slug}`} className="flex items-center gap-3 rounded-xl border border-gray-800 px-4 py-3 hover:border-gray-600">
-              {p.imageUrl && <img src={p.imageUrl} alt={p.name} className="h-10 w-10 rounded-lg object-cover" />}
+              {p.imageUrl && <img src={mediaUrl(p.imageUrl)} alt={p.name} className="h-10 w-10 rounded-lg object-cover" />}
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{p.name}</p>
                 {p.healthScore !== null && <p className="text-xs text-gray-500">Score: {p.healthScore}</p>}

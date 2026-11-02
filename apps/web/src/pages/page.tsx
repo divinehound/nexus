@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { SearchBar } from '@/components/search/search-bar';
 import { FeaturedProjectsSection } from '@/components/project/featured-projects-section';
 import { apiFetch } from '@/lib/api';
+import { mediaUrl } from '@/lib/media';
 
 interface ProjectSummary {
   id: string;
@@ -54,7 +55,7 @@ export default function HomePage() {
                   >
                     <span className="w-5 text-sm text-gray-500">{i + 1}</span>
                     {p.imageUrl && (
-                      <img src={p.imageUrl} alt={p.name} className="h-8 w-8 rounded-lg object-cover" />
+                      <img src={mediaUrl(p.imageUrl)} alt={p.name} className="h-8 w-8 rounded-lg object-cover" />
                     )}
                     <span className="flex-1 text-sm font-medium">{p.name}</span>
                     {p.healthScore !== null && (
@@ -89,7 +90,7 @@ export default function HomePage() {
                     className="flex items-center gap-3 rounded-lg border border-gray-800 px-3 py-2 transition-colors hover:border-gray-600"
                   >
                     {p.imageUrl && (
-                      <img src={p.imageUrl} alt={p.name} className="h-8 w-8 rounded-lg object-cover" />
+                      <img src={mediaUrl(p.imageUrl)} alt={p.name} className="h-8 w-8 rounded-lg object-cover" />
                     )}
                     <span className="flex-1 text-sm font-medium">{p.name}</span>
                     <span className="text-xs text-gray-500">{p.collections.length} collections</span>

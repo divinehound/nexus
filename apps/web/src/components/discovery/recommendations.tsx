@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getRecommendations, type Recommendation } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
 import { Link } from 'react-router';
+import { mediaUrl } from '@/lib/media';
 
 interface RecommendationsProps {
   limit?: number;
@@ -158,7 +159,7 @@ export function PersonalizedRecommendations({ limit = 10, minOverlap = 3 }: Reco
             <div className="flex items-start gap-3">
               {rec.collection.imageUrl ? (
                 <img
-                  src={rec.collection.imageUrl}
+                  src={mediaUrl(rec.collection.imageUrl)}
                   alt={rec.collection.name}
                   className="h-16 w-16 rounded-lg border border-gray-700 object-cover"
                 />

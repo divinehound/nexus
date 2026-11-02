@@ -650,6 +650,7 @@ apiFetch<T>(path, { method?, body?, token? }) → Promise<T>
 | `TWITTER_BEARER_TOKEN` | `""` | Twitter API v2 for Spaces detection |
 | `OPENSEA_API_KEY` | `""` | Market data |
 | `RESERVOIR_API_KEY` | `""` | Floor prices, sales |
+| `IPFS_GATEWAYS` | `https://ipfs.io,https://dweb.link` | API: gateways the IPFS image proxy (`/api/media/ipfs/<cid>/<path>`) reads from, in order |
 | `API_URL` | `http://api:4000/api` | Web container: where nginx (and `vite dev`) forward `/api`. Its path must be `/api` |
 | `WALLETCONNECT_PROJECT_ID` | `""` | Web container: WalletConnect cloud project ID, read at container start (`NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` still works) |
 | `VITE_API_URL` | `/api` | Build time: API base URL for the browser, only if the API isn't proxied on the same origin |

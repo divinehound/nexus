@@ -65,6 +65,13 @@ export default () => ({
     openseaCalls: parseInt(process.env.HOLDER_ANALYSIS_OPENSEA_CALLS || '40', 10),
     etherscanCalls: parseInt(process.env.HOLDER_ANALYSIS_ETHERSCAN_CALLS || '100', 10),
   },
+  ipfs: {
+    // Gateways the image proxy (/api/media/ipfs) reads from, tried in order. Comma-separated.
+    gateways: (process.env.IPFS_GATEWAYS || 'https://ipfs.io,https://dweb.link')
+      .split(',')
+      .map((gateway) => gateway.trim().replace(/\/+$/, ''))
+      .filter(Boolean),
+  },
   holdings: {
     maxCollectionsPerRun: parseInt(process.env.HOLDINGS_MAX_COLLECTIONS_PER_RUN || '50', 10),
   },

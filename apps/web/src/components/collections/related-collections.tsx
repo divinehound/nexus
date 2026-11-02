@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { getRelatedCollections, type RelatedCollection } from '@/lib/api';
+import { mediaUrl } from '@/lib/media';
 
 interface RelatedCollectionsProps {
   collectionId: string;
@@ -75,7 +76,7 @@ export function RelatedCollections({ collectionId }: RelatedCollectionsProps) {
             <div className="flex items-start gap-3">
               {collection.imageUrl ? (
                 <img
-                  src={collection.imageUrl}
+                  src={mediaUrl(collection.imageUrl)}
                   alt={collection.name}
                   className="h-12 w-12 rounded-lg object-cover"
                 />

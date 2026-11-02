@@ -23,6 +23,7 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:-}
       WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
       WEBAUTHN_ORIGINS: ${WEBAUTHN_ORIGINS:-}
+      IPFS_GATEWAYS: ${IPFS_GATEWAYS:-}
     depends_on:
       - redis
 

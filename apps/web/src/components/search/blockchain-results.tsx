@@ -4,6 +4,7 @@ import { useAuth } from '@/context/auth-context';
 import { apiFetch } from '@/lib/api';
 import { AddressDisplay } from '@/components/ui/address-display';
 import { chainDisplayName } from '@nexus/types';
+import { mediaUrl } from '@/lib/media';
 
 interface BlockchainContractInfo {
   contractAddress: string;
@@ -117,7 +118,7 @@ function BlockchainResultCard({ info }: { info: BlockchainContractInfo }) {
     <div className="flex items-center gap-4 rounded-xl border border-dashed border-gray-700 px-4 py-3 transition-colors hover:border-gray-500">
       {info.imageUrl ? (
         <img
-          src={info.imageUrl}
+          src={mediaUrl(info.imageUrl)}
           alt={info.name}
           className="h-12 w-12 rounded-lg object-cover"
         />

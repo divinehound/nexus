@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { ApiError, apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
 import { AddressDisplay } from '@/components/ui/address-display';
+import { mediaUrl } from '@/lib/media';
 
 interface ActivityItem {
   id: string;
@@ -85,7 +86,7 @@ export function ActivityFeed({ projectId }: { projectId: string }) {
           {item.message && <p className="mt-2 text-sm text-gray-300">{item.message}</p>}
 
           {item.imageUrl && (
-            <img src={item.imageUrl} alt="" className="mt-2 max-h-48 rounded-lg object-cover" />
+            <img src={mediaUrl(item.imageUrl)} alt="" className="mt-2 max-h-48 rounded-lg object-cover" />
           )}
 
           {item.price !== null && (
