@@ -76,12 +76,16 @@ export const passkeyCredentials = pgTable(
  * will belong to (an existing user when adding one, a new id when signing up
  * with a passkey); 'authenticate' rows have no user.
  */
-export const webauthnChallenges = pgTable('webauthn_challenges', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  challenge: varchar('challenge', { length: 255 }).notNull(),
-  purpose: varchar('purpose', { length: 16 }).notNull(),
-  userId: uuid('user_id'),
-  isNewUser: boolean('is_new_user').default(false).notNull(),
-  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+export const webauthnChallenges = pgTable(
+  'webauthn_challenges',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    challenge: varchar('challenge', { length: 255 }).notNull(),
+    purpose: varchar('purpose', { length: 16 }).notNull(),
+    userId: uuid('user_id'),
+    isNewUser: boolean('is_new_user').default(false).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index('webauthn_challenges_expires_at_idx').on(table.expiresAt)],
+);

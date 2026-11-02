@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { Throttle } from '@nestjs/throttler';
 import type { RegistrationResponseJSON } from '@simplewebauthn/server';
-import { EmailCodeService } from './email-code.service';
+import { EmailCodeService, normalizeEmail } from './email-code.service';
 import { GoogleAuthService } from './google-auth.service';
 import { IdentitiesService } from './identities.service';
 import { PasskeyService } from './passkey.service';
@@ -35,8 +35,10 @@ export class SignInMethodsController {
   @HttpCode(200)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @ApiOperation({ summary: 'Email a code to add that address as a sign-in method' })
-  sendEmailCode(@Req() req: AuthRequest, @Body() body: { email: string }) {
-    return this.emailCodes.send(body?.email, 'link', req.user.sub);
+  async sendEmailCode(@Req() req: AuthRequest, @Body() body: { email: string }) {
+    const email = normalizeEmail(body?.email);
+    await this.identities.assertLinkable(req.user.sub, 'email', email);
+    return this.emailCodes.send(email, 'link', req.user.sub);
   }
 
   @Post('email/verify')

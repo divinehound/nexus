@@ -13,14 +13,19 @@ export class EmailSenderService {
     return !!this.apiKey() || process.env.NODE_ENV !== 'production';
   }
 
-  async sendSignInCode(to: string, code: string): Promise<void> {
-    const subject = `${code} is your Nexus sign-in code`;
-    const text = [
-      `Your Nexus sign-in code is ${code}`,
-      '',
-      'It expires in 10 minutes. If you did not ask for it, you can ignore this email.',
-    ].join('\n');
-    const html = `<p>Your Nexus sign-in code is</p><p style="font-size:28px;font-weight:700;letter-spacing:4px">${code}</p><p>It expires in 10 minutes. If you did not ask for it, you can ignore this email.</p>`;
+  async sendCode(to: string, code: string, purpose: 'sign_in' | 'link'): Promise<void> {
+    const forLink = purpose === 'link';
+    const subject = forLink
+      ? `${code} adds this email to a Nexus account`
+      : `${code} is your Nexus sign-in code`;
+    const lead = forLink
+      ? 'Someone asked to add this email address to their Nexus account. Enter this code only if that was you:'
+      : 'Your Nexus sign-in code is';
+    const warning = forLink
+      ? 'Never share this code. Anyone who has it can sign in to their Nexus account with your email.'
+      : 'It expires in 10 minutes. If you did not ask for it, you can ignore this email.';
+    const text = [lead, '', code, '', warning].join('\n');
+    const html = `<p>${lead}</p><p style="font-size:28px;font-weight:700;letter-spacing:4px">${code}</p><p>${warning}</p>`;
 
     const apiKey = this.apiKey();
     if (!apiKey) {

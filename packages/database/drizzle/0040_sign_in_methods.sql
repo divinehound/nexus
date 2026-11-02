@@ -56,3 +56,5 @@ CREATE TABLE IF NOT EXISTS "webauthn_challenges" (
   "expires_at" timestamp with time zone NOT NULL,
   "created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "webauthn_challenges_expires_at_idx" ON "webauthn_challenges" ("expires_at");

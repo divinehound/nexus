@@ -510,26 +510,28 @@ export class MeService {
   }
 
   async deleteWallet(userId: string, walletId: string) {
-    const userWallets = await this.db.query.wallets.findMany({ where: eq(wallets.userId, userId) });
-    const wallet = userWallets.find((w) => w.id === walletId);
-
-    if (!wallet) throw new NotFoundException('Wallet not found');
-
-    if (userWallets.length <= 1) {
-      // The last wallet can go only if the user can still sign in another way.
-      const [otherIdentity, passkey] = await Promise.all([
-        this.db.query.authIdentities.findFirst({ where: eq(authIdentities.userId, userId) }),
-        this.db.query.passkeyCredentials.findFirst({ where: eq(passkeyCredentials.userId, userId) }),
-      ]);
-      if (!otherIdentity && !passkey) {
-        throw new ForbiddenException({
-          error: 'LAST_WALLET_DELETE_FORBIDDEN',
-          message: 'Cannot remove your final wallet. Link another wallet or sign-in method first.',
-        });
-      }
-    }
-
     await this.db.transaction(async (tx) => {
+      // Lock the user so this and a removal of another sign-in method can't both pass the check below.
+      await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
+
+      const userWallets = await tx.query.wallets.findMany({ where: eq(wallets.userId, userId) });
+      const wallet = userWallets.find((w) => w.id === walletId);
+      if (!wallet) throw new NotFoundException('Wallet not found');
+
+      if (userWallets.length <= 1) {
+        // The last wallet can go only if the user can still sign in another way.
+        const [otherIdentity, passkey] = await Promise.all([
+          tx.query.authIdentities.findFirst({ where: eq(authIdentities.userId, userId) }),
+          tx.query.passkeyCredentials.findFirst({ where: eq(passkeyCredentials.userId, userId) }),
+        ]);
+        if (!otherIdentity && !passkey) {
+          throw new ForbiddenException({
+            error: 'LAST_WALLET_DELETE_FORBIDDEN',
+            message: 'Cannot remove your final wallet. Link another wallet or sign-in method first.',
+          });
+        }
+      }
+
       await tx.delete(wallets).where(eq(wallets.id, walletId));
 
       if (wallet.isPrimary) {

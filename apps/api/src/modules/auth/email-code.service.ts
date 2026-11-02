@@ -13,6 +13,12 @@ export const EMAIL_CODE_MAX_ATTEMPTS = 5;
 /** Codes one address may be sent per window, whatever the caller's IP. */
 export const EMAIL_CODES_PER_WINDOW = 5;
 export const EMAIL_CODE_WINDOW_MS = 15 * 60 * 1000;
+/**
+ * Wrong tries an address may have across all its codes in a day. Without it a
+ * guesser could keep asking for new codes: this caps them at 20 guesses a day.
+ */
+export const EMAIL_DAILY_FAILED_TRIES = 20;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -35,41 +41,56 @@ export class EmailCodeService {
 
   async send(rawEmail: unknown, purpose: EmailCodePurpose, userId: string | null = null) {
     const email = normalizeEmail(rawEmail);
-
-    const [{ recent }] = await this.db
-      .select({ recent: sql<number>`count(*)::int` })
-      .from(emailLoginCodes)
-      .where(
-        and(
-          eq(emailLoginCodes.email, email),
-          gt(emailLoginCodes.createdAt, new Date(Date.now() - EMAIL_CODE_WINDOW_MS)),
-        ),
-      );
-    if (Number(recent) >= EMAIL_CODES_PER_WINDOW) {
-      throw new HttpException(
-        { error: 'TOO_MANY_CODES', message: 'Too many codes sent to this email. Try again in 15 minutes.' },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-
     const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
 
-    // Only the newest code for this address and purpose works.
-    await this.db
-      .update(emailLoginCodes)
-      .set({ consumedAt: new Date() })
-      .where(
-        and(eq(emailLoginCodes.email, email), eq(emailLoginCodes.purpose, purpose), isNull(emailLoginCodes.consumedAt)),
-      );
-    await this.db.insert(emailLoginCodes).values({
-      email,
-      purpose,
-      userId,
-      codeHash: this.hash(email, code),
-      expiresAt: new Date(Date.now() + EMAIL_CODE_TTL_MS),
+    await this.db.transaction(async (tx) => {
+      // One send per address at a time, so parallel requests can't pass the cap together.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'email-code:' + email}))`);
+
+      const [{ recent, failed }] = await tx
+        .select({
+          recent: sql<number>`count(*) FILTER (WHERE ${emailLoginCodes.createdAt} > ${new Date(Date.now() - EMAIL_CODE_WINDOW_MS).toISOString()}::timestamptz)::int`,
+          failed: sql<number>`coalesce(sum(${emailLoginCodes.attempts}), 0)::int`,
+        })
+        .from(emailLoginCodes)
+        .where(and(eq(emailLoginCodes.email, email), gt(emailLoginCodes.createdAt, new Date(Date.now() - DAY_MS))));
+      if (Number(recent) >= EMAIL_CODES_PER_WINDOW) {
+        throw new HttpException(
+          { error: 'TOO_MANY_CODES', message: 'Too many codes sent to this email. Try again in 15 minutes.' },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      if (Number(failed) >= EMAIL_DAILY_FAILED_TRIES) {
+        throw new HttpException(
+          { error: 'TOO_MANY_ATTEMPTS', message: 'Too many wrong codes for this email today. Try again tomorrow.' },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+
+      // Only the newest code works: sign-in codes per address, link codes per address and user.
+      await tx
+        .update(emailLoginCodes)
+        .set({ consumedAt: new Date() })
+        .where(
+          and(
+            eq(emailLoginCodes.email, email),
+            eq(emailLoginCodes.purpose, purpose),
+            isNull(emailLoginCodes.consumedAt),
+            purpose === 'link' && userId ? eq(emailLoginCodes.userId, userId) : undefined,
+          ),
+        );
+      // Old rows are only needed for the daily counts.
+      await tx.delete(emailLoginCodes).where(lt(emailLoginCodes.createdAt, new Date(Date.now() - 2 * DAY_MS)));
+      await tx.insert(emailLoginCodes).values({
+        email,
+        purpose,
+        userId,
+        codeHash: this.hash(email, code),
+        expiresAt: new Date(Date.now() + EMAIL_CODE_TTL_MS),
+      });
     });
 
-    await this.sender.sendSignInCode(email, code);
+    await this.sender.sendCode(email, code, purpose);
     return { email, expiresInSeconds: EMAIL_CODE_TTL_MS / 1000 };
   }
 
@@ -87,12 +108,27 @@ export class EmailCodeService {
         eq(emailLoginCodes.purpose, purpose),
         isNull(emailLoginCodes.consumedAt),
         gt(emailLoginCodes.expiresAt, new Date()),
+        purpose === 'link' && userId ? eq(emailLoginCodes.userId, userId) : undefined,
       ),
       orderBy: [desc(emailLoginCodes.createdAt)],
     });
     if (!row || (purpose === 'link' && row.userId !== userId)) {
       throw new UnauthorizedException({ error: 'CODE_EXPIRED', message: 'That code has expired. Request a new one.' });
     }
+    const [{ failed }] = await this.db
+      .select({ failed: sql<number>`coalesce(sum(${emailLoginCodes.attempts}), 0)::int` })
+      .from(emailLoginCodes)
+      .where(
+        and(eq(emailLoginCodes.email, email), gt(emailLoginCodes.createdAt, new Date(Date.now() - DAY_MS))),
+      );
+    // `attempts` counts wrong tries only: the right one is taken back off when the code is used.
+    if (Number(failed) >= EMAIL_DAILY_FAILED_TRIES) {
+      throw new UnauthorizedException({
+        error: 'TOO_MANY_ATTEMPTS',
+        message: 'Too many wrong codes for this email today. Try again tomorrow.',
+      });
+    }
+
     // Count the try before checking it, atomically, so parallel guesses can't exceed the limit.
     const [tried] = await this.db
       .update(emailLoginCodes)
@@ -116,7 +152,7 @@ export class EmailCodeService {
     // Use it up; if a parallel request got there first, this one fails.
     const [used] = await this.db
       .update(emailLoginCodes)
-      .set({ consumedAt: new Date() })
+      .set({ consumedAt: new Date(), attempts: sql`${emailLoginCodes.attempts} - 1` })
       .where(and(eq(emailLoginCodes.id, row.id), isNull(emailLoginCodes.consumedAt)))
       .returning({ id: emailLoginCodes.id });
     if (!used) {

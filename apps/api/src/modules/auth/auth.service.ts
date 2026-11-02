@@ -6,7 +6,7 @@ import { createPublicClient, http, hashMessage, encodeAbiParameters, concat, typ
 import { mainnet, base, abstract as abstractChain, polygon } from 'viem/chains';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, users, wallets } from '@nexus/database';
 import { CHAIN_META } from '@nexus/types';
@@ -297,7 +297,7 @@ export class AuthService {
   async issueTokensForUser(userId: string) {
     const user = await this.db.query.users.findFirst({ where: eq(users.id, userId) });
     if (!user) throw new UnauthorizedException('User not found');
-    return { user, ...this.issueTokens(user.id, await this.primaryAddress(user.primaryWalletId), user.role) };
+    return { user, ...this.issueTokens(user.id, await this.primaryAddress(user.id, user.primaryWalletId), user.role) };
   }
 
   async refresh(refreshToken: string) {
@@ -311,13 +311,25 @@ export class AuthService {
     // linked since (or a role change) shows up in the new tokens.
     const user = await this.db.query.users.findFirst({ where: eq(users.id, payload.sub) });
     if (!user) throw new UnauthorizedException('Invalid refresh token');
-    const address = payload.address ?? (await this.primaryAddress(user.primaryWalletId));
+    // Keep the wallet the user signed in with while it is still theirs; otherwise
+    // fall back to their primary wallet (or none), so a removed or moved wallet drops out.
+    let address: string | null = null;
+    if (payload.address) {
+      const stillOwned = await this.db.query.wallets.findFirst({
+        // EVM addresses are stored lowercase but signed in checksummed.
+        where: and(eq(wallets.userId, user.id), sql`lower(${wallets.address}) = lower(${payload.address})`),
+      });
+      address = stillOwned ? payload.address : null;
+    }
+    address ??= await this.primaryAddress(user.id, user.primaryWalletId);
     return this.issueTokens(user.id, address, user.role);
   }
 
-  private async primaryAddress(primaryWalletId: string | null): Promise<string | null> {
+  private async primaryAddress(userId: string, primaryWalletId: string | null): Promise<string | null> {
     if (!primaryWalletId) return null;
-    const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, primaryWalletId) });
+    const wallet = await this.db.query.wallets.findFirst({
+      where: and(eq(wallets.id, primaryWalletId), eq(wallets.userId, userId)),
+    });
     return wallet?.address ?? null;
   }
 

@@ -34,8 +34,10 @@ interface AuthContextValue extends AuthState {
   loginGoogle: (credential: string) => Promise<void>;
   loginPasskey: () => Promise<void>;
   signUpPasskey: () => Promise<void>;
-  /** Re-reads the signed-in user, e.g. after linking a wallet or sign-in method. */
+  /** Re-reads the signed-in user, e.g. after adding a sign-in method. */
   reloadUser: () => Promise<void>;
+  /** Gets fresh tokens and user, e.g. after linking or removing a wallet (the token carries the wallet address). */
+  refreshSession: () => Promise<void>;
 }
 
 type AuthResponse = { user: AuthUser; accessToken: string; refreshToken: string };
@@ -144,6 +146,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await handleAuthResponse(await post<AuthResponse>('/auth/passkey/register/verify', { challengeId, response }));
   }, [post, handleAuthResponse]);
 
+  const refreshSession = useCallback(async () => {
+    let refreshToken: string | undefined;
+    try {
+      refreshToken = JSON.parse(localStorage.getItem('nexus_auth') || '{}').refreshToken;
+    } catch {
+      refreshToken = undefined;
+    }
+    if (!refreshToken) return;
+    const tokens = await apiFetch<{ accessToken: string; refreshToken: string }>('/auth/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
+    });
+    localStorage.setItem('nexus_auth', JSON.stringify(tokens));
+    const user = await apiFetch<AuthUser>('/auth/me', { token: tokens.accessToken });
+    setState({ user, accessToken: tokens.accessToken, isLoading: false });
+  }, []);
+
   const reloadUser = useCallback(async () => {
     if (!state.accessToken) return;
     const user = await apiFetch<AuthUser>('/auth/me', { token: state.accessToken });
@@ -190,6 +209,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loginPasskey,
         signUpPasskey,
         reloadUser,
+        refreshSession,
       }}>
       {children}
     </AuthContext.Provider>

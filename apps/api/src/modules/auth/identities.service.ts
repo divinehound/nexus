@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type Database, authIdentities, passkeyCredentials, users, wallets } from '@nexus/database';
 
@@ -30,7 +30,8 @@ export class IdentitiesService {
   ) {
     const existing = await this.findIdentity(provider, subject);
     if (existing) {
-      await this.touch(existing.id, existing.userId);
+      // Keep the provider's current address, so the same-email match below never uses a stale one.
+      await this.touch(existing.id, existing.userId, email);
       return this.getUser(existing.userId);
     }
 
@@ -38,6 +39,7 @@ export class IdentitiesService {
     if (email) {
       const sameEmail = await this.db.query.authIdentities.findFirst({
         where: and(eq(authIdentities.email, email), inArray(authIdentities.provider, EMAIL_PROVING_PROVIDERS)),
+        orderBy: [asc(authIdentities.createdAt)],
       });
       userId = sameEmail?.userId ?? null;
     }
@@ -59,6 +61,17 @@ export class IdentitiesService {
     }
     await this.touch(identity.id, identity.userId);
     return this.getUser(identity.userId);
+  }
+
+  /** Refuses up front when the identity already signs in to another account. */
+  async assertLinkable(userId: string, provider: IdentityProvider, subject: string) {
+    const existing = await this.findIdentity(provider, subject);
+    if (existing && existing.userId !== userId) {
+      throw new ConflictException({
+        error: 'IDENTITY_IN_USE',
+        message: 'That email already signs in to another Nexus account.',
+      });
+    }
   }
 
   /** Add an identity to the signed-in user. Refuses one that belongs to someone else. */
@@ -197,9 +210,12 @@ export class IdentitiesService {
     return existing;
   }
 
-  private async touch(identityId: string, userId: string) {
+  private async touch(identityId: string, userId: string, email?: string | null) {
     const now = new Date();
-    await this.db.update(authIdentities).set({ lastUsedAt: now }).where(eq(authIdentities.id, identityId));
+    await this.db
+      .update(authIdentities)
+      .set(email ? { lastUsedAt: now, email } : { lastUsedAt: now })
+      .where(eq(authIdentities.id, identityId));
     await this.db.update(users).set({ lastActiveAt: now }).where(eq(users.id, userId));
   }
 

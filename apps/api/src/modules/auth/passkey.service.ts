@@ -69,7 +69,7 @@ export class PasskeyService {
       userName,
       attestationType: 'none',
       excludeCredentials,
-      authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' },
+      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
     });
 
     const challengeId = await this.saveChallenge(options.challenge, 'register', ownerId, isNewUser);
@@ -96,7 +96,7 @@ export class PasskeyService {
         expectedChallenge: challenge.challenge,
         expectedOrigin: this.origins(),
         expectedRPID: this.rpId(),
-        requireUserVerification: false,
+        requireUserVerification: true,
       });
     } catch (err) {
       this.logger.warn(`Passkey registration rejected: ${err instanceof Error ? err.message : String(err)}`);
@@ -113,7 +113,8 @@ export class PasskeyService {
     if (taken) throw new BadRequestException('This passkey is already saved.');
 
     const userId = challenge.userId;
-    return this.db.transaction(async (tx) => {
+    return this.db
+      .transaction(async (tx) => {
       if (challenge.isNewUser) {
         await tx.insert(users).values({ id: userId });
       }
@@ -130,13 +131,18 @@ export class PasskeyService {
       const user = await tx.query.users.findFirst({ where: eq(users.id, userId) });
       if (!user) throw new NotFoundException('User not found');
       return user;
-    });
+    })
+      .catch((err: unknown) => {
+        // The same passkey saved twice at once: the unique index catches the second.
+        if ((err as { code?: string })?.code === '23505') throw new BadRequestException('This passkey is already saved.');
+        throw err;
+      });
   }
 
   async authenticationOptions() {
     const options = await generateAuthenticationOptions({
       rpID: this.rpId(),
-      userVerification: 'preferred',
+      userVerification: 'required',
     });
     const challengeId = await this.saveChallenge(options.challenge, 'authenticate', null, false);
     return { challengeId, options };
@@ -170,7 +176,7 @@ export class PasskeyService {
           counter: stored.counter,
           transports: stored.transports as AuthenticatorTransportFuture[],
         },
-        requireUserVerification: false,
+        requireUserVerification: true,
       });
     } catch (err) {
       this.logger.warn(`Passkey sign-in rejected: ${err instanceof Error ? err.message : String(err)}`);

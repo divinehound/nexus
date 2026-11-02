@@ -7,6 +7,7 @@ import { apiFetch } from '@/lib/api';
 import { authErrorMessage } from '@/lib/auth-errors';
 import { useAuthMethods } from '@/hooks/use-auth-methods';
 import { GoogleButton } from '@/components/auth/google-button';
+import { useAuth } from '@/context/auth-context';
 
 interface SignInMethods {
   identities: { id: string; provider: 'email' | 'google'; email: string | null; createdAt: string; lastUsedAt: string | null }[];
@@ -20,6 +21,7 @@ function when(date: string | null) {
 /** Email, Google and passkey sign-in for this account (wallets are listed separately). */
 export function SignInMethodsSection({ accessToken }: { accessToken: string }) {
   const authMethods = useAuthMethods();
+  const { reloadUser } = useAuth();
   const [methods, setMethods] = useState<SignInMethods | null>(null);
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
@@ -57,6 +59,8 @@ export function SignInMethodsSection({ accessToken }: { accessToken: string }) {
     try {
       await action();
       if (success) setNotice(success);
+      // The header shows the email for accounts without a wallet.
+      reloadUser().catch(() => undefined);
     } catch (err) {
       setError(authErrorMessage(err));
     } finally {

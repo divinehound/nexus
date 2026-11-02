@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { apiFetch } from '@/lib/api';
+import { toast } from 'sonner';
+import { ApiError, apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
 import { AddressDisplay } from '@/components/ui/address-display';
 
@@ -44,8 +45,10 @@ export function ActivityFeed({ projectId }: { projectId: string }) {
             : item,
         ),
       );
-    } catch {
-      // Reaction failed
+    } catch (err) {
+      if (err instanceof ApiError && err.data?.error === 'WALLET_REQUIRED') {
+        toast.error('Link a wallet on your Me page to react.');
+      }
     }
   };
 
