@@ -7,6 +7,7 @@ import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
 import { truncateAddress, formatPrice, chainCurrency } from '@/lib/utils';
 import type { BlockchainContractInfo } from '@nexus/types';
 import { PageSpinner } from '@/components/ui/page-spinner';
+import { mediaUrl } from '@/lib/media';
 
 interface SearchResults {
   projects: {
@@ -161,7 +162,7 @@ export default function SearchPage() {
               >
                 {p.imageUrl && (
                   <img
-                    src={p.imageUrl}
+                    src={mediaUrl(p.imageUrl)}
                     alt={p.name}
                     className="h-12 w-12 rounded-lg object-cover"
                   />
@@ -204,7 +205,7 @@ export default function SearchPage() {
                 >
                   {c.imageUrl && (
                     <img
-                      src={c.imageUrl}
+                      src={mediaUrl(c.imageUrl)}
                       alt={c.name}
                       className="h-12 w-12 rounded-lg object-cover"
                     />

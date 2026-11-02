@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { getNetworkGraph, getCollectionConnections, type NetworkGraph, type NetworkGraphNode } from '@/lib/api';
 import { Link } from 'react-router';
 import * as d3 from 'd3';
+import { mediaUrl } from '@/lib/media';
 
 interface NetworkGraphProps {
   strategy?: 'top-collections' | 'connected-traverse' | 'user-network';
@@ -229,7 +230,7 @@ export function NetworkGraphVisualization({
     // Add images (if available)
     node.filter(d => !!d.imageUrl)
       .append('image')
-      .attr('xlink:href', d => d.imageUrl!)
+      .attr('xlink:href', d => mediaUrl(d.imageUrl)!)
       .attr('x', d => -(Math.sqrt(d.holderCount || 0) / 3 + 8))
       .attr('y', d => -(Math.sqrt(d.holderCount || 0) / 3 + 8))
       .attr('width', d => (Math.sqrt(d.holderCount || 0) / 3 + 8) * 2)
@@ -390,7 +391,7 @@ export function NetworkGraphVisualization({
           <div className="flex items-center gap-3">
             {focusedNodeData.imageUrl && (
               <img
-                src={focusedNodeData.imageUrl}
+                src={mediaUrl(focusedNodeData.imageUrl)}
                 alt={focusedNodeData.name}
                 className="h-12 w-12 rounded border border-gray-700 object-cover"
               />
@@ -423,7 +424,7 @@ export function NetworkGraphVisualization({
                   >
                     {node.imageUrl ? (
                       <img
-                        src={node.imageUrl}
+                        src={mediaUrl(node.imageUrl)}
                         alt={node.name}
                         className="h-10 w-10 flex-shrink-0 rounded border border-gray-700 object-cover"
                       />

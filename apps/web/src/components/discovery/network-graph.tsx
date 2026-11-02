@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { getNetworkGraph, getCollectionConnections, type NetworkGraph, type NetworkGraphNode } from '@/lib/api';
 import { Link } from 'react-router';
 import * as d3 from 'd3';
+import { mediaUrl } from '@/lib/media';
 
 interface NetworkGraphProps {
   strategy?: 'top-collections' | 'connected-traverse';
@@ -348,7 +349,7 @@ export function NetworkGraphVisualization({
         
         // Image element
         const image = document.createElementNS('http://www.w3.org/2000/svg', 'image');
-        image.setAttribute('href', node.imageUrl);
+        image.setAttribute('href', mediaUrl(node.imageUrl)!);
         image.setAttribute('x', (node.x - radius * 0.7).toString());
         image.setAttribute('y', (node.y - radius * 0.7).toString());
         image.setAttribute('width', (radius * 1.4).toString());
@@ -533,7 +534,7 @@ export function NetworkGraphVisualization({
                 >
                   {node.imageUrl ? (
                     <img
-                      src={node.imageUrl}
+                      src={mediaUrl(node.imageUrl)}
                       alt={node.name}
                       className="h-10 w-10 flex-shrink-0 rounded border border-gray-700 object-cover"
                     />

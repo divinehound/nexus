@@ -7,6 +7,8 @@ upstream nexus_api {
     server __API_HOSTPORT__ resolve;
 }
 
+proxy_cache_path /var/cache/nginx/nexus_media levels=1:2 keys_zone=nexus_media:10m max_size=500m inactive=30d use_temp_path=off;
+
 server {
     listen 3000;
     server_name _;
@@ -31,6 +33,32 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
         proxy_read_timeout 120s;
+    }
+
+    # NFT images from IPFS, fetched by the API (see apps/api/src/modules/media). Cached here
+    # so each image is fetched from a gateway once, not once per visitor.
+    location /api/media/ {
+        # No URI on proxy_pass: the request path (with its /api prefix) goes through unchanged.
+        proxy_pass __API_SCHEME__://nexus_api;
+        proxy_http_version 1.1;
+        proxy_ssl_server_name on;
+        # Send the API's real hostname for TLS (SNI), not the upstream block's name.
+        proxy_ssl_name __API_HOST__;
+        proxy_set_header Host __API_HOST__;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+        proxy_read_timeout 120s;
+        proxy_cache nexus_media;
+        # The decoded path, without the query string, so ?random or re-encoded paths can't
+        # bypass the cache.
+        proxy_cache_key $scheme$proxy_host$uri;
+        proxy_cache_valid 200 30d;
+        proxy_cache_valid 404 5m;
+        proxy_cache_lock on;
+        proxy_cache_lock_timeout 30s;
+        proxy_cache_use_stale error timeout updating;
+        add_header X-Cache-Status $upstream_cache_status;
     }
 
     # Hashed build output never changes.

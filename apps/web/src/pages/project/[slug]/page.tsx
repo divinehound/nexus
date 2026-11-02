@@ -6,6 +6,7 @@ import { formatPrice, truncateAddress, chainCurrency } from '@/lib/utils';
 import { ProjectTabs } from '@/components/project/project-tabs';
 import { HolderAnalysisLink } from '@/components/holder-analysis/report-link';
 import { PageSpinner } from '@/components/ui/page-spinner';
+import { mediaUrl } from '@/lib/media';
 
 interface ProjectData {
   id: string;
@@ -79,7 +80,7 @@ export default function ProjectPage() {
       <div className="flex items-start gap-6">
         {project.imageUrl && (
           <img
-            src={project.imageUrl}
+            src={mediaUrl(project.imageUrl)}
             alt={project.name}
             className="h-20 w-20 rounded-xl object-cover"
           />
@@ -137,7 +138,7 @@ export default function ProjectPage() {
               >
                 <div className="flex items-center gap-3">
                   {c.imageUrl && (
-                    <img src={c.imageUrl} alt={c.name} className="h-10 w-10 rounded-lg object-cover" />
+                    <img src={mediaUrl(c.imageUrl)} alt={c.name} className="h-10 w-10 rounded-lg object-cover" />
                   )}
                   <div>
                     <div className="flex items-center gap-2">

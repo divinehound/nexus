@@ -27,6 +27,7 @@ import {
 import { useAuth } from '@/context/auth-context';
 import { AddressDisplay } from '@/components/ui/address-display';
 import { ConfirmModal } from '@/components/ui/confirm-modal';
+import { mediaUrl } from '@/lib/media';
 
 interface AdminProject {
   id: string;
@@ -1048,7 +1049,7 @@ export default function AdminCollectionsPage() {
                     />
                   {c.imageUrl ? (
                     <img
-                      src={c.imageUrl}
+                      src={mediaUrl(c.imageUrl)}
                       alt={c.name}
                       className="h-16 w-16 rounded-lg border border-gray-700 object-cover"
                     />

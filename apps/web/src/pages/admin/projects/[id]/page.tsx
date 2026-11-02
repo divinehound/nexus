@@ -6,6 +6,7 @@ import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
 import { ConfirmModal } from '@/components/ui/confirm-modal';
 import { HolderAnalysisAdminPanel } from '@/components/holder-analysis/admin-panel';
+import { mediaUrl } from '@/lib/media';
 
 interface CollectionRow {
   id: string;
@@ -66,7 +67,7 @@ function CollectionLine({ c, children }: { c: CollectionRow; children?: React.Re
     <div className="flex items-center justify-between gap-3 px-3 py-2">
       <div className="flex min-w-0 items-center gap-3">
         {c.imageUrl ? (
-          <img src={c.imageUrl} alt="" className="h-8 w-8 flex-none rounded object-cover" />
+          <img src={mediaUrl(c.imageUrl)} alt="" className="h-8 w-8 flex-none rounded object-cover" />
         ) : (
           <div className="h-8 w-8 flex-none rounded bg-gray-800" />
         )}
