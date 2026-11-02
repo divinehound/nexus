@@ -17,6 +17,8 @@ export type ChainEnv = {
   mainnet: boolean;
   openseaKey?: string;
   etherscanKey?: string;
+  /** Alchemy reads "internal" transfers on Ethereum and Polygon mainnet only. */
+  internalTransfers?: boolean;
   /** Swappable for tests. */
   fetch?: typeof fetch;
 };
@@ -33,6 +35,11 @@ export const left = (b: Budget) => (b.limited || Date.now() > b.until ? 0 : b.ma
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const hex = (n: number) => `0x${n.toString(16)}`;
 const ZERO = "0x0000000000000000000000000000000000000000";
+/** A request that hangs this long is given up on, so a run can't stall past its slot. */
+const TIMEOUT_MS = 30_000;
+const timeout = () => AbortSignal.timeout(TIMEOUT_MS);
+/** Alchemy's ways of saying "slow down" (a 429 status is handled separately). */
+const LIMITED = /rate limit|capacity|too many requests|compute units/i;
 
 export class RateLimited extends Error {
   constructor() {
@@ -53,7 +60,7 @@ async function post<T>(env: ChainEnv, b: Budget, body: unknown, weight = 1): Pro
     const wait = (b.last ?? 0) + b.gap - Date.now();
     if (wait > 0) await sleep(wait);
     b.last = Date.now() + (Math.max(1, weight) - 1) * b.gap;
-    const res = await (env.fetch ?? fetch)(env.rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const res = await (env.fetch ?? fetch)(env.rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: timeout() });
     if (res.status >= 500 && attempt < 2) {
       await sleep(2000 * 2 ** attempt);
       continue;
@@ -70,7 +77,7 @@ async function post<T>(env: ChainEnv, b: Budget, body: unknown, weight = 1): Pro
 async function rpc<T>(env: ChainEnv, b: Budget, method: string, params: unknown[]): Promise<T> {
   const json = await post<{ result?: T; error?: { code?: number; message: string } }>(env, b, { jsonrpc: "2.0", id: 1, method, params });
   if (json.error) {
-    if (json.error.code === 429 || /rate|capacity/i.test(json.error.message)) {
+    if (json.error.code === 429 || LIMITED.test(json.error.message)) {
       b.limited = true;
       throw new RateLimited();
     }
@@ -92,7 +99,7 @@ async function batch<T>(env: ChainEnv, b: Budget, calls: [string, unknown[]][]):
     weight,
   );
   if (!Array.isArray(out)) throw new Error("Alchemy: batch answer wasn't a list");
-  if (out.some((r) => r.error && (r.error.code === 429 || /rate|capacity/i.test(r.error.message)))) b.limited = true;
+  if (out.some((r) => r.error && (r.error.code === 429 || LIMITED.test(r.error.message)))) b.limited = true;
   const byId = new Map(out.map((r) => [r.id, r.result ?? null]));
   return calls.map((_, i) => byId.get(i) ?? null);
 }
@@ -165,16 +172,19 @@ export async function readTransfers(
   let page = await ask();
   const rows = page.transfers.flatMap((t) => parse(c.contract, c.standard, c.decimals, t));
   if (!page.pageKey) return { rows, through: to };
+  // Blocks as Alchemy listed them (a transfer can parse to no rows, e.g. an empty ERC-1155 batch).
+  const blocks = page.transfers.map((t) => Number(t.blockNum));
   // One block with more than a page of transfers (a big mint): read on until it's whole.
-  while (page.pageKey && rows.length && rows[0].block === rows[rows.length - 1].block && left(b) > 1) {
+  while (page.pageKey && blocks.length && blocks[0] === blocks[blocks.length - 1] && left(b) > 1) {
     page = await ask(page.pageKey);
     rows.push(...page.transfers.flatMap((t) => parse(c.contract, c.standard, c.decimals, t)));
+    blocks.push(...page.transfers.map((t) => Number(t.blockNum)));
   }
   if (!page.pageKey) return { rows, through: to };
-  const last = rows[rows.length - 1].block;
-  const whole = rows.filter((r) => r.block < last);
-  if (!whole.length) throw new Error(`Block ${last} has more transfers than one run can read`);
-  return { rows: whole, through: last - 1 };
+  if (!blocks.length) throw new Error("Alchemy sent an empty page with more to come");
+  const last = blocks[blocks.length - 1];
+  if (blocks[0] === last) throw new Error(`Block ${last} has more transfers than this run can read: carrying on at the next run`);
+  return { rows: rows.filter((r) => r.block < last), through: last - 1 };
 }
 
 /** Sender, target and ETH value of each transaction (sales, mints for others, operators). */
@@ -200,7 +210,7 @@ const firstTransfer = (env: ChainEnv, b: Budget, params: Record<string, unknown>
 
 /** Who first sent the wallet ETH (one call). */
 export async function funderOf(env: ChainEnv, b: Budget, wallet: string) {
-  const t = await firstTransfer(env, b, { toAddress: wallet, category: ["external", "internal"], order: "asc" });
+  const t = await firstTransfer(env, b, { toAddress: wallet, category: env.internalTransfers ? ["external", "internal"] : ["external"], order: "asc" });
   return t ? { funder: (t.from ?? "").toLowerCase(), fundedAt: Date.parse(t.metadata.blockTimestamp) } : { funder: null, fundedAt: null };
 }
 
@@ -257,8 +267,12 @@ export async function delegationsOf(env: ChainEnv, b: Budget, wallets: string[])
 const REVERSE_RECORDS = "0x3671aE578E63FdF66ad4F3E12CC0c0d71Ac7510C";
 const reverseAbi = parseAbi(["function getNames(address[] addresses) view returns (string[] r)"]);
 
-/** ENS primary names (one call per lookup; a broken resolver fails the call, so halve until found). */
-export async function ensNames(env: ChainEnv, b: Budget, wallets: string[], out = new Map<string, string>()): Promise<Map<string, string>> {
+/**
+ * ENS primary names (one call per lookup; a broken resolver fails the call, so halve until found).
+ * Every wallet that was looked up is in the map, null when it has no name; ones the run couldn't
+ * look up (out of calls, rate limited) are left out, to try again.
+ */
+export async function ensNames(env: ChainEnv, b: Budget, wallets: string[], out = new Map<string, string | null>()): Promise<Map<string, string | null>> {
   if (!wallets.length || left(b) < 1) return out;
   try {
     const data = await rpc<`0x${string}`>(env, b, "eth_call", [
@@ -266,9 +280,12 @@ export async function ensNames(env: ChainEnv, b: Budget, wallets: string[], out 
       "latest",
     ]);
     const names = decodeFunctionResult({ abi: reverseAbi, functionName: "getNames", data });
-    wallets.forEach((w, i) => names[i] && out.set(w, names[i]));
+    wallets.forEach((w, i) => out.set(w, names[i] || null));
   } catch (err) {
-    if (err instanceof RateLimited || wallets.length === 1) return out;
+    // Only a call the chain itself refused (a broken resolver reverts) is worth splitting.
+    if (!(err instanceof Error && err.message.startsWith("Alchemy: "))) return out;
+    // One wallet whose resolver is broken: it has no usable name.
+    if (wallets.length === 1) return out.set(wallets[0], null);
     await ensNames(env, b, wallets.slice(0, wallets.length >> 1), out);
     await ensNames(env, b, wallets.slice(wallets.length >> 1), out);
   }
@@ -277,7 +294,7 @@ export async function ensNames(env: ChainEnv, b: Budget, wallets: string[], out 
 
 /** An OpenSea username, or null; undefined when OpenSea didn't answer (try again later). */
 export async function openseaName(env: ChainEnv, wallet: string): Promise<string | null | undefined> {
-  const res = await (env.fetch ?? fetch)(`https://api.opensea.io/api/v2/accounts/${wallet}`, { headers: { accept: "application/json", "x-api-key": env.openseaKey! } }).catch(() => null);
+  const res = await (env.fetch ?? fetch)(`https://api.opensea.io/api/v2/accounts/${wallet}`, { headers: { accept: "application/json", "x-api-key": env.openseaKey! }, signal: timeout() }).catch(() => null);
   if (res?.status === 404 || res?.status === 400) return null;
   if (!res?.ok) return undefined;
   const j = (await res.json().catch(() => ({}))) as { username?: string | null };
@@ -291,7 +308,7 @@ export async function openseaName(env: ChainEnv, wallet: string): Promise<string
  */
 export async function usageOf(env: ChainEnv, wallet: string, since: number, projectContracts: Set<string>, projectTxs: (hashes: string[]) => Promise<Set<string>>): Promise<Usage | null> {
   const url = `https://api.etherscan.io/v2/api?chainid=${env.chainId}&module=account&action=txlist&address=${wallet}&startblock=0&endblock=99999999&sort=asc&page=1&offset=10000&apikey=${env.etherscanKey}`;
-  const d = (await (env.fetch ?? fetch)(url)
+  const d = (await (env.fetch ?? fetch)(url, { signal: timeout() })
     .then((r) => r.json())
     .catch(() => null)) as { status?: string; message?: string; result?: { hash: string; from: string; to: string; input: string; timeStamp: string }[] } | null;
   if (!d) return null;

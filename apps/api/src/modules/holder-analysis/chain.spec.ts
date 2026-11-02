@@ -1,4 +1,4 @@
-import { budgetFor, type ChainEnv, headBlock, RateLimited, readTransfers, txDetails, units } from './chain';
+import { budgetFor, type ChainEnv, ensNames, funderOf, headBlock, RateLimited, readTransfers, txDetails, units } from './chain';
 
 const C = '0x00000000000000000000000000000000000000aa';
 const A = '0x00000000000000000000000000000000000000a1';
@@ -88,6 +88,34 @@ describe('holder analysis chain reader', () => {
     const out = await txDetails(env, budgetFor(10, 0), ['0xt0', '0xt1']);
     expect(bodies[0]).toHaveLength(2);
     expect([...out]).toEqual([['0xt1', { from: A, to: '', value: '16' }]]);
+  });
+
+  it('does not crash on a page whose transfers parse to no rows', async () => {
+    const { env } = stub([
+      { body: { result: { transfers: [transfer(7, 0, { erc1155Metadata: [] }), transfer(9, 0, { erc1155Metadata: [] })], pageKey: 'next' } } },
+    ]);
+    const out = await readTransfers(env, budgetFor(10, 0), { contract: C, standard: 'erc1155', decimals: 0 }, 1, 100);
+    expect(out).toEqual({ rows: [], through: 8 });
+  });
+
+  it('asks for internal transfers only where Alchemy has them', async () => {
+    const { env, bodies } = stub([{ body: { result: { transfers: [] } } }, { body: { result: { transfers: [] } } }]);
+    await funderOf(env, budgetFor(10, 0), A);
+    await funderOf({ ...env, internalTransfers: true }, budgetFor(10, 0), A);
+    expect(bodies.map((x) => x.params[0].category)).toEqual([['external'], ['external', 'internal']]);
+  });
+
+  it('only reports ENS lookups that happened', async () => {
+    // Out of calls: nothing was looked up, so nothing may be marked as named.
+    const { env } = stub([]);
+    const none = await ensNames(env, budgetFor(0, 0), [A, B]);
+    expect(none.size).toBe(0);
+    // A broken resolver reverts the batch: split until the bad wallet is alone, which counts as no name.
+    const revert = { body: { error: { code: 3, message: 'execution reverted' } } };
+    const names = '0x' + (await import('viem')).encodeAbiParameters([{ type: 'string[]' }], [['bob.eth']]).slice(2);
+    const { env: env2 } = stub([revert, revert, { body: { result: names } }]);
+    const got = await ensNames(env2, budgetFor(10, 0), [A, B]);
+    expect([...got]).toEqual([[A, null], [B, 'bob.eth']]);
   });
 
   it('turns raw ERC-20 amounts into whole tokens', () => {

@@ -86,9 +86,9 @@ export class HolderAnalysisAdminService {
                    count(*) FILTER (WHERE w.delegations_at IS NOT NULL)::int AS delegations,
                    count(*) FILTER (WHERE w.names_at IS NOT NULL)::int AS named
             FROM wallet_profiles w
-            WHERE EXISTS (SELECT 1 FROM collection_transfers t
-              WHERE t.to_address = w.address AND t.chain = w.chain
-                AND t.collection_id IN (SELECT (jsonb_array_elements_text(${JSON.stringify(coreIds)}::jsonb))::uuid))`)),
+            WHERE (w.chain, w.address) IN (
+              SELECT f.chain, f.address FROM holder_analysis_wallets f
+              WHERE f.collection_id = ANY(string_to_array(${coreIds.join(',')}, ',')::uuid[]))`)),
         ]
       : [{ total: 0, read: 0, delegations: 0, named: 0 }];
 
@@ -126,44 +126,71 @@ export class HolderAnalysisAdminService {
   /** Saves a collection's analysis settings; anything left out keeps its current (or default) value. */
   async saveSettings(collectionId: string, input: CollectionSettingsInput) {
     const collection = await this.db.query.collections.findFirst({
-      columns: { id: true, name: true, projectId: true, chain: true },
+      columns: { id: true, name: true, projectId: true, chain: true, collectionType: true },
       where: eq(collections.id, collectionId),
     });
     if (!collection) throw new NotFoundException('Collection not found');
     if (collection.chain === 'solana') throw new BadRequestException('Holder analysis reads EVM collections only for now');
     if (!collection.projectId) throw new BadRequestException('Add the collection to a project first');
 
-    const current = (await this.status(collection.projectId)).collections.find((c) => c.collectionId === collectionId)?.settings;
-    const shortId = (input.shortId ?? current?.shortId ?? '').trim().toLowerCase();
-    if (!/^[a-z0-9]{1,16}$/.test(shortId)) throw new BadRequestException('shortId must be 1 to 16 lowercase letters or digits');
+    const before = (await this.status(collection.projectId)).collections.find((c) => c.collectionId === collectionId)?.settings;
+    const body = (input ?? {}) as Record<string, unknown>;
+    const check = (ok: boolean, message: string) => {
+      if (!ok) throw new BadRequestException(message);
+    };
+    check(body.shortId === undefined || typeof body.shortId === 'string', 'shortId must be a string');
+    check(body.standard === undefined || body.standard === null || typeof body.standard === 'string', 'standard must be a string or null');
+    check(body.core === undefined || typeof body.core === 'boolean', 'core must be true or false');
+    check(body.decimals === undefined || typeof body.decimals === 'number', 'decimals must be a number');
+    check(body.stakingContracts === undefined || (Array.isArray(body.stakingContracts) && body.stakingContracts.every((a) => typeof a === 'string')), 'stakingContracts must be a list of addresses');
+    check(
+      body.tokenNames === undefined ||
+        (typeof body.tokenNames === 'object' && body.tokenNames !== null && !Array.isArray(body.tokenNames) && Object.values(body.tokenNames).every((v) => typeof v === 'string')),
+      'tokenNames must map token ids to names',
+    );
+
+    const shortId = (input.shortId ?? before?.shortId ?? '').trim().toLowerCase();
+    check(/^[a-z0-9]{1,16}$/.test(shortId), 'shortId must be 1 to 16 lowercase letters or digits');
     // Short ids name CSV columns, so they're unique within the project.
     const clash = await this.db.execute<{ id: string }>(sql`
       SELECT s.collection_id AS id FROM holder_analysis_collection_settings s JOIN collections c ON c.id = s.collection_id
       WHERE c.project_id = ${collection.projectId} AND s.short_id = ${shortId} AND s.collection_id != ${collectionId}`);
-    if ([...clash].length) throw new BadRequestException(`Another collection of this project already uses "${shortId}"`);
+    check(![...clash].length, `Another collection of this project already uses "${shortId}"`);
 
-    const standard = input.standard === undefined ? (current?.standard ?? null) : input.standard;
-    if (standard !== null && !STANDARDS.includes(standard)) throw new BadRequestException(`standard must be one of ${STANDARDS.join(', ')}`);
-    const decimals = input.decimals ?? current?.decimals ?? 0;
-    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) throw new BadRequestException('decimals must be 0 to 36');
-    const stakingContracts = (input.stakingContracts ?? current?.stakingContracts ?? []).map((a) => String(a).trim().toLowerCase());
-    for (const a of stakingContracts) if (!ADDRESS.test(a)) throw new BadRequestException(`Not an address: ${a}`);
-    const tokenNames = input.tokenNames ?? current?.tokenNames ?? {};
-    if (typeof tokenNames !== 'object' || Array.isArray(tokenNames)) throw new BadRequestException('tokenNames must map token ids to names');
+    // Saved as given (null = the collection's own type); `resolved` is what the analysis will use.
+    const standard = input.standard === undefined ? (before?.saved ? before.standard : null) : input.standard;
+    check(standard === null || STANDARDS.includes(standard), `standard must be one of ${STANDARDS.join(', ')}`);
+    const resolved = standard ?? collection.collectionType;
+    check(STANDARDS.includes(resolved), 'This collection has no standard the analysis can read: set one');
+    // Switching to ERC-20 without saying how many decimals means the usual 18, not the NFT's 0.
+    const decimals = input.decimals ?? (before && before.standard === resolved ? before.decimals : resolved === 'erc20' ? 18 : 0);
+    check(Number.isInteger(decimals) && decimals >= 0 && decimals <= 36, 'decimals must be a whole number from 0 to 36');
+    const stakingContracts = (input.stakingContracts ?? before?.stakingContracts ?? []).map((a) => a.trim().toLowerCase());
+    for (const a of stakingContracts) check(ADDRESS.test(a), `Not an address: ${a}`);
+    const tokenNames = input.tokenNames ?? before?.tokenNames ?? {};
 
     const values = {
       shortId,
       standard,
-      core: input.core ?? current?.core ?? true,
-      decimals,
+      core: input.core ?? before?.core ?? resolved === 'erc721',
+      decimals: resolved === 'erc20' ? decimals : 0,
       stakingContracts,
-      tokenNames: Object.fromEntries(Object.entries(tokenNames).map(([k, v]) => [String(k), String(v)])),
+      tokenNames,
       updatedAt: new Date(),
     };
-    await this.db
-      .insert(holderAnalysisCollectionSettings)
-      .values({ collectionId, ...values })
-      .onConflictDoUpdate({ target: holderAnalysisCollectionSettings.collectionId, set: values });
+    // Stored transfers were read as the old standard and decimals: read the collection again.
+    const reread = !!before && (before.standard !== resolved || before.decimals !== values.decimals);
+    await this.db.transaction(async (tx) => {
+      await tx
+        .insert(holderAnalysisCollectionSettings)
+        .values({ collectionId, ...values })
+        .onConflictDoUpdate({ target: holderAnalysisCollectionSettings.collectionId, set: values });
+      if (reread) {
+        await tx.execute(sql`DELETE FROM collection_transfers WHERE collection_id = ${collectionId}`);
+        await tx.execute(sql`DELETE FROM holder_analysis_wallets WHERE collection_id = ${collectionId}`);
+        await tx.execute(sql`DELETE FROM collection_transfer_sync WHERE collection_id = ${collectionId}`);
+      }
+    });
     return this.status(collection.projectId);
   }
 }

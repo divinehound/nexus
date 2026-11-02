@@ -30,18 +30,27 @@ import {
 } from './chain';
 import { type AnalysisCollection, type AnalysisProject, loadEnabledProjects } from './projects';
 
-/** Blocks behind the head we wait for, so a reorg doesn't leave a transfer that never happened. */
-const CONFIRMATIONS = 3;
+/**
+ * Blocks behind the head we wait for, so a reorg doesn't leave a transfer that never happened
+ * (stored transfers are never read again). Polygon has reorged deeper than 100 blocks.
+ */
+const CONFIRMATIONS: Record<string, number> = { ethereum: 12, polygon: 256 };
+const DEFAULT_CONFIRMATIONS = 30;
 /** How often a holder's last outgoing activity is read again (it decides active / dormant). */
 const REFRESH_DAYS = 7;
 /** How often delegations and the wake-up outlook are read again. */
 const RECHECK_DAYS = 30;
 const DAY = 86_400_000;
+/** Calls kept back for ENS names (100 wallets a call, more when a broken resolver splits a batch). */
+const NAME_CALLS = 5;
 const BURN = new Set(['0x0000000000000000000000000000000000000000', '0x000000000000000000000000000000000000dead']);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const json = (v: unknown) => JSON.stringify(v);
 const msDate = (ms: number | null | undefined) => (ms == null ? null : new Date(ms).toISOString());
+/** A list of uuids as one uuid[] parameter (Drizzle would expand a JS array into separate ones). */
+const uuids = (ids: string[]) => sql`string_to_array(${ids.join(',')}, ',')::uuid[]`;
+const outOfCalls = (err: unknown) => err instanceof RateLimited || String(err).includes('out of calls');
 
 export type SyncLog = {
   calls: number;
@@ -75,7 +84,11 @@ export class HolderAnalysisSyncService {
   ) {}
 
   settings(): SyncSettings {
-    const n = (key: string, d: number) => Number(this.config.get<number>(key) ?? d) || d;
+    // 0 is a real setting (no Etherscan or OpenSea calls, no gap); only a missing or bad value falls back.
+    const n = (key: string, d: number) => {
+      const v = Number(this.config.get<number>(key) ?? d);
+      return Number.isFinite(v) && v >= 0 ? v : d;
+    };
     return {
       runCalls: n('holderAnalysis.runCalls', 300),
       callGapMs: n('holderAnalysis.callGapMs', 500),
@@ -94,6 +107,7 @@ export class HolderAnalysisSyncService {
       rpcUrl: `https://${meta.alchemySubdomain}.g.alchemy.com/v2/${key}`,
       chainId: meta.evmChainId,
       mainnet: chain === 'ethereum',
+      internalTransfers: chain === 'ethereum' || chain === 'polygon',
       openseaKey: this.config.get<string>('opensea.apiKey') || undefined,
       etherscanKey: this.config.get<string>('etherscan.apiKey') || undefined,
     };
@@ -113,12 +127,12 @@ export class HolderAnalysisSyncService {
       try {
         await fn();
       } catch (err) {
-        if (!(err instanceof RateLimited) && !String(err).includes('out of calls')) this.logger.error(`${name}: ${err instanceof Error ? err.stack : err}`);
+        if (!outOfCalls(err)) this.logger.error(`${name}: ${err instanceof Error ? err.stack : err}`);
         log.errors.push(`${name}: ${err instanceof Error ? err.message : err}`);
       }
     };
     await step('transfers', () => this.syncTransfers(b, log, collections));
-    await step('transactions', () => this.fillTxs(b, log, s.txBatch));
+    await step('transactions', () => this.fillTxs(b, log, s.txBatch, collections.map((c) => c.collectionId)));
     await step('delegations', () => this.fillDelegations(b, log, coreIds));
     await step('refresh', () => this.refreshLastOut(b, log, coreIds, Math.max(10, Math.floor(b.max / 5))));
     await step('wallets', () => this.fillWallets(b, log, coreIds));
@@ -141,7 +155,7 @@ export class HolderAnalysisSyncService {
       const env = this.envFor(c.chain);
       if (!env) continue;
       try {
-        if (!heads.has(c.chain)) heads.set(c.chain, (await headBlock(env, b)) - CONFIRMATIONS);
+        if (!heads.has(c.chain)) heads.set(c.chain, (await headBlock(env, b)) - (CONFIRMATIONS[c.chain] ?? DEFAULT_CONFIRMATIONS));
         const head = heads.get(c.chain)!;
         let block = cursors.get(c.collectionId) ?? 0;
         while (block < head && left(b) > 2) {
@@ -163,9 +177,17 @@ export class HolderAnalysisSyncService {
   /** One stretch of transfers, the wallets they bring (core collections) and the cursor, in one transaction. */
   async storeTransfers(c: AnalysisCollection, rows: RawTransfer[], through: number, live: boolean) {
     const nft = c.standard !== 'erc20';
+    // An ERC-1155 batch can list a token id twice: one row with the sum, not a dropped duplicate.
+    const merged = new Map<string, RawTransfer>();
+    for (const r of rows) {
+      const key = `${r.tx}:${r.logIndex}:${r.tokenId ?? ''}`;
+      const seen = merged.get(key);
+      merged.set(key, seen ? { ...seen, amount: seen.amount + r.amount } : r);
+    }
+    const all = [...merged.values()];
     await this.db.transaction(async (tx) => {
-      for (let i = 0; i < rows.length; i += 1000) {
-        const part = rows.slice(i, i + 1000).map((r) => ({
+      for (let i = 0; i < all.length; i += 1000) {
+        const part = all.slice(i, i + 1000).map((r) => ({
           b: r.block,
           l: r.logIndex,
           at: new Date(r.at).toISOString(),
@@ -181,14 +203,18 @@ export class HolderAnalysisSyncService {
           FROM jsonb_to_recordset(${json(part)}::jsonb) AS j(b bigint, l int, at timestamptz, h text, f text, t text, k text, a double precision)
           ON CONFLICT DO NOTHING`);
       }
-      if (c.core) {
-        const wallets = [...new Set(rows.flatMap((r) => [r.from, r.to]))].filter((w) => !BURN.has(w));
-        for (let i = 0; i < wallets.length; i += 2000) {
-          await tx.execute(sql`
-            INSERT INTO wallet_profiles (chain, address)
-            SELECT ${c.chain}::chain, w FROM jsonb_array_elements_text(${json(wallets.slice(i, i + 2000))}::jsonb) AS w
-            ON CONFLICT DO NOTHING`);
-        }
+      // Everyone who received a token: the wallets the sync reads (while the collection is core and followed).
+      const wallets = [...new Set(all.map((r) => r.to))].filter((w) => !BURN.has(w));
+      for (let i = 0; i < wallets.length; i += 2000) {
+        const part = json(wallets.slice(i, i + 2000));
+        await tx.execute(sql`
+          INSERT INTO holder_analysis_wallets (collection_id, chain, address)
+          SELECT ${c.collectionId}::uuid, ${c.chain}::chain, w FROM jsonb_array_elements_text(${part}::jsonb) AS w
+          ON CONFLICT DO NOTHING`);
+        await tx.execute(sql`
+          INSERT INTO wallet_profiles (chain, address)
+          SELECT ${c.chain}::chain, w FROM jsonb_array_elements_text(${part}::jsonb) AS w
+          ON CONFLICT DO NOTHING`);
       }
       await tx.execute(sql`
         INSERT INTO collection_transfer_sync (collection_id, last_block, live, synced_at) VALUES (${c.collectionId}, ${through}, ${live}, now())
@@ -197,36 +223,46 @@ export class HolderAnalysisSyncService {
     });
   }
 
-  /** Sender, target and ETH value for NFT transfers' transactions: up to 60% of the run, so wallets move on too. */
-  private async fillTxs(b: Budget, log: SyncLog, per: number) {
+  /**
+   * Sender, target and ETH value for NFT transfers' transactions, for followed collections only: up
+   * to 60% of the run, so wallets move on too.
+   */
+  private async fillTxs(b: Budget, log: SyncLog, per: number, collectionIds: string[]) {
+    if (!collectionIds.length) return;
     const stop = b.calls + Math.ceil(b.max * 0.6);
     while (left(b) > 1 && b.calls < stop) {
-      const pending = [...(await this.db.execute<{ chain: string; tx_hash: string }>(sql`
-        SELECT DISTINCT chain::text AS chain, tx_hash FROM collection_transfers WHERE need_tx LIMIT ${per}`))];
-      if (!pending.length) return;
-      const chain = pending[0].chain;
+      // No DISTINCT (it would sort every pending row): a few rows per hash at most, de-duplicated here.
+      const rows = [...(await this.db.execute<{ chain: string; tx_hash: string }>(sql`
+        SELECT chain::text AS chain, tx_hash FROM collection_transfers
+        WHERE need_tx AND collection_id = ANY(${uuids(collectionIds)}) LIMIT ${per * 5}`))];
+      if (!rows.length) return;
+      const chain = rows[0].chain;
       const env = this.envFor(chain);
       if (!env) return;
-      const found = await txDetails(env, b, pending.filter((p) => p.chain === chain).map((p) => p.tx_hash));
-      if (!found.size) return; // Alchemy dropped the whole batch: try again next run.
-      const rows = [...found].map(([h, t]) => ({ h, f: t.from, t: t.to, v: t.value }));
+      const hashes = [...new Set(rows.filter((p) => p.chain === chain).map((p) => p.tx_hash))].slice(0, per);
+      const found = await txDetails(env, b, hashes);
+      if (b.limited) return;
+      // A hash Alchemy doesn't know is let go, so it can't hold up the queue run after run.
+      const done = hashes.map((h) => {
+        const t = found.get(h);
+        return { h, f: t?.from ?? null, t: t?.to ?? null, v: t?.value ?? null };
+      });
       await this.db.execute(sql`
         UPDATE collection_transfers ct SET tx_from = j.f, tx_to = j.t, tx_value_wei = j.v::numeric, need_tx = false
-        FROM jsonb_to_recordset(${json(rows)}::jsonb) AS j(h text, f text, t text, v text)
-        WHERE ct.tx_hash = j.h AND ct.need_tx AND ct.chain = ${chain}::chain`);
+        FROM jsonb_to_recordset(${json(done)}::jsonb) AS j(h text, f text, t text, v text)
+        WHERE ct.tx_hash = j.h AND ct.need_tx AND ct.chain = ${chain}::chain AND ct.collection_id = ANY(${uuids(collectionIds)})`);
       log.txs += found.size;
     }
   }
 
   /**
    * Wallets still worth reading: ones that received a token of a core collection of a project
-   * that is turned on. Holders in a current report come first.
+   * that is turned on (from holder_analysis_wallets, so no wallet probes the transfers). Holders
+   * in a current report come first.
    */
   private followed(coreIds: string[]) {
-    return sql`EXISTS (
-      SELECT 1 FROM collection_transfers t
-      WHERE t.to_address = w.address AND t.chain = w.chain
-        AND t.collection_id IN (SELECT (jsonb_array_elements_text(${json(coreIds)}::jsonb))::uuid))`;
+    return sql`(w.chain, w.address) IN (
+      SELECT f.chain, f.address FROM holder_analysis_wallets f WHERE f.collection_id = ANY(${uuids(coreIds)}))`;
   }
   private readonly priority = sql`(EXISTS (SELECT 1 FROM holder_report_holders h WHERE h.address = w.address)) DESC`;
 
@@ -236,27 +272,31 @@ export class HolderAnalysisSyncService {
     if (!env || !coreIds.length) return;
     const stop = b.calls + Math.ceil(b.max * 0.3);
     while (left(b) > 1 && b.calls < stop) {
-      const wallets = [...(await this.db.execute<{ address: string }>(sql`
+      const pending = [...(await this.db.execute<{ address: string }>(sql`
         SELECT w.address FROM wallet_profiles w
         WHERE w.chain = 'ethereum' AND (w.delegations_at IS NULL OR w.delegations_at < ${msDate(Date.now() - RECHECK_DAYS * DAY)}) AND ${this.followed(coreIds)}
-        ORDER BY w.delegations_at IS NOT NULL, ${this.priority} LIMIT 5`))].map((r) => r.address);
-      if (!wallets.length) return;
-      const found = await delegationsOf(env, b, wallets);
-      const done = [...found].filter(([, d]) => d !== null).map(([a, d]) => ({ a, d }));
-      if (!done.length) return;
-      await this.db.execute(sql`
-        UPDATE wallet_profiles w SET delegations = j.d, delegations_at = now()
-        FROM jsonb_to_recordset(${json(done)}::jsonb) AS j(a text, d jsonb)
-        WHERE w.chain = 'ethereum' AND w.address = j.a`);
-      log.delegations += done.length;
+        ORDER BY w.delegations_at IS NOT NULL, ${this.priority} LIMIT 50`))].map((r) => r.address);
+      if (!pending.length) return;
+      // Five wallets a call (three reads each).
+      for (let i = 0; i < pending.length && left(b) > 1 && b.calls < stop; i += 5) {
+        const found = await delegationsOf(env, b, pending.slice(i, i + 5));
+        const done = [...found].filter(([, d]) => d !== null).map(([a, d]) => ({ a, d }));
+        if (!done.length) return;
+        await this.db.execute(sql`
+          UPDATE wallet_profiles w SET delegations = j.d, delegations_at = now()
+          FROM jsonb_to_recordset(${json(done)}::jsonb) AS j(a text, d jsonb)
+          WHERE w.chain = 'ethereum' AND w.address = j.a`);
+        log.delegations += done.length;
+      }
     }
   }
 
   /** First pass per wallet: contract or not, first funder, last outgoing activity (2 calls + 1 per 100). */
   private async fillWallets(b: Budget, log: SyncLog, coreIds: string[]) {
     if (!coreIds.length) return;
-    while (left(b) > 3) {
-      const n = Math.min(50, Math.floor((left(b) - 1) / 2));
+    // Leaves a few calls for ENS names, which come after.
+    while (left(b) > NAME_CALLS + 3) {
+      const n = Math.min(50, Math.floor((left(b) - NAME_CALLS - 1) / 2));
       const pending = [...(await this.db.execute<{ chain: string; address: string }>(sql`
         SELECT w.chain::text AS chain, w.address FROM wallet_profiles w
         WHERE w.info_at IS NULL AND ${this.followed(coreIds)}
@@ -271,9 +311,16 @@ export class HolderAnalysisSyncService {
       try {
         for (const w of wallets) {
           if (left(b) < 2) break;
-          const f = await funderOf(env, b, w);
-          const last = await lastOutOf(env, b, w);
-          rows.push({ a: w, c: code.get(w) ?? null, f: f.funder, fa: msDate(f.fundedAt), lo: msDate(last) });
+          try {
+            const f = await funderOf(env, b, w);
+            const last = await lastOutOf(env, b, w);
+            rows.push({ a: w, c: code.get(w) ?? null, f: f.funder, fa: msDate(f.fundedAt), lo: msDate(last) });
+          } catch (err) {
+            if (outOfCalls(err)) throw err;
+            // A wallet Alchemy can't answer for is recorded as unknown rather than retried every run.
+            log.errors.push(`wallet ${w}: ${err instanceof Error ? err.message : err}`);
+            rows.push({ a: w, c: code.get(w) ?? null, f: null, fa: null, lo: null });
+          }
         }
       } finally {
         if (rows.length)
@@ -307,7 +354,7 @@ export class HolderAnalysisSyncService {
         await this.db.execute(sql`
           UPDATE wallet_profiles w SET last_out_at = COALESCE(j.lo, w.last_out_at), info_at = now()
           FROM jsonb_to_recordset(${json(rows)}::jsonb) AS j(c text, a text, lo timestamptz)
-          WHERE w.chain::text = j.c AND w.address = j.a`);
+          WHERE w.chain = j.c::chain AND w.address = j.a`);
       log.refreshed += rows.length;
     }
   }
@@ -320,21 +367,21 @@ export class HolderAnalysisSyncService {
         SELECT address, project_id FROM holder_report_holders UNION SELECT address, project_id FROM holder_report_side_holders
       ) x
       LEFT JOIN wallet_profiles w ON w.chain = 'ethereum' AND w.address = x.address
-      WHERE x.project_id IN (SELECT (jsonb_array_elements_text(${json(ids)}::jsonb))::uuid) AND w.names_at IS NULL
+      WHERE x.project_id = ANY(${uuids(ids)}) AND w.names_at IS NULL
       LIMIT 100`))].map((r) => r.address);
     const env = this.envFor('ethereum');
     if (!pending.length || !env || left(b) < 1) return;
     const ens = await ensNames(env, b, pending);
-    if (b.limited) return;
+    if (!ens.size) return;
     const opensea = new Map<string, string | null>();
     if (env.openseaKey)
-      for (const w of pending.slice(0, openseaCalls)) {
+      for (const w of pending.filter((p) => ens.has(p)).slice(0, openseaCalls)) {
         const name = await openseaName(env, w);
         if (name !== undefined) opensea.set(w, name);
         await sleep(300);
       }
-    // ENS goes in for all; a wallet counts as named once OpenSea has answered too (when set up).
-    const done = new Set(env.openseaKey ? pending.filter((w) => opensea.has(w)) : pending);
+    // A wallet counts as named once ENS has answered, and OpenSea too when it's set up.
+    const done = new Set(pending.filter((w) => ens.has(w) && (!env.openseaKey || opensea.has(w))));
     const rows = pending.map((a) => ({ a, e: ens.get(a) ?? null, o: opensea.get(a) ?? null, n: done.has(a) ? new Date().toISOString() : null }));
     await this.db.execute(sql`
       INSERT INTO wallet_profiles (chain, address, ens, opensea, names_at)
@@ -365,7 +412,7 @@ export class HolderAnalysisSyncService {
         const found = await this.db.execute<{ tx_hash: string }>(sql`
           SELECT DISTINCT tx_hash FROM collection_transfers
           WHERE tx_hash IN (SELECT jsonb_array_elements_text(${json(hashes)}::jsonb))
-            AND collection_id IN (SELECT (jsonb_array_elements_text(${json(collectionIds)}::jsonb))::uuid)`);
+            AND collection_id = ANY(${uuids(collectionIds)})`);
         return new Set([...found].map((r) => r.tx_hash));
       };
       const rows: { a: string; d: unknown }[] = [];
