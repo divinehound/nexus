@@ -50,6 +50,9 @@ importers:
       '@nexus/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@nexus/holder-analysis':
+        specifier: workspace:*
+        version: link:../../packages/holder-analysis
       '@nexus/types':
         specifier: workspace:*
         version: link:../../packages/types

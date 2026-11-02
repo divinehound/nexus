@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import {
   COLLECTION_DISCOVERY_QUEUE,
+  HOLDER_ANALYSIS_SYNC_QUEUE,
   HOLDER_HISTORY_SCAN_QUEUE,
   HOLDER_INDEXING_QUEUE,
   WALLET_INDEXING_QUEUE,
@@ -19,6 +20,7 @@ import {
       { name: HOLDER_INDEXING_QUEUE },
       { name: COLLECTION_DISCOVERY_QUEUE },
       { name: HOLDER_HISTORY_SCAN_QUEUE },
+      { name: HOLDER_ANALYSIS_SYNC_QUEUE },
     ),
   ],
   exports: [BullModule],

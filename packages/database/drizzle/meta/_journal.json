@@ -267,6 +267,13 @@
       "when": 1793650000000,
       "tag": "0037_holder_analysis",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1793660000000,
+      "tag": "0038_holder_analysis_standard",
+      "breakpoints": true
     }
   ]
 }

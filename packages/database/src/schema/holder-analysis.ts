@@ -86,6 +86,8 @@ export const holderAnalysisCollectionSettings = pgTable('holder_analysis_collect
     .primaryKey()
     .references(() => collections.id, { onDelete: 'cascade' }),
   shortId: varchar('short_id', { length: 16 }).notNull(),
+  /** erc721 | erc1155 | erc20; null = the collection's own type. */
+  standard: varchar('standard', { length: 8 }),
   core: boolean('core').default(true).notNull(),
   decimals: integer('decimals').default(0).notNull(),
   stakingContracts: text('staking_contracts').array().default(sql`'{}'::text[]`).notNull(),

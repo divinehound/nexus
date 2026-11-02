@@ -13,6 +13,7 @@ const config: Config = {
   moduleNameMapper: {
     '^@nexus/database$': '<rootDir>/../../../packages/database/src/index.ts',
     '^@nexus/types$': '<rootDir>/../../../packages/types/src/index.ts',
+    '^@nexus/holder-analysis$': '<rootDir>/../../../packages/holder-analysis/src/index.ts',
   },
 };
 

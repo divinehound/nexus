@@ -38,6 +38,18 @@ export default () => ({
   reservoir: {
     apiKey: process.env.RESERVOIR_API_KEY || '',
   },
+  etherscan: {
+    // Optional. The holder analysis reads holders' transactions from Etherscan (v2, any chain).
+    apiKey: process.env.ETHERSCAN_API_KEY || '',
+  },
+  holderAnalysis: {
+    // Alchemy calls a sync run may make (every 10 minutes) and the gap between them.
+    runCalls: parseInt(process.env.HOLDER_ANALYSIS_RUN_CALLS || '300', 10),
+    callGapMs: parseInt(process.env.HOLDER_ANALYSIS_CALL_GAP_MS || '500', 10),
+    txBatch: parseInt(process.env.HOLDER_ANALYSIS_TX_BATCH || '10', 10),
+    openseaCalls: parseInt(process.env.HOLDER_ANALYSIS_OPENSEA_CALLS || '40', 10),
+    etherscanCalls: parseInt(process.env.HOLDER_ANALYSIS_ETHERSCAN_CALLS || '100', 10),
+  },
   holdings: {
     maxCollectionsPerRun: parseInt(process.env.HOLDINGS_MAX_COLLECTIONS_PER_RUN || '50', 10),
   },
