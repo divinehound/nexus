@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
+import { promptDialog } from '@/components/ui/dialogs';
 import {
   adminRejectCollection,
   adminSuggestProject,
@@ -365,10 +366,14 @@ export default function AdminCollectionsPage() {
   const handleMarkSpam = async (collection: AdminCollection) => {
     if (!accessToken) return;
 
-    const notes = window.prompt(
-      `Mark "${collection.name}" as spam?\n\nOptional reason:`,
-      'manually_flagged'
-    );
+    const notes = await promptDialog({
+      title: 'Mark as spam?',
+      message: `"${collection.name}" will be marked as spam.`,
+      label: 'Reason (optional)',
+      defaultValue: 'manually_flagged',
+      confirmText: 'Mark as Spam',
+      variant: 'danger',
+    });
     if (notes === null) return; // User cancelled
 
     try {
@@ -383,10 +388,13 @@ export default function AdminCollectionsPage() {
   const handleMarkNotSpam = async (collection: AdminCollection) => {
     if (!accessToken) return;
 
-    const reason = window.prompt(
-      `Mark "${collection.name}" as NOT spam?\n\nThis will add it to the allowlist.\n\nReason:`,
-      'verified_legitimate'
-    );
+    const reason = await promptDialog({
+      title: 'Mark as NOT spam?',
+      message: `"${collection.name}" will be added to the allowlist.`,
+      label: 'Reason',
+      defaultValue: 'verified_legitimate',
+      confirmText: 'Mark as NOT Spam',
+    });
     if (reason === null) return; // User cancelled
 
     try {
@@ -411,14 +419,12 @@ export default function AdminCollectionsPage() {
 
   useEffect(() => {
     refreshBacklogStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
   useEffect(() => {
     if (backlogJob?.status !== 'running') return;
     const interval = setInterval(refreshBacklogStatus, 5000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backlogJob?.status, accessToken]);
 
   const handleIndexBacklog = async () => {

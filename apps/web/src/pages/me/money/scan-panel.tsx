@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CashflowReport, CashflowWalletChains } from '@nexus/types';
 import { refreshCashflow, setCashflowWalletChains } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
+import { confirmDialog } from '@/components/ui/dialogs';
 import { useCashflowActions } from './actions';
 import { CHAIN_LABELS, relativeTime } from './format';
 
@@ -113,11 +114,13 @@ export function ScanPanel({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => {
+          onClick={async () => {
             if (
-              window.confirm(
-                'Re-read every wallet on every chain from scratch? Active wallets can take several minutes.',
-              )
+              await confirmDialog({
+                title: 'Run a full rescan?',
+                message: 'Every wallet on every chain is re-read from scratch. Active wallets can take several minutes.',
+                confirmText: 'Rescan',
+              })
             )
               rescan(undefined, 'full');
           }}

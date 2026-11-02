@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { confirmDialog } from '@/components/ui/dialogs';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
 
@@ -37,11 +39,17 @@ export default function AdminUsersPage() {
   const toggleRole = async (user: UserItem) => {
     if (!accessToken) return;
     if (user.id === currentUser?.id) {
-      alert('You cannot change your own role.');
+      toast.error('You cannot change your own role.');
       return;
     }
     const newRole = user.role === 'admin' ? 'user' : 'admin';
-    if (!confirm(`Set ${user.id.slice(0, 8)}... to "${newRole}"?`)) return;
+    const ok = await confirmDialog({
+      title: newRole === 'admin' ? 'Make this user an admin?' : 'Remove admin access?',
+      message: `Set ${user.id.slice(0, 8)}... to "${newRole}".`,
+      confirmText: newRole === 'admin' ? 'Make admin' : 'Remove admin',
+      variant: newRole === 'admin' ? 'warning' : 'danger',
+    });
+    if (!ok) return;
     await apiFetch(`/admin/users/${user.id}/role`, {
       method: 'PATCH',
       token: accessToken,

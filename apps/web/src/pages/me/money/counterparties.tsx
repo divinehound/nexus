@@ -8,6 +8,7 @@ import {
   removeCashflowContactLabel,
 } from '@/lib/api';
 import { cn, truncateAddress } from '@/lib/utils';
+import { confirmDialog } from '@/components/ui/dialogs';
 import { useCashflowActions } from './actions';
 import { IN_COLOR, OUT_COLOR } from './cashflow-chart';
 import { CHAIN_LABELS, addressExplorerUrl, explorerName, pnlClass, usd, usdSigned } from './format';
@@ -418,13 +419,13 @@ function CounterpartyRow({ c, report }: { c: CashflowCounterparty; report: Cashf
   const canWatch = canTag && !own && c.exchangeSource !== 'known' && !tag;
   const count = c.sentCount + c.receivedCount;
 
-  const addWatched = () => {
-    if (
-      !window.confirm(
-        `Add ${truncateAddress(c.address)} as one of your wallets (watch-only)? It will be scanned and counted as part of your portfolio.`,
-      )
-    )
-      return;
+  const addWatched = async () => {
+    const ok = await confirmDialog({
+      title: 'Add as a watch-only wallet?',
+      message: `${truncateAddress(c.address)} will be scanned and counted as part of your portfolio.`,
+      confirmText: 'Add wallet',
+    });
+    if (!ok) return;
     void run('Added as your watch-only wallet — scanning it now', async (token, view) => {
       await addWatchedWallet(token, {
         family,
