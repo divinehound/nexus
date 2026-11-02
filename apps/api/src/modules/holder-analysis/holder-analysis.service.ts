@@ -56,7 +56,7 @@ const whoJoins = (projectId: string, userId: string, col: SQL) => sql`
   LEFT JOIN wallet_profiles w ON w.chain = 'ethereum' AND w.address = ${col}
   LEFT JOIN holder_wallet_labels n ON n.project_id = ${projectId} AND n.address = ${col}
   LEFT JOIN LATERAL (
-    SELECT x.nickname FROM wallet_nicknames x WHERE x.user_id = ${userId} AND lower(x.address) = ${col} ORDER BY x.updated_at DESC LIMIT 1
+    SELECT wn.nickname FROM wallet_nicknames wn WHERE wn.user_id = ${userId} AND lower(wn.address) = ${col} ORDER BY wn.updated_at DESC LIMIT 1
   ) k ON TRUE`;
 const whoColumns = sql`w.ens, w.opensea, n.label, n.note, k.nickname`;
 
@@ -76,6 +76,13 @@ export class HolderAnalysisService {
     const [project] = await loadEnabledProjects(this.db, projectId);
     if (!project) throw new NotFoundException('Holder analysis is off for this project');
     return project;
+  }
+
+  /** For the project page's link: the guard already let the viewer in; is the analysis on? */
+  async access(projectId: string) {
+    const [row] = await this.rows<{ enabled: boolean }>(sql`SELECT holder_analysis_enabled AS enabled FROM projects WHERE id = ${projectId}`);
+    if (!row) throw new NotFoundException('Project not found');
+    return { enabled: row.enabled };
   }
 
   /** The report's summary and when it was made, what the analysis is waiting for, and its collections. */
@@ -101,8 +108,8 @@ export class HolderAnalysisService {
     const list = [...new Set(wallets.map((w) => w.toLowerCase()).filter((w) => ADDR.test(w)))].slice(0, 2000);
     if (!list.length) return {};
     const rows = await this.rows(sql`
-      SELECT x.address, ${whoColumns}
-      FROM unnest(string_to_array(${list.join(',')}, ',')) AS x(address) ${whoJoins(projectId, userId, sql`x.address`)}`);
+      SELECT lw.address, ${whoColumns}
+      FROM unnest(string_to_array(${list.join(',')}, ',')) AS lw(address) ${whoJoins(projectId, userId, sql`lw.address`)}`);
     return Object.fromEntries(rows.map(({ address, ...r }) => [address, r]));
   }
 
@@ -194,7 +201,13 @@ export class HolderAnalysisService {
     for (const t of transfers) for (const x of [t.from_address, t.to_address, t.tx_from]) if (x && x !== wallet && !BURN.has(x)) others.add(x);
     for (const l of links) others.add(l.a === wallet ? l.b : l.a);
     for (const f of funded) others.add(f.address);
-    for (const p of profiles) if (p.funder) others.add(p.funder);
+    for (const p of profiles) {
+      if (p.funder) others.add(p.funder);
+      for (const dl of (Array.isArray(p.delegations) ? p.delegations : []) as { to?: string }[]) {
+        const to = String(dl?.to ?? '').toLowerCase();
+        if (to && to !== wallet) others.add(to);
+      }
+    }
     for (const g of groups) for (const m of String(g.data.members ?? '').split(' ')) if (m && m !== wallet) others.add(m);
     const who = await this.who(projectId, userId, [wallet, ...others]);
 
@@ -244,12 +257,14 @@ export class HolderAnalysisService {
   }
 
   /** Groups of wallets that are likely one person, largest first. */
-  async groups(projectId: string, q: Paging) {
+  async groups(projectId: string, userId: string, q: Paging) {
     await this.project(projectId);
-    const { page, perPage, offset } = paging(q);
+    const { page, perPage, offset } = paging(q, 100);
     const [{ total }] = await this.rows<{ total: number }>(sql`SELECT count(*)::int AS total FROM holder_wallet_groups WHERE project_id = ${projectId}`);
     const rows = await this.rows(sql`SELECT rank, data FROM holder_wallet_groups WHERE project_id = ${projectId} ORDER BY rank LIMIT ${perPage} OFFSET ${offset}`);
-    return { total, page, perPage, rows: rows.map((r) => ({ rank: r.rank + 1, data: r.data })) };
+    // Names and labels for the members shown.
+    const who = await this.who(projectId, userId, rows.flatMap((r) => String(r.data.members ?? '').split(' ').filter(Boolean)));
+    return { total, page, perPage, rows: rows.map((r) => ({ rank: r.rank + 1, data: r.data })), who };
   }
 
   /** What the last analysis saw happen, newest first. */
