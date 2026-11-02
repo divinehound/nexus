@@ -11,6 +11,13 @@ import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { type AnalysisProject, loadEnabledProjects } from './projects';
 
 const PAGE = 20_000;
+/**
+ * The most transfers one analysis loads. analyze() holds everything in memory on the API's own
+ * process (about 1-2 KB a transfer) and blocks its event loop while it runs, so a project bigger
+ * than this is refused with an error rather than taking the API down. Raise it with
+ * HOLDER_ANALYSIS_MAX_TRANSFERS once the API has the memory, or once the analysis runs in its own process.
+ */
+const MAX_TRANSFERS = Number(process.env.HOLDER_ANALYSIS_MAX_TRANSFERS) || 500_000;
 /** A report this new isn't redone for new transfers alone (the activity feed lags at most this long). */
 const NEW_TRANSFERS_AFTER_MS = 30 * 60_000;
 
@@ -45,7 +52,11 @@ export class HolderAnalysisReportService {
 
   async analyseProject(project: AnalysisProject) {
     const t0 = Date.now();
+    const startedAt = new Date(t0).toISOString();
     const ids = project.collections.map((c) => c.collectionId);
+    const [{ n }] = [...(await this.db.execute<{ n: number }>(sql`
+      SELECT count(*)::int AS n FROM collection_transfers WHERE collection_id = ANY(${uuids(ids)})`))];
+    if (n > MAX_TRANSFERS) throw new Error(`${n} transfers is more than one analysis can hold (HOLDER_ANALYSIS_MAX_TRANSFERS = ${MAX_TRANSFERS})`);
     // The analysis tells collections apart by contract: the same address on two chains gets the chain added.
     const seen = new Map<string, number>();
     for (const c of project.collections) seen.set(c.contract, (seen.get(c.contract) ?? 0) + 1);
@@ -56,10 +67,22 @@ export class HolderAnalysisReportService {
       collections: project.collections.map(({ collectionId, chain: _chain, ...c }) => ({ ...c, contract: keyOf.get(collectionId)! })),
     };
 
+    // Addresses and hashes repeat a lot: one string each instead of one per row.
+    const strings = new Map<string, string>();
+    const one = (v: string | null): string | null => {
+      if (v == null) return null;
+      const seenStr = strings.get(v);
+      if (seenStr !== undefined) return seenStr;
+      strings.set(v, v);
+      return v;
+    };
     const transfers: Transfer[] = [];
-    const blocks: Record<string, number> = {};
+    // Every collection, even one with no transfers yet, so the 10-minute check sees the same set.
+    const blocks: Record<string, number> = Object.fromEntries(ids.map((id) => [id, 0]));
     for (const c of project.collections) {
       const contract = keyOf.get(c.collectionId)!;
+      // With a chain-prefixed key, the transaction's target is matched against the key too.
+      const target = (to: string | null) => (to === c.contract ? contract : one(to));
       let after: { b: number; l: number; h: string; k: string } | null = null;
       for (;;) {
         const rows: Record<string, any>[] = [
@@ -77,14 +100,14 @@ export class HolderAnalysisReportService {
             block: Number(r.block_number),
             logIndex: r.log_index,
             at: sec(r.block_time)!,
-            tx: r.tx_hash,
-            from: r.from_address,
-            to: r.to_address,
+            tx: one(r.tx_hash)!,
+            from: one(r.from_address)!,
+            to: one(r.to_address)!,
             tokenId: c.standard === 'erc20' ? null : r.token_id,
             amount: Number(r.amount),
-            txFrom: r.tx_from,
-            txTo: r.tx_to,
-            txValue: r.tx_value,
+            txFrom: one(r.tx_from),
+            txTo: target(r.tx_to),
+            txValue: r.tx_value === '0' ? '0' : r.tx_value,
           });
         if (rows.length) {
           const last = rows[rows.length - 1];
@@ -97,22 +120,32 @@ export class HolderAnalysisReportService {
     // analyze() expects chain order across collections (a sale can move two collections in one transaction).
     transfers.sort((a, b) => a.at - b.at || a.block - b.block || a.logIndex - b.logIndex);
 
-    // Facts about the wallets that received the project's tokens (any chain; names are kept on Ethereum).
+    // Facts about the wallets that received the project's tokens. Funder and activity come from the
+    // project's main chain (its first core collection's) first, then its other chains; names and
+    // delegations are kept on Ethereum.
+    const mainChain = (project.collections.find((c) => c.core) ?? project.collections[0]).chain;
+    const chains = [...new Set([...project.collections.map((c) => c.chain), 'ethereum'])];
     const wallets = new Map<string, WalletInfo>();
     const delegations = new Map<string, Delegation[]>();
     const ens = new Map<string, string>();
     const opensea = new Map<string, string>();
+    // A delegation scoped to a collection names its real contract: use the analysis' key for it.
+    const ethKey = new Map(project.collections.filter((c) => c.chain === 'ethereum').map((c) => [c.contract, keyOf.get(c.collectionId)!]));
+    const projectChains = new Set(project.collections.map((c) => c.chain));
     const profiles = await this.db.execute<Record<string, any>>(sql`
       SELECT w.chain::text AS chain, w.address, w.is_contract, w.funder, w.funded_at, w.last_out_at, w.info_at, w.delegations, w.ens, w.opensea
       FROM wallet_profiles w
-      WHERE w.address IN (SELECT f.address FROM holder_analysis_wallets f WHERE f.collection_id = ANY(${uuids(ids)}))
-      ORDER BY w.chain = 'ethereum' DESC`);
+      WHERE w.chain::text = ANY(string_to_array(${chains.join(',')}, ','))
+        AND w.address IN (SELECT f.address FROM holder_analysis_wallets f WHERE f.collection_id = ANY(${uuids(ids)}))
+      ORDER BY w.chain::text = ${mainChain} DESC`);
     for (const r of profiles) {
-      if (r.info_at != null && !wallets.has(r.address))
-        wallets.set(r.address, { contract: r.is_contract, funder: r.funder, fundedAt: sec(r.funded_at), lastOutAt: sec(r.last_out_at) });
-      if (r.delegations && !delegations.has(r.address)) delegations.set(r.address, r.delegations as Delegation[]);
-      if (r.ens && !ens.has(r.address)) ens.set(r.address, r.ens);
-      if (r.opensea && !opensea.has(r.address)) opensea.set(r.address, r.opensea);
+      const address = one(r.address)!;
+      if (r.info_at != null && projectChains.has(r.chain) && !wallets.has(address))
+        wallets.set(address, { contract: r.is_contract, funder: one(r.funder), fundedAt: sec(r.funded_at), lastOutAt: sec(r.last_out_at) });
+      if (r.chain !== 'ethereum') continue;
+      if (r.delegations) delegations.set(address, (r.delegations as Delegation[]).map((d) => (d.contract && ethKey.has(d.contract) ? { ...d, contract: ethKey.get(d.contract)! } : d)));
+      if (r.ens) ens.set(address, r.ens);
+      if (r.opensea) opensea.set(address, r.opensea);
     }
     const usage = new Map(
       [...(await this.db.execute<{ address: string; data: Usage }>(sql`SELECT address, data FROM holder_usage WHERE project_id = ${project.id}`))].map((u) => [u.address, u.data]),
@@ -132,6 +165,8 @@ export class HolderAnalysisReportService {
 
     const p = project.id;
     await this.db.transaction(async (tx) => {
+      // One save per project at a time, even if two API instances analyse it at once.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'holder-analysis:' + p}))`);
       for (const table of ['holder_report_holders', 'holder_report_side_holders', 'holder_wallet_groups', 'holder_wallet_links', 'holder_activity'])
         await tx.execute(sql`DELETE FROM ${sql.identifier(table)} WHERE project_id = ${p}`);
       const chunks = <T>(rows: T[], n = 2000) => Array.from({ length: Math.ceil(rows.length / n) }, (_, i) => rows.slice(i * n, i * n + n));
@@ -168,7 +203,7 @@ export class HolderAnalysisReportService {
       const block = Math.max(0, ...Object.values(blocks));
       await tx.execute(sql`
         INSERT INTO holder_reports (project_id, summary, analysis_version, block, duration_ms, analysed_at)
-        VALUES (${p}, ${json(r.summary)}::jsonb, ${ANALYSIS_VERSION}, ${block}, ${Date.now() - t0}, now())
+        VALUES (${p}, ${json(r.summary)}::jsonb, ${ANALYSIS_VERSION}, ${block}, ${Date.now() - t0}, ${startedAt})
         ON CONFLICT (project_id) DO UPDATE SET summary = excluded.summary, analysis_version = excluded.analysis_version,
           block = excluded.block, duration_ms = excluded.duration_ms, analysed_at = excluded.analysed_at`);
     });

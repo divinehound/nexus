@@ -128,11 +128,29 @@ export class HolderAnalysisController {
           csv(res, name);
           started = true;
         }
-        if (!res.write(chunk)) await new Promise((r) => res.once('drain', r));
+        // A download the client gave up on stops here instead of waiting for a 'drain' that never comes.
+        if (res.destroyed) throw new Error('client went away');
+        if (!res.write(chunk))
+          await new Promise<void>((resolve, reject) => {
+            const done = () => {
+              res.off('drain', done);
+              res.off('close', gone);
+              resolve();
+            };
+            const gone = () => {
+              res.off('drain', done);
+              reject(new Error('client went away'));
+            };
+            res.once('drain', done);
+            res.once('close', gone);
+          });
       });
       res.end();
     } catch (err) {
-      if (started) return res.destroy(err as Error);
+      if (started || res.destroyed) {
+        if (!res.destroyed) res.destroy(err as Error);
+        return;
+      }
       throw err;
     }
   }

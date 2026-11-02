@@ -16,7 +16,8 @@ const BURN = new Set(['0x0000000000000000000000000000000000000000', '0x000000000
 const DAY_MS = 86_400_000;
 const STATUSES = ['active', 'quiet', 'parked', 'dormant_1y', 'dormant_2y', 'dormant_3y', 'dormant_4y', 'unknown'];
 const uuids = (ids: string[]) => sql`string_to_array(${ids.join(',')}, ',')::uuid[]`;
-const num = (field: string) => sql`(h.data->>${field})::double precision`;
+// The analysis writes '' where it doesn't know a number.
+const num = (field: string) => sql`NULLIF(h.data->>${field}, '')::double precision`;
 
 const SORTS: Record<string, SQL> = {
   size: sql`h.rank`,
@@ -38,17 +39,25 @@ const FEED: Record<string, SQL> = {
 
 export type Paging = { page?: string | number; perPage?: string | number };
 const paging = (q: Paging, max = 200) => {
-  const perPage = Math.min(max, Math.max(1, Number(q.perPage) || 50));
-  const page = Math.max(1, Math.floor(Number(q.page) || 1));
+  const perPage = Math.min(max, Math.max(1, Math.floor(Number(q.perPage)) || 50));
+  const page = Math.min(1_000_000, Math.max(1, Math.floor(Number(q.page)) || 1));
   return { page, perPage, offset: (page - 1) * perPage };
 };
+/** A query parameter as one string ('?q=a&q=b' arrives as a list). */
+const text = (v: unknown) => (typeof v === 'string' ? v : Array.isArray(v) && typeof v[0] === 'string' ? v[0] : '');
+const pick = <T>(map: Record<string, T>, key: string): T | undefined => (Object.hasOwn(map, key) ? map[key] : undefined);
+/** A spreadsheet runs a cell that starts with = + - @ as a formula: names come from anyone, so those are quoted. */
+const safe = (v: unknown) => (typeof v === 'string' && /^[=+\-@\t\r]/.test(v) && !/^-?\d/.test(v) ? `'${v}` : v);
+const safeRow = (r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, safe(v)]));
 const likeOf = (q: string) => `%${q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 /** Who a wallet is to the viewer: names, the project's label and note, and the viewer's own nickname. */
 const whoJoins = (projectId: string, userId: string, col: SQL) => sql`
   LEFT JOIN wallet_profiles w ON w.chain = 'ethereum' AND w.address = ${col}
   LEFT JOIN holder_wallet_labels n ON n.project_id = ${projectId} AND n.address = ${col}
-  LEFT JOIN wallet_nicknames k ON k.user_id = ${userId} AND lower(k.address) = ${col}`;
+  LEFT JOIN LATERAL (
+    SELECT x.nickname FROM wallet_nicknames x WHERE x.user_id = ${userId} AND lower(x.address) = ${col} ORDER BY x.updated_at DESC LIMIT 1
+  ) k ON TRUE`;
 const whoColumns = sql`w.ens, w.opensea, n.label, n.note, k.nickname`;
 
 @Injectable()
@@ -101,7 +110,7 @@ export class HolderAnalysisService {
   async holders(projectId: string, userId: string, q: Paging & { q?: string; show?: string; sort?: string }) {
     await this.project(projectId);
     const { page, perPage, offset } = paging(q);
-    const search = (q.q ?? '').trim().toLowerCase();
+    const search = text(q.q).trim().toLowerCase();
     const where: SQL[] = [sql`h.project_id = ${projectId}`];
     if (ADDR.test(search)) where.push(sql`h.address = ${search}`);
     else if (search) {
@@ -109,14 +118,14 @@ export class HolderAnalysisService {
       where.push(sql`(h.address LIKE ${like} OR lower(coalesce(w.ens, h.data->>'ens', '')) LIKE ${like} OR lower(coalesce(w.opensea, h.data->>'opensea_username', '')) LIKE ${like}
         OR lower(coalesce(n.label, '')) LIKE ${like} OR lower(coalesce(n.note, '')) LIKE ${like} OR lower(coalesce(k.nickname, '')) LIKE ${like})`);
     }
-    const show = q.show ?? '';
+    const show = text(q.show);
     if (show === 'labelled') where.push(sql`(n.label <> '' OR n.note <> '' OR k.nickname IS NOT NULL)`);
     else if (show === 'new30') where.push(sql`h.first_at > ${new Date(Date.now() - 30 * DAY_MS).toISOString()}`);
     else if (show === 'grouped') where.push(sql`coalesce(h.data->>'cluster', '') <> ''`);
     else if (show === 'dormant') where.push(sql`h.data->>'status' LIKE 'dormant%'`);
     else if (STATUSES.includes(show)) where.push(sql`h.data->>'status' = ${show}`);
     else if (show) throw new BadRequestException(`show must be one of labelled, new30, grouped, dormant, ${STATUSES.join(', ')}`);
-    const sort = SORTS[q.sort ?? 'size'];
+    const sort = pick(SORTS, text(q.sort) || 'size');
     if (!sort) throw new BadRequestException(`sort must be one of ${Object.keys(SORTS).join(', ')}`);
     const from = sql`FROM holder_report_holders h ${whoJoins(projectId, userId, sql`h.address`)} WHERE ${sql.join(where, sql` AND `)}`;
     const [{ total }] = await this.rows<{ total: number }>(sql`SELECT count(*)::int AS total ${from}`);
@@ -153,8 +162,11 @@ export class HolderAnalysisService {
     const { page, perPage, offset } = paging(q, 500);
     const [holder] = await this.rows(sql`SELECT rank, first_at, data FROM holder_report_holders WHERE project_id = ${projectId} AND address = ${wallet}`);
     const side = await this.rows(sql`SELECT collection_id, rank, data FROM holder_report_side_holders WHERE project_id = ${projectId} AND address = ${wallet}`);
+    // By chain, so the (chain, address) and (chain, funder) indexes are used.
+    const chains = sql`(string_to_array(${[...new Set([...project.collections.map((c) => c.chain), 'ethereum'])].join(',')}, ',')::chain[])`;
     const profiles = await this.rows(sql`
-      SELECT chain::text AS chain, is_contract, funder, funded_at, last_out_at, info_at, delegations, ens, opensea FROM wallet_profiles WHERE address = ${wallet}`);
+      SELECT chain::text AS chain, is_contract, funder, funded_at, last_out_at, info_at, delegations, ens, opensea FROM wallet_profiles
+      WHERE chain = ANY(${chains}) AND address = ${wallet}`);
     const [{ total }] = await this.rows<{ total: number }>(sql`
       SELECT count(*)::int AS total FROM collection_transfers t
       WHERE t.collection_id = ANY(${uuids(ids)}) AND (t.from_address = ${wallet} OR t.to_address = ${wallet})`);
@@ -170,7 +182,7 @@ export class HolderAnalysisService {
     const funded = await this.rows(sql`
       SELECT f.address, f.funded_at, h.rank FROM wallet_profiles f
       LEFT JOIN holder_report_holders h ON h.project_id = ${projectId} AND h.address = f.address
-      WHERE f.funder = ${wallet} ORDER BY f.funded_at LIMIT 500`);
+      WHERE f.chain = ANY(${chains}) AND f.funder = ${wallet} ORDER BY f.funded_at LIMIT 500`);
     const unlinks = await this.rows(sql`
       SELECT a, b, created_at FROM holder_wallet_unlinks WHERE project_id = ${projectId} AND (a = ${wallet} OR b = ${wallet}) ORDER BY created_at DESC`);
     const activity = await this.rows(sql`
@@ -244,19 +256,20 @@ export class HolderAnalysisService {
   async activity(projectId: string, userId: string, q: Paging & { kind?: string; collectionId?: string; labelled?: string }) {
     const project = await this.project(projectId);
     const { page, perPage, offset } = paging(q);
-    const feed = FEED[q.kind ?? ''];
+    const feed = pick(FEED, text(q.kind));
     if (!feed) throw new BadRequestException(`kind must be one of ${Object.keys(FEED).filter(Boolean).join(', ')}`);
     const where: SQL[] = [sql`a.project_id = ${projectId}`, feed];
-    if (q.collectionId) {
-      if (!project.collections.some((c) => c.collectionId === q.collectionId)) throw new BadRequestException('Not a collection of this project');
-      where.push(sql`a.collection_id = ${q.collectionId}`);
+    const collectionId = text(q.collectionId);
+    if (collectionId) {
+      if (!project.collections.some((c) => c.collectionId === collectionId)) throw new BadRequestException('Not a collection of this project');
+      where.push(sql`a.collection_id = ${collectionId}`);
     }
-    if (q.labelled === '1' || q.labelled === 'true') where.push(sql`(n.label <> '' OR k.nickname IS NOT NULL)`);
+    if (['1', 'true'].includes(text(q.labelled))) where.push(sql`(n.label <> '' OR k.nickname IS NOT NULL)`);
     const from = sql`FROM holder_activity a ${whoJoins(projectId, userId, sql`a.address`)} WHERE ${sql.join(where, sql` AND `)}`;
     const [{ total }] = await this.rows<{ total: number }>(sql`SELECT count(*)::int AS total ${from}`);
     const rows = await this.rows(sql`
       SELECT a.at, a.collection_id, a.address, a.kind, a.amount, a.tx_hash, a.eth, a.flag, ${whoColumns} ${from}
-      ORDER BY a.at DESC, a.tx_hash, a.address LIMIT ${perPage} OFFSET ${offset}`);
+      ORDER BY a.at DESC, a.tx_hash, a.address, a.collection_id, a.kind LIMIT ${perPage} OFFSET ${offset}`);
     return {
       total,
       page,
@@ -325,7 +338,7 @@ export class HolderAnalysisService {
     const rows = await this.rows(sql`
       SELECT h.data, n.label, n.note, k.nickname FROM holder_report_holders h ${whoJoins(projectId, userId, sql`h.address`)}
       WHERE h.project_id = ${projectId} ORDER BY h.rank`);
-    return toCsv(rows.map((r) => ({ ...r.data, label: r.label ?? '', note: r.note ?? '', my_nickname: r.nickname ?? '' })));
+    return toCsv(rows.map((r) => safeRow({ ...r.data, label: r.label ?? '', note: r.note ?? '', my_nickname: r.nickname ?? '' })));
   }
 
   async sideCsv(projectId: string, collectionId: string) {
@@ -333,13 +346,13 @@ export class HolderAnalysisService {
     if (!project.collections.some((c) => c.collectionId === collectionId && !c.core)) throw new NotFoundException('Not a side collection of this project');
     const rows = await this.rows(sql`
       SELECT data FROM holder_report_side_holders WHERE project_id = ${projectId} AND collection_id = ${collectionId} ORDER BY rank`);
-    return toCsv(rows.map((r) => r.data));
+    return toCsv(rows.map((r) => safeRow(r.data)));
   }
 
   async groupsCsv(projectId: string) {
     await this.project(projectId);
     const rows = await this.rows(sql`SELECT data FROM holder_wallet_groups WHERE project_id = ${projectId} ORDER BY rank`);
-    return toCsv(rows.map((r) => r.data));
+    return toCsv(rows.map((r) => safeRow(r.data)));
   }
 
   async linksCsv(projectId: string) {
