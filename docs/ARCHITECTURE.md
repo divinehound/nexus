@@ -36,11 +36,12 @@ nexus/
 │   │   └── jest.config.ts
 │   └── web/                  # Next.js 16 frontend (port 3000)
 │       ├── src/
-│       │   ├── app/          # App Router pages & API routes
+│       │   ├── pages/        # Route pages (routes are listed in src/router.tsx)
 │       │   ├── components/   # React components
 │       │   ├── context/      # Auth & provider context
 │       │   └── lib/          # API client, utilities, wagmi config
-│       └── next.config.ts
+│       ├── docker/           # nginx config: serves the SPA, proxies /api
+│       └── vite.config.ts
 ├── packages/
 │   ├── database/             # Drizzle ORM schema & client
 │   │   ├── src/schema/       # 9 schema files, 15 tables
@@ -562,7 +563,6 @@ POST /api/webhooks/helius
 | `/admin/users` | `admin/users/page.tsx` | Admin | User management |
 | `/admin/wiki` | `admin/wiki/page.tsx` | Admin | Wiki suggestion moderation |
 | `/admin/events` | `admin/events/page.tsx` | Admin | Event management |
-| `/api/og` | `api/og/route.tsx` | No | Dynamic OG image generation (Edge) |
 
 ### Component Hierarchy
 
@@ -603,7 +603,7 @@ RootLayout
 // lib/api.ts
 apiFetch<T>(path, { method?, body?, token? }) → Promise<T>
 ```
-- Base URL: `NEXT_PUBLIC_API_URL` (default `http://localhost:4000/api`)
+- Base URL: `/api` on the same origin (nginx in production and the Vite dev server both proxy it to the API); `VITE_API_URL` overrides it at build time
 - Automatically adds `Authorization: Bearer` header when token provided
 - Throws on non-OK responses with parsed error message
 
@@ -650,8 +650,9 @@ apiFetch<T>(path, { method?, body?, token? }) → Promise<T>
 | `TWITTER_BEARER_TOKEN` | `""` | Twitter API v2 for Spaces detection |
 | `OPENSEA_API_KEY` | `""` | Market data |
 | `RESERVOIR_API_KEY` | `""` | Floor prices, sales |
-| `NEXT_PUBLIC_API_URL` | `http://localhost:4000/api` | API base URL for frontend |
-| `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` | `""` | WalletConnect cloud project ID |
+| `API_URL` | `http://api:4000/api` | Web container: where nginx (and `vite dev`) forward `/api`. Its path must be `/api` |
+| `WALLETCONNECT_PROJECT_ID` | `""` | Web container: WalletConnect cloud project ID, read at container start (`NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` still works) |
+| `VITE_API_URL` | `/api` | Build time: API base URL for the browser, only if the API isn't proxied on the same origin |
 
 ### Startup Validation
 
@@ -668,7 +669,7 @@ Multi-stage `Dockerfile` with two targets:
 | Target | Base | Exposes | Command |
 |--------|------|---------|---------|
 | `api` | node:22-slim | 4000 | `node dist/main` |
-| `web` | node:22-slim | 3000 | `pnpm start` |
+| `web` | nginx:1.29-alpine | 3000 | nginx serving the built SPA and proxying `/api` |
 
 ### docker-compose.yml
 

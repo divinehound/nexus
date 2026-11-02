@@ -64,7 +64,7 @@ Landing page with:
 
 ### 8. OG Images (`/api/og`)
 
-Dynamic Open Graph image generation for social sharing.
+Dynamic Open Graph image generation for social sharing. Not built yet: the unused Next.js `/api/og` route was removed when the web app moved to Vite; it would now belong in the API.
 
 ## Data Model
 

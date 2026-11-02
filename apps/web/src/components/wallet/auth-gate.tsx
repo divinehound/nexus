@@ -1,5 +1,3 @@
-'use client';
-
 import { useAuth } from '@/context/auth-context';
 import { ConnectButton } from './connect-button-unified';
 

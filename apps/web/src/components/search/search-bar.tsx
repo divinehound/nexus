@@ -1,14 +1,12 @@
-'use client';
-
 import { useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Chain, CHAIN_META, chainDisplayName } from '@nexus/types';
 
 const ALL_CHAINS = Object.values(Chain);
 
 export function SearchBar() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get('q') ?? '');
   const [chain, setChain] = useState(searchParams.get('chain') ?? '');
 
@@ -17,7 +15,7 @@ export function SearchBar() {
     if (query.trim()) {
       const params = new URLSearchParams({ q: query.trim() });
       if (chain) params.set('chain', chain);
-      router.push(`/search?${params.toString()}`);
+      navigate(`/search?${params.toString()}`);
     }
   };
 

@@ -1,6 +1,4 @@
-'use client';
-
-import Link from 'next/link';
+import { Link } from 'react-router';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { type AdminStatus, day, holderAnalysis, minute, num } from '@/lib/holder-analysis';
@@ -81,7 +79,7 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
         </div>
         <div className="flex items-center gap-2">
           {status.enabled && (
-            <Link href={`/project/${slug}/holders`} className={BUTTON}>
+            <Link to={`/project/${slug}/holders`} className={BUTTON}>
               Open report
             </Link>
           )}

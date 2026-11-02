@@ -1,6 +1,4 @@
-'use client';
-
-import Link from 'next/link';
+import { Link } from 'react-router';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/context/auth-context';
 import { apiFetch } from '@/lib/api';
@@ -21,7 +19,7 @@ export function HolderAnalysisLink({ projectId, slug }: { projectId: string; slu
   }, [accessToken, projectId]);
   if (!show) return null;
   return (
-    <Link href={`/project/${slug}/holders`} className="inline-flex items-center rounded border border-purple-700 px-3 py-1.5 text-sm text-purple-200 hover:border-purple-500 hover:text-white">
+    <Link to={`/project/${slug}/holders`} className="inline-flex items-center rounded border border-purple-700 px-3 py-1.5 text-sm text-purple-200 hover:border-purple-500 hover:text-white">
       Holder analysis
     </Link>
   );

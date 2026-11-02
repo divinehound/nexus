@@ -4,7 +4,6 @@
   "private": true,
   "exports": {
     "./base": "./base.mjs",
-    "./next": "./next.mjs",
     "./nest": "./nest.mjs"
   },
   "dependencies": {

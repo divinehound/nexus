@@ -2,7 +2,7 @@
 // /admin/holder-analysis, a project's report under /projects/:projectId/holder-analysis
 // (owners, editors and admins only).
 
-import { apiFetch } from '@/lib/api';
+import { API_BASE, apiFetch } from '@/lib/api';
 
 export type Who = { ens: string | null; opensea: string | null; label: string | null; note: string | null; nickname: string | null };
 export type Paged<T> = { total: number; page: number; perPage: number; rows: T[] };
@@ -153,7 +153,6 @@ export const holderAnalysis = {
 
 /** Downloads one of the report's CSVs (they need the sign-in token, so a plain link won't do). */
 export async function downloadCsv(projectId: string, path: string, filename: string, token: string) {
-  const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
   const res = await fetch(`${API_BASE}${base(projectId)}/${path}`, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`Download failed (${res.status})`);
   const url = URL.createObjectURL(await res.blob());
