@@ -42,6 +42,11 @@ export function slugify(name: string): string {
     .slice(0, 80);
 }
 
+/** Escapes LIKE wildcards so a name such as "100%" or "my_nft" matches literally. */
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 /**
  * Grouping collections into projects from the admin: create and edit a project,
  * add collections to it (by search or by pasting a contract) and take them out,
@@ -57,6 +62,15 @@ export class AdminProjectsService {
   async createProject(input: ProjectFields & { collectionIds?: string[] }) {
     const name = input.name?.trim();
     if (!name) throw new BadRequestException('name is required');
+    const collectionIds = [...new Set(input.collectionIds ?? [])];
+    // Check the collections before creating anything, so a bad id doesn't leave a half-made project.
+    for (const collectionId of collectionIds) {
+      const found = await this.db.query.collections.findFirst({
+        columns: { id: true },
+        where: eq(collections.id, collectionId),
+      });
+      if (!found) throw new NotFoundException(`Collection ${collectionId} not found`);
+    }
     const slug = await this.freeSlug(input.slug?.trim() ? slugify(input.slug) : slugify(name));
 
     const [project] = await this.db
@@ -64,7 +78,7 @@ export class AdminProjectsService {
       .values({ ...this.pick(input), name, slug })
       .returning();
 
-    for (const collectionId of input.collectionIds ?? []) {
+    for (const collectionId of collectionIds) {
       await this.setCollectionProject(collectionId, project.id);
     }
     return this.getProject(project.id);
@@ -115,7 +129,7 @@ export class AdminProjectsService {
             WHERE (c.project_id IS NULL OR p.slug = ${UNASSIGNED_SLUG})
               AND c.is_spam IS NOT TRUE
               AND c.verification_status != 'rejected'
-              AND LOWER(c.name) LIKE ${`%${term}%`}
+              AND LOWER(c.name) LIKE ${`%${escapeLike(term)}%`} ESCAPE '\\'
             ORDER BY c.holder_count DESC NULLS LAST
             LIMIT 20
           `)
@@ -152,20 +166,22 @@ export class AdminProjectsService {
       if (!input.chain || !input.contractAddress) {
         throw new BadRequestException('Send a collectionId, or a chain and contractAddress');
       }
-      const contract = input.contractAddress.trim();
+      // Validate first: an unknown chain would otherwise reach Postgres as a bad enum value (a 500).
+      const chain = this.collectionsService.validateChain(input.chain);
+      const contract = this.collectionsService.normalizeAndValidateAddress(chain, input.contractAddress);
       const existing = await this.db.query.collections.findFirst({
         where: and(
-          eq(collections.chain, input.chain as (typeof collections.$inferSelect)['chain']),
-          input.chain === 'solana'
+          eq(collections.chain, chain),
+          chain === 'solana'
             ? eq(collections.contractAddress, contract)
-            : sql`LOWER(${collections.contractAddress}) = ${contract.toLowerCase()}`,
+            : sql`LOWER(${collections.contractAddress}) = ${contract}`,
         ),
       });
       if (existing) {
         collectionId = existing.id;
       } else {
         // trackCollection validates the chain and address and starts its first metrics refresh.
-        const result = await this.collectionsService.trackCollection({ chain: input.chain, contractAddress: contract });
+        const result = await this.collectionsService.trackCollection({ chain, contractAddress: contract });
         collectionId = result.collectionId;
         tracked = true;
       }
