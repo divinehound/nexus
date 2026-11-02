@@ -54,6 +54,40 @@ export class EnvironmentVariables {
   @IsOptional()
   RESERVOIR_API_KEY?: string;
 
+  @IsString()
+  @IsOptional()
+  ETHERSCAN_API_KEY?: string;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(1)
+  @Type(() => Number)
+  HOLDER_ANALYSIS_RUN_CALLS?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @Type(() => Number)
+  HOLDER_ANALYSIS_CALL_GAP_MS?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @Type(() => Number)
+  HOLDER_ANALYSIS_TX_BATCH?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @Type(() => Number)
+  HOLDER_ANALYSIS_OPENSEA_CALLS?: number;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  @Type(() => Number)
+  HOLDER_ANALYSIS_ETHERSCAN_CALLS?: number;
+
   @IsNumber()
   @IsOptional()
   @Min(1)

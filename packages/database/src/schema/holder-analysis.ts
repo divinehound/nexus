@@ -86,6 +86,8 @@ export const holderAnalysisCollectionSettings = pgTable('holder_analysis_collect
     .primaryKey()
     .references(() => collections.id, { onDelete: 'cascade' }),
   shortId: varchar('short_id', { length: 16 }).notNull(),
+  /** erc721 | erc1155 | erc20; null = the collection's own type. */
+  standard: varchar('standard', { length: 8 }),
   core: boolean('core').default(true).notNull(),
   decimals: integer('decimals').default(0).notNull(),
   stakingContracts: text('staking_contracts').array().default(sql`'{}'::text[]`).notNull(),
@@ -113,7 +115,24 @@ export const walletProfiles = pgTable(
     opensea: varchar('opensea', { length: 255 }),
     namesAt: timestamp('names_at', { withTimezone: true }),
   },
-  (t) => [primaryKey({ columns: [t.chain, t.address] }), index('wallet_profiles_funder_idx').on(t.chain, t.funder)],
+  (t) => [
+    primaryKey({ columns: [t.chain, t.address] }),
+    index('wallet_profiles_funder_idx').on(t.chain, t.funder),
+    index('wallet_profiles_info_pending_idx').on(t.chain, t.address).where(sql`${t.infoAt} IS NULL`),
+  ],
+);
+
+/** Which wallets received each collection's tokens: where the sync finds the wallets to read. */
+export const holderAnalysisWallets = pgTable(
+  'holder_analysis_wallets',
+  {
+    collectionId: uuid('collection_id')
+      .notNull()
+      .references(() => collections.id, { onDelete: 'cascade' }),
+    chain: chainEnum('chain').notNull(),
+    address: varchar('address', { length: 64 }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.collectionId, t.address] }), index('holder_analysis_wallets_wallet_idx').on(t.chain, t.address)],
 );
 
 /** Etherscan activity of a project's holder before / after they first got its tokens (the outlook). */
