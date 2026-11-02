@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdminController } from './admin.controller';
+import { AdminProjectsService } from './admin-projects.service';
 import { AdminService } from './admin.service';
 import { HolderHistoryService } from './holder-history.service';
 import { HolderHistoryScanProcessor } from './holder-history-scan.processor';
@@ -13,7 +14,7 @@ import { QueueModule } from '../../common/queue/queue.module';
 @Module({
   imports: [CollectionsModule, HoldingsModule, SearchModule, IndexingModule, QueueModule],
   controllers: [AdminController],
-  providers: [AdminService, HolderHistoryService, HolderHistoryScanProcessor, PriceOracleService],
+  providers: [AdminService, AdminProjectsService, HolderHistoryService, HolderHistoryScanProcessor, PriceOracleService],
   exports: [PriceOracleService],
 })
 export class AdminModule {}

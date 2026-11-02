@@ -14,6 +14,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminGuard } from '../../common/guards/admin.guard';
 import { AdminService } from './admin.service';
 import { HolderHistoryService } from './holder-history.service';
+import { AdminProjectsService, type ProjectFields } from './admin-projects.service';
 
 @ApiTags('admin')
 @ApiBearerAuth()
@@ -23,6 +24,7 @@ export class AdminController {
   constructor(
     private readonly adminService: AdminService,
     private readonly holderHistoryService: HolderHistoryService,
+    private readonly adminProjectsService: AdminProjectsService,
   ) {}
 
   // --- Dashboard ---
@@ -42,6 +44,39 @@ export class AdminController {
       page ? parseInt(page) : 1,
       limit ? parseInt(limit) : 50,
     );
+  }
+
+  @Post('projects')
+  @ApiOperation({ summary: 'Create a project, optionally with collections' })
+  createProject(@Body() body: ProjectFields & { collectionIds?: string[] }) {
+    return this.adminProjectsService.createProject(body ?? {});
+  }
+
+  @Get('projects/:id')
+  @ApiOperation({ summary: 'A project with its collections and suggested collections' })
+  getProject(@Param('id') id: string) {
+    return this.adminProjectsService.getProject(id);
+  }
+
+  @Patch('projects/:id')
+  @ApiOperation({ summary: "Edit a project's name, slug, description and links" })
+  updateProject(@Param('id') id: string, @Body() body: ProjectFields) {
+    return this.adminProjectsService.updateProject(id, body ?? {});
+  }
+
+  @Post('projects/:id/collections')
+  @ApiOperation({ summary: 'Add a collection to a project, by id or by chain + contract (tracked if new)' })
+  addProjectCollection(
+    @Param('id') id: string,
+    @Body() body: { collectionId?: string; chain?: string; contractAddress?: string },
+  ) {
+    return this.adminProjectsService.addCollection(id, body ?? {});
+  }
+
+  @Delete('projects/:id/collections/:collectionId')
+  @ApiOperation({ summary: 'Take a collection out of a project' })
+  removeProjectCollection(@Param('id') id: string, @Param('collectionId') collectionId: string) {
+    return this.adminProjectsService.removeCollection(id, collectionId);
   }
 
   @Patch('projects/:id/verify')

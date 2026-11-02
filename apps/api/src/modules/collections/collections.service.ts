@@ -287,9 +287,11 @@ export class CollectionsService {
       })
       .onConflictDoUpdate({
         target: [collections.chain, collections.contractAddress],
+        // Re-tracking a known contract only bumps lastSeenAt. It must not reset
+        // verificationStatus: this endpoint is public, so anyone could otherwise
+        // un-verify (or un-reject) a collection by posting its contract.
         set: {
           lastSeenAt: new Date(),
-          verificationStatus: 'tracked_unverified',
         },
       })
       .returning();
