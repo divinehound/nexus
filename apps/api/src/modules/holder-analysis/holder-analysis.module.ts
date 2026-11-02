@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { QueueModule } from '../../common/queue/queue.module';
 import { HolderAnalysisAdminController } from './holder-analysis-admin.controller';
 import { HolderAnalysisAdminService } from './holder-analysis-admin.service';
+import { HolderAnalysisImportService } from './import.service';
 import { HolderAnalysisController } from './holder-analysis.controller';
 import { HolderAnalysisService } from './holder-analysis.service';
 import { HolderAnalysisReportService } from './report.service';
@@ -23,6 +24,7 @@ import { HolderAnalysisSyncService } from './sync.service';
     HolderAnalysisSyncCron,
     HolderAnalysisSyncProcessor,
     HolderAnalysisAdminService,
+    HolderAnalysisImportService,
   ],
   exports: [HolderAnalysisSyncService],
 })
