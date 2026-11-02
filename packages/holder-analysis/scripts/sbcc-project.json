@@ -1,0 +1,44 @@
+{
+  "$comment": "SBCC setup for scripts/from-cache.ts only (the app's projects are set on the website).",
+  "projects": [
+    {
+      "id": "sbcc",
+      "name": "Spooky Boys Country Club",
+      "collections": [
+        {
+          "id": "sb",
+          "name": "Spooky Boys",
+          "short": "SBCC",
+          "contract": "0xfd1076d80fff9dc702ae9fdfea0073467b9b3fb7",
+          "standard": "erc721",
+          "staking": ["0x3a706182f5725863ad660846aa8ea63c20e4b72d"]
+        },
+        {
+          "id": "mp",
+          "name": "Mansion Party",
+          "short": "SBMP",
+          "contract": "0xda4128a4fc209df510e9e4483acd059d84620419",
+          "standard": "erc721",
+          "staking": ["0x3a706182f5725863ad660846aa8ea63c20e4b72d"]
+        },
+        {
+          "id": "keys",
+          "name": "SpooKeys",
+          "short": "Key",
+          "contract": "0x39aefb036dabf9d29d33f357dcc3dce06dc2b899",
+          "standard": "erc1155",
+          "core": false,
+          "tokenNames": { "1": "Bronze Key", "69": "Silver Key", "420": "Gold Key" }
+        },
+        {
+          "id": "soul",
+          "name": "SOUL",
+          "short": "SOUL",
+          "contract": "0x887d93d024355176b9e00953c98a2bdc08f7a3a2",
+          "standard": "erc20",
+          "decimals": 18
+        }
+      ]
+    }
+  ]
+}

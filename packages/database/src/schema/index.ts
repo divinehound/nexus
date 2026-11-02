@@ -7,6 +7,7 @@ export * from './discovery';
 export * from './market';
 export * from './ownership';
 export * from './holder-history';
+export * from './holder-analysis';
 export * from './indexing';
 export * from './wallet-nicknames';
 export * from './cashflow';

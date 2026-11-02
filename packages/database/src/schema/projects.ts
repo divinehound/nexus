@@ -104,6 +104,8 @@ export const projects = pgTable('projects', {
   clusterId: uuid('cluster_id'),
   isVerified: boolean('is_verified').default(false).notNull(),
   isFeatured: boolean('is_featured').default(false).notNull(),
+  // Holder analysis is opt-in per project: only enabled projects' collections are read from the chain.
+  holderAnalysisEnabled: boolean('holder_analysis_enabled').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   lastIndexStartedAt: timestamp('last_index_started_at', { withTimezone: true }),
   lastIndexFinishedAt: timestamp('last_index_finished_at', { withTimezone: true }),
