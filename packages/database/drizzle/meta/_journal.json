@@ -253,6 +253,13 @@
       "when": 1791150000000,
       "tag": "0035_cashflow_write_offs",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791160000000,
+      "tag": "0036_drop_zero_balance_holders",
+      "breakpoints": true
     }
   ]
 }

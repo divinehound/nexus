@@ -1508,6 +1508,9 @@ export class HolderHistoryService {
   ) {
     const summaryRows: Array<typeof collectionHolderSummaries.$inferInsert> = [];
     const holderRows: Array<typeof collectionHolders.$inferInsert> = [];
+    // Wallets whose balance reached 0: they've left, so they come out of
+    // collection_holders (overlap, graph and discovery count its rows).
+    const exitedAddresses: string[] = [];
 
     for (const [address, summary] of summaryState.entries()) {
       if (!touched.has(address) && summary.currentBalance === 0 && summary.totalReceivedCount === 0 && summary.totalSentCount === 0) {
@@ -1527,6 +1530,11 @@ export class HolderHistoryService {
         totalSentCount: summary.totalSentCount,
         updatedAt: new Date(),
       });
+
+      if (summary.currentBalance <= 0) {
+        if (touched.has(address)) exitedAddresses.push(address);
+        continue;
+      }
 
       holderRows.push({
         collectionId: collection.id,
@@ -1566,6 +1574,12 @@ export class HolderHistoryService {
           },
         });
       }
+    }
+
+    for (const batch of chunkArray(exitedAddresses, 500)) {
+      await this.db
+        .delete(collectionHolders)
+        .where(and(eq(collectionHolders.collectionId, collection.id), inArray(collectionHolders.address, batch)));
     }
 
     await this.db
