@@ -27,6 +27,7 @@ import {
 } from '@/lib/api';
 import { truncateAddress } from '@/lib/utils';
 import { WatchedWalletsSection } from './watched-wallets';
+import { SignInMethodsSection } from './sign-in-methods';
 
 interface ProfileFormState {
   email: string;
@@ -378,6 +379,8 @@ function MePageContent() {
           </div>
         </div>
       </section>
+
+      <SignInMethodsSection accessToken={accessToken!} />
 
       <section className="rounded-xl border border-gray-800 p-6">
         <h2 className="text-xl font-semibold">Linked Wallets</h2>

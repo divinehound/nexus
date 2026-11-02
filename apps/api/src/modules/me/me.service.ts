@@ -23,6 +23,8 @@ import {
   walletOwnershipMoves,
   walletNicknames,
   watchedWallets,
+  authIdentities,
+  passkeyCredentials,
 } from '@nexus/database';
 import { ConfigService } from '@nestjs/config';
 import { CHAIN_META } from '@nexus/types';
@@ -514,10 +516,17 @@ export class MeService {
     if (!wallet) throw new NotFoundException('Wallet not found');
 
     if (userWallets.length <= 1) {
-      throw new ForbiddenException({
-        error: 'LAST_WALLET_DELETE_FORBIDDEN',
-        message: 'Cannot remove your final wallet. Link another wallet first.',
-      });
+      // The last wallet can go only if the user can still sign in another way.
+      const [otherIdentity, passkey] = await Promise.all([
+        this.db.query.authIdentities.findFirst({ where: eq(authIdentities.userId, userId) }),
+        this.db.query.passkeyCredentials.findFirst({ where: eq(passkeyCredentials.userId, userId) }),
+      ]);
+      if (!otherIdentity && !passkey) {
+        throw new ForbiddenException({
+          error: 'LAST_WALLET_DELETE_FORBIDDEN',
+          message: 'Cannot remove your final wallet. Link another wallet or sign-in method first.',
+        });
+      }
     }
 
     await this.db.transaction(async (tx) => {
@@ -532,6 +541,8 @@ export class MeService {
         if (replacement) {
           await tx.update(wallets).set({ isPrimary: true }).where(eq(wallets.id, replacement.id));
           await tx.update(users).set({ primaryWalletId: replacement.id }).where(eq(users.id, userId));
+        } else {
+          await tx.update(users).set({ primaryWalletId: null }).where(eq(users.id, userId));
         }
       }
     });

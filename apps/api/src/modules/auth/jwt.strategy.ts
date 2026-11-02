@@ -14,7 +14,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super(options);
   }
 
-  validate(payload: { sub: string; address: string; role?: string }) {
-    return { sub: payload.sub, address: payload.address, role: payload.role || 'user' };
+  validate(payload: { sub: string; address?: string | null; role?: string }) {
+    // address is null for users who signed in without a wallet and have none linked.
+    return { sub: payload.sub, address: payload.address ?? null, role: payload.role || 'user' };
   }
 }

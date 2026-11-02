@@ -17,7 +17,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (!user) {
     return (
       <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4">
-        <p className="text-lg text-gray-400">Connect your wallet to access this page</p>
+        <p className="text-lg text-gray-400">Sign in to see this page</p>
         <ConnectButton />
       </div>
     );

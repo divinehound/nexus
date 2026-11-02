@@ -282,7 +282,7 @@ export class AuthService {
     return newUser;
   }
 
-  private issueTokens(userId: string, address: string, role = 'user') {
+  private issueTokens(userId: string, address: string | null, role = 'user') {
     const payload = { sub: userId, address, role };
     return {
       accessToken: this.jwtService.sign(payload),
@@ -290,13 +290,35 @@ export class AuthService {
     };
   }
 
+  /**
+   * Tokens for a user who signed in without a wallet (email, Google, passkey).
+   * `address` is their primary wallet if they have one, else null.
+   */
+  async issueTokensForUser(userId: string) {
+    const user = await this.db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (!user) throw new UnauthorizedException('User not found');
+    return { user, ...this.issueTokens(user.id, await this.primaryAddress(user.primaryWalletId), user.role) };
+  }
+
   async refresh(refreshToken: string) {
+    let payload: { sub: string; address?: string | null };
     try {
-      const payload = this.jwtService.verify(refreshToken);
-      return this.issueTokens(payload.sub, payload.address, payload.role);
+      payload = this.jwtService.verify(refreshToken);
     } catch {
       throw new UnauthorizedException('Invalid refresh token');
     }
+    // Re-read the user so a removed account stops refreshing, and a wallet
+    // linked since (or a role change) shows up in the new tokens.
+    const user = await this.db.query.users.findFirst({ where: eq(users.id, payload.sub) });
+    if (!user) throw new UnauthorizedException('Invalid refresh token');
+    const address = payload.address ?? (await this.primaryAddress(user.primaryWalletId));
+    return this.issueTokens(user.id, address, user.role);
+  }
+
+  private async primaryAddress(primaryWalletId: string | null): Promise<string | null> {
+    if (!primaryWalletId) return null;
+    const wallet = await this.db.query.wallets.findFirst({ where: eq(wallets.id, primaryWalletId) });
+    return wallet?.address ?? null;
   }
 
   async getMe(userId: string) {

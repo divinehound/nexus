@@ -10,5 +10,6 @@ export * from './holder-history';
 export * from './holder-analysis';
 export * from './indexing';
 export * from './wallet-nicknames';
+export * from './auth';
 export * from './cashflow';
 export * from './relations';

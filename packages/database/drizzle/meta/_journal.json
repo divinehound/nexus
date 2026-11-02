@@ -281,6 +281,13 @@
       "when": 1793670000000,
       "tag": "0039_holder_analysis_wallets",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793680000000,
+      "tag": "0040_sign_in_methods",
+      "breakpoints": true
     }
   ]
 }
