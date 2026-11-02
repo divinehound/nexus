@@ -90,7 +90,7 @@ export type AdminStatus = {
 };
 
 export type ImportResult = {
-  settings: { from: string; saved: string[]; failed: { collection: string; error: string }[]; missing: string[] } | null;
+  settings: { from: string | null; saved: string[]; kept: string[]; failed: { collection: string; error: string }[]; missing: string[] } | null;
   labels: { sent: number; added: number; kept: number; skipped: number };
   unlinks: { sent: number; added: number; kept: number; skipped: number };
   queued: boolean;
