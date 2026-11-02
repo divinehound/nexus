@@ -563,7 +563,6 @@ POST /api/webhooks/helius
 | `/admin/users` | `admin/users/page.tsx` | Admin | User management |
 | `/admin/wiki` | `admin/wiki/page.tsx` | Admin | Wiki suggestion moderation |
 | `/admin/events` | `admin/events/page.tsx` | Admin | Event management |
-| `/api/og` | `api/og/route.tsx` | No | Dynamic OG image generation (Edge) |
 
 ### Component Hierarchy
 

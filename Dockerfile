@@ -17,6 +17,8 @@ RUN pnpm install --frozen-lockfile || pnpm install
 
 # Stage 2: Build
 FROM base AS build
+# Optional: baked into the web bundle as a fallback for the runtime WALLETCONNECT_PROJECT_ID.
+ARG VITE_WALLETCONNECT_PROJECT_ID
 COPY . .
 RUN pnpm build
 
@@ -41,6 +43,7 @@ CMD ["node", "dist/main"]
 # Stage 4: Web production image: the built SPA, served by nginx, which also proxies /api to the API
 FROM nginx:1.29-alpine AS web
 COPY apps/web/docker/nginx.conf.template /etc/nginx/nexus.conf.template
-COPY apps/web/docker/40-nexus-config.sh /docker-entrypoint.d/40-nexus-config.sh
+# nginx's entrypoint skips scripts that aren't executable.
+COPY --chmod=755 apps/web/docker/40-nexus-config.sh /docker-entrypoint.d/40-nexus-config.sh
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 EXPOSE 3000

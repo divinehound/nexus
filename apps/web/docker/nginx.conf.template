@@ -3,13 +3,15 @@
 upstream nexus_api {
     zone nexus_api 64k;
     # Re-resolve the API's hostname so a restarted API container is found again.
-    resolver __RESOLVER__ valid=30s ipv6=off;
+    resolver __RESOLVER__ valid=5s ipv6=off;
     server __API_HOSTPORT__ resolve;
 }
 
 server {
     listen 3000;
     server_name _;
+    # Behind Traefik, nginx's own scheme and port are wrong for redirects.
+    absolute_redirect off;
     root /usr/share/nginx/html;
 
     client_max_body_size 10m;
@@ -22,6 +24,8 @@ server {
         proxy_pass __API_SCHEME__://nexus_api;
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
+        # Send the API's real hostname for TLS (SNI), not the upstream block's name.
+        proxy_ssl_name __API_HOST__;
         proxy_set_header Host __API_HOST__;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -33,6 +37,10 @@ server {
     location /assets/ {
         add_header Cache-Control "public, max-age=31536000, immutable";
         try_files $uri =404;
+    }
+
+    location = /favicon.ico {
+        try_files /icon.svg =404;
     }
 
     location = /config.js {

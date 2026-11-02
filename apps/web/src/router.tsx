@@ -1,4 +1,4 @@
-import { createBrowserRouter, type RouteObject } from 'react-router';
+import { createBrowserRouter, useParams, type RouteObject } from 'react-router';
 import RootLayout from '@/pages/layout';
 import NotFoundPage from '@/pages/not-found';
 import RouteError from '@/pages/route-error';
@@ -9,6 +9,22 @@ type PageModule = { default: React.ComponentType };
 /** Loads a page's code only when its route is first visited. */
 const page = (load: () => Promise<PageModule>): Pick<RouteObject, 'lazy'> => ({
   lazy: async () => ({ Component: (await load()).default }),
+});
+
+/**
+ * Like `page`, but remounts the page when the route's params change, as Next.js did. Without
+ * this, going from one wallet or collection to another keeps the first one's state.
+ */
+const pageKeyedByParams = (load: () => Promise<PageModule>): Pick<RouteObject, 'lazy'> => ({
+  lazy: async () => {
+    const Page = (await load()).default;
+    return {
+      Component: function KeyedPage() {
+        const params = useParams();
+        return <Page key={JSON.stringify(params)} />;
+      },
+    };
+  },
 });
 
 export const router = createBrowserRouter([
@@ -26,7 +42,7 @@ export const router = createBrowserRouter([
           { path: 'link-wallet', ...page(() => import('@/pages/link-wallet/page')) },
           {
             path: 'collection/:chain/:contract',
-            ...page(() => import('@/pages/collection/[chain]/[contract]/page')),
+            ...pageKeyedByParams(() => import('@/pages/collection/[chain]/[contract]/page')),
           },
           {
             path: 'me',
@@ -39,7 +55,7 @@ export const router = createBrowserRouter([
           {
             path: 'project/:slug',
             children: [
-              { index: true, ...page(() => import('@/pages/project/[slug]/page')) },
+              { index: true, ...pageKeyedByParams(() => import('@/pages/project/[slug]/page')) },
               {
                 path: 'holders',
                 ...page(() => import('@/pages/project/[slug]/holders/layout')),
@@ -55,7 +71,9 @@ export const router = createBrowserRouter([
                   },
                   {
                     path: 'wallet/:address',
-                    ...page(() => import('@/pages/project/[slug]/holders/wallet/[address]/page')),
+                    ...pageKeyedByParams(
+                      () => import('@/pages/project/[slug]/holders/wallet/[address]/page'),
+                    ),
                   },
                 ],
               },
@@ -74,10 +92,15 @@ export const router = createBrowserRouter([
               { path: 'collections', ...page(() => import('@/pages/admin/collections/page')) },
               {
                 path: 'collections/:id/holder-history',
-                ...page(() => import('@/pages/admin/collections/[id]/holder-history/page')),
+                ...pageKeyedByParams(
+                  () => import('@/pages/admin/collections/[id]/holder-history/page'),
+                ),
               },
               { path: 'projects', ...page(() => import('@/pages/admin/projects/page')) },
-              { path: 'projects/:id', ...page(() => import('@/pages/admin/projects/[id]/page')) },
+              {
+                path: 'projects/:id',
+                ...pageKeyedByParams(() => import('@/pages/admin/projects/[id]/page')),
+              },
               { path: 'wiki', ...page(() => import('@/pages/admin/wiki/page')) },
               { path: 'events', ...page(() => import('@/pages/admin/events/page')) },
               { path: 'indexing', ...page(() => import('@/pages/admin/indexing/page')) },
