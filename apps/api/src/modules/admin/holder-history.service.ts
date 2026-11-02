@@ -1810,7 +1810,7 @@ export class HolderHistoryService {
 
     let receipts = new Map<string, SaleReceipt>();
     let txs = new Map<string, { value?: string }>();
-    let internal = new Map<string, Array<{ hash?: string; rawContract?: { value?: string | null } }>>();
+    const internal = new Map<string, Array<{ hash?: string; rawContract?: { value?: string | null } }>>();
     try {
       receipts = await this.evmRpcMany<SaleReceipt>(endpoint, 'eth_getTransactionReceipt', hashes, (h) => [h]);
       stats.receiptsMissing += hashes.length - receipts.size;
