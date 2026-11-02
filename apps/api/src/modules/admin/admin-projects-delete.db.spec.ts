@@ -116,16 +116,14 @@ describeDb('deleting projects (database)', () => {
     });
   });
 
-  it('keeps the intake bucket and reports ids it did not find', async () => {
+  it('deletes the old intake bucket like any project, and reports ids it did not find', async () => {
     let intake = await db.query.projects.findFirst({ where: eq(projects.slug, 'unassigned-contract-intake') });
     if (!intake) intake = await project('unassigned-contract-intake');
     const missing = '00000000-0000-4000-8000-000000000000';
     const result = await service.deleteProjects([intake.id, missing]);
-    expect(result.deleted).toEqual([]);
-    expect(result.skipped.map((s) => s.id)).toEqual([intake.id]);
+    expect(result.deleted.map((p) => p.id)).toEqual([intake.id]);
     expect(result.notFound).toEqual([missing]);
-    expect(await db.query.projects.findFirst({ where: eq(projects.id, intake.id) })).toBeDefined();
-    await expect(service.deleteProject(intake.id)).rejects.toBeInstanceOf(BadRequestException);
+    expect(await db.query.projects.findFirst({ where: eq(projects.id, intake.id) })).toBeUndefined();
   });
 
   it('deletes one project the same way, and 404s on an unknown one', async () => {

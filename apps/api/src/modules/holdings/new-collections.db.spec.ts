@@ -6,6 +6,7 @@ import { count, eq, inArray } from 'drizzle-orm';
 import { createDatabase, collections, projects } from '@nexus/database';
 import { HoldingsService } from './holdings.service';
 import { CollectionImportService } from '../search/collection-import.service';
+import { CollectionsService } from '../collections/collections.service';
 
 const url = process.env.TEST_DATABASE_URL;
 const describeDb = url ? describe : describe.skip;
@@ -71,5 +72,16 @@ describeDb('new collections get no project of their own (database)', () => {
     expect(first.collection.contractAddress).toBe(lower);
     const again = await service.importCollection(mixed, 'ethereum');
     expect(again).toMatchObject({ alreadyExisted: true, collection: { id: first.collection.id } });
+  });
+
+  it('tracking a contract leaves it without a project', async () => {
+    const metrics = { refreshCollectionMetricsNow: async () => ({ queued: false, deduped: false, jobId: null }) };
+    const service = new CollectionsService(db, metrics as any);
+    const before = await projectCount();
+    const result = await service.trackCollection({ chain: 'ethereum', contractAddress: address(5) });
+    created.push(result.collectionId);
+    const row = await db.query.collections.findFirst({ where: eq(collections.id, result.collectionId) });
+    expect(row).toMatchObject({ projectId: null, mappingStatus: 'unmapped' });
+    expect(await projectCount()).toBe(before);
   });
 });
