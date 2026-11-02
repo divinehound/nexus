@@ -15,12 +15,15 @@ import {
   solanaIndexedMints,
   solanaRawSignatures,
   solanaParsedTransfers,
+  projects,
 } from '@nexus/database';
 import { runAllParsers } from './solana-parsers';
 import {
   deriveSalePrices,
+  hasInternalTransfers,
+  needsFallbackContext,
   needsTxValue,
-  ORDER_FULFILLED_TOPIC,
+  saleKey,
   supportsSalePrices,
   type SaleMovement,
   type SalePrice,
@@ -63,6 +66,10 @@ type SalePriceStats = {
   receiptsMissing: number;
   pricedTokens: number;
   errors: number;
+  /** address → has contract code, shared across a scan's pages. */
+  codeCache: Map<string, boolean>;
+  /** Look up internal ETH payouts for non-Seaport sales (project opted in, chain supports it). */
+  useInternalTransfers: boolean;
 };
 
 type MutableSummary = {
@@ -250,8 +257,16 @@ export class HolderHistoryService {
       { realizedPnlNative: 0, realizedPnlUsd: 0, unrealizedPnlNative: 0, unrealizedPnlUsd: 0, totalBuys: 0, totalSells: 0 },
     );
 
+    const project = collection.projectId
+      ? await this.db.query.projects.findFirst({
+          columns: { id: true, name: true, exactSalePayouts: true },
+          where: eq(projects.id, collection.projectId),
+        })
+      : null;
+
     return {
       collection,
+      project: project ?? null,
       dataSource,
       summary: {
         wallets,
@@ -270,6 +285,23 @@ export class HolderHistoryService {
       balanceHistory: history,
       scanJob: this.jobs.get(collectionId) ?? null,
     };
+  }
+
+  /** Turn exact seller payouts (internal-transfer lookups for non-Seaport sales) on or off for the collection's project. */
+  async setExactSalePayouts(collectionId: string, enabled: boolean) {
+    const collection = await this.db.query.collections.findFirst({
+      columns: { id: true, projectId: true },
+      where: eq(collections.id, collectionId),
+    });
+    if (!collection) throw new NotFoundException('Collection not found');
+    if (!collection.projectId) throw new BadRequestException('This collection is not in a project');
+    const [updated] = await this.db
+      .update(projects)
+      .set({ exactSalePayouts: enabled })
+      .where(eq(projects.id, collection.projectId))
+      .returning({ id: projects.id, name: projects.name, exactSalePayouts: projects.exactSalePayouts });
+    if (!updated) throw new NotFoundException('Project not found');
+    return updated;
   }
 
   async queueCollectionHolderHistoryScan(collectionId: string, input?: { fromBlock?: number }) {
@@ -543,7 +575,19 @@ export class HolderHistoryService {
 
     // Sale prices aren't part of the erc721 transfer feed; each page's sale
     // transactions are read for them and attached by (txHash, tokenId).
-    const saleStats: SalePriceStats = { transactions: 0, receiptsMissing: 0, pricedTokens: 0, errors: 0 };
+    let transferRetries = 0;
+    const project = collection.projectId
+      ? await this.db.query.projects.findFirst({ columns: { exactSalePayouts: true }, where: eq(projects.id, collection.projectId) })
+      : null;
+    const saleStats: SalePriceStats = {
+      transactions: 0,
+      receiptsMissing: 0,
+      pricedTokens: 0,
+      errors: 0,
+      codeCache: new Map(),
+      // Opt-in per project: internal-transfer lookups cost ~2 extra Alchemy calls per non-Seaport sale.
+      useInternalTransfers: !!project?.exactSalePayouts && hasInternalTransfers(collection.chain),
+    };
 
     while (true) {
       page += 1;
@@ -573,6 +617,17 @@ export class HolderHistoryService {
         30000,
         `alchemy_getAssetTransfers page ${page}`,
       );
+
+      if ((response.status === 429 || response.status >= 500) && transferRetries < 5) {
+        // Throttling (e.g. right after a burst of sale-price lookups): back off and retry this page.
+        transferRetries += 1;
+        const delay = Math.min(2000 * Math.pow(2, transferRetries), 30000);
+        this.logger.warn(`alchemy_getAssetTransfers page ${page}: HTTP ${response.status}, retrying in ${delay}ms`);
+        await sleep(delay);
+        page -= 1;
+        continue;
+      }
+      transferRetries = 0;
 
       if (!response.ok) {
         const text = await response.text();
@@ -631,7 +686,7 @@ export class HolderHistoryService {
 
         // The seller's leg records net proceeds (after marketplace fee + royalty);
         // the buyer's leg records the gross all-in cost basis.
-        const salePrice = salePrices.get(`${txHash.toLowerCase()}:${tokenId}`) ?? null;
+        const salePrice = salePrices.get(`${txHash.toLowerCase()}:${saleKey({ tokenId, from, to })}`) ?? null;
 
         if (from && from !== ZERO_ADDRESS) {
           const summary = ensureSummary(summaryState, from);
@@ -705,8 +760,9 @@ export class HolderHistoryService {
     this.logger.log(
       `[EVM] sale prices for ${collection.id}: ${saleStats.pricedTokens} priced transfers from ${saleStats.transactions} wallet-to-wallet transactions` +
         (saleStats.receiptsMissing ? `, ${saleStats.receiptsMissing} receipts unavailable` : '') +
-        (saleStats.errors ? `, ${saleStats.errors} page lookups failed (see above)` : '') +
-        (supportsSalePrices(collection.chain) ? '' : ` (no sale pricing for chain ${collection.chain})`),
+        (saleStats.errors ? `, ${saleStats.errors} lookups failed (see above)` : '') +
+        (supportsSalePrices(collection.chain) ? '' : ` (no sale pricing for chain ${collection.chain})`) +
+        (saleStats.useInternalTransfers ? ', exact seller payouts on' : ''),
     );
 
     await this.persistFinalHolderState(collection, summaryState, touched, maxBlockNumber, job);
@@ -1487,6 +1543,7 @@ export class HolderHistoryService {
     keys: string[],
     paramsFor: (key: string) => unknown[],
     batchSize = 20,
+    pauseMs = 1000,
   ): Promise<Map<string, R>> {
     const results = new Map<string, R>();
     let pending = [...keys];
@@ -1513,8 +1570,9 @@ export class HolderHistoryService {
         batch.forEach((key, i) => {
           if (!resolved.has(i)) stillPending.push(key);
         });
-        // Keep under the free tier's compute-unit throughput.
-        await sleep(500);
+        // Keep under the free tier's compute-unit throughput (~20 receipts at
+        // ~20 CU each per second), so the transfer feed isn't throttled after.
+        await sleep(pauseMs);
       }
       pending = stillPending;
     }
@@ -1686,11 +1744,13 @@ export class HolderHistoryService {
   }
 
   /**
-   * Sale prices for one page of transfers, keyed by `${txHash}:${tokenId}` in
+   * Sale prices for one page of transfers, keyed by `${txHash}:${saleKey}` in
    * the chain's native coin. Alchemy's getNFTSales is gone, so prices are read
-   * from each sale transaction: its receipt (Seaport order events and payment
-   * transfers) and, when needed, the ETH sent with it. See evm-sale-prices.ts.
-   * Failures are logged and leave transfers unpriced; they never fail the scan.
+   * from each sale transaction (see evm-sale-prices.ts): its receipt (Seaport
+   * order events and payment transfers) and, for non-Seaport sales, the ETH
+   * sent with it and the ETH contracts paid out in it (internal transfers, as
+   * the Money tab reads them). Failures are logged and leave transfers
+   * unpriced; they never fail the scan.
    */
   private async fetchEvmSalePricesForTransfers(
     collection: typeof collections.$inferSelect,
@@ -1699,7 +1759,8 @@ export class HolderHistoryService {
     stats: SalePriceStats,
   ): Promise<Map<string, SalePrice>> {
     const prices = new Map<string, SalePrice>();
-    if (!supportsSalePrices(collection.chain)) return prices;
+    const chain = collection.chain;
+    if (!supportsSalePrices(chain)) return prices;
 
     // Only transfers between two wallets can be sales (not mints or burns).
     const byTx = new Map<string, SaleMovement[]>();
@@ -1713,43 +1774,102 @@ export class HolderHistoryService {
       byTx.set(hash, list);
     }
     if (byTx.size === 0) return prices;
+    const hashes = Array.from(byTx.keys());
+    stats.transactions += hashes.length;
 
+    let receipts = new Map<string, SaleReceipt>();
+    let txs = new Map<string, { value?: string }>();
+    let internal = new Map<string, Array<{ hash?: string; rawContract?: { value?: string | null } }>>();
     try {
-      const hashes = Array.from(byTx.keys());
-      const receipts = await this.evmRpcMany<SaleReceipt>(endpoint, 'eth_getTransactionReceipt', hashes, (h) => [h]);
-      stats.transactions += hashes.length;
+      receipts = await this.evmRpcMany<SaleReceipt>(endpoint, 'eth_getTransactionReceipt', hashes, (h) => [h]);
       stats.receiptsMissing += hashes.length - receipts.size;
 
-      // The ETH sent with a transaction isn't in its receipt. Fetch it only
-      // where the fallback could use it: no Seaport order, sent by a buyer.
-      const valueHashes = needsTxValue(collection.chain)
-        ? hashes.filter((h) => {
-            const receipt = receipts.get(h);
-            if (!receipt) return false;
-            if (receipt.logs?.some((l) => l.topics?.[0]?.toLowerCase() === ORDER_FULFILLED_TOPIC)) return false;
-            const sender = (receipt.from || '').toLowerCase();
+      // What the fallback needs beyond the receipt, fetched only for
+      // non-Seaport transactions.
+      const fallbackHashes = hashes.filter((h) => receipts.has(h) && needsFallbackContext(chain, receipts.get(h)!));
+      const valueHashes = needsTxValue(chain)
+        ? fallbackHashes.filter((h) => {
+            const sender = (receipts.get(h)!.from || '').toLowerCase();
             return byTx.get(h)!.some((m) => m.to === sender);
           })
         : [];
-      const txs = valueHashes.length
-        ? await this.evmRpcMany<{ value?: string }>(endpoint, 'eth_getTransactionByHash', valueHashes, (h) => [h])
-        : new Map<string, { value?: string }>();
+      if (valueHashes.length) {
+        txs = await this.evmRpcMany<{ value?: string }>(endpoint, 'eth_getTransactionByHash', valueHashes, (h) => [h]);
+      }
 
-      for (const [hash, movements] of byTx) {
-        const receipt = receipts.get(hash);
-        if (!receipt) continue;
-        const valueHex = txs.get(hash)?.value;
-        const txValue = valueHex ? BigInt(valueHex) : null;
-        const derived = deriveSalePrices(collection.chain, collection.contractAddress, receipt, movements, txValue);
-        for (const [tokenId, price] of derived) {
-          prices.set(`${hash}:${tokenId}`, price);
+      if (stats.useInternalTransfers) {
+        // One query per (block, wallet) for the buyer and seller of each sale.
+        const keys = new Set<string>();
+        for (const h of fallbackHashes) {
+          const block = receipts.get(h)!.blockNumber;
+          if (!block) continue;
+          for (const m of byTx.get(h)!) {
+            keys.add(`${block}|${m.from}`);
+            keys.add(`${block}|${m.to}`);
+          }
+        }
+        if (keys.size) {
+          const results = await this.evmRpcMany<{ transfers?: Array<{ hash?: string; rawContract?: { value?: string | null } }> }>(
+            endpoint,
+            'alchemy_getAssetTransfers',
+            Array.from(keys),
+            (key) => {
+              const [block, address] = key.split('|');
+              return [{ fromBlock: block, toBlock: block, toAddress: address, category: ['internal'], excludeZeroValue: true, maxCount: '0x64' }];
+            },
+            // alchemy_getAssetTransfers is ~150 CU a call.
+            4,
+          );
+          for (const [key, r] of results) internal.set(key, r.transfers ?? []);
+        }
+      } else if (needsTxValue(chain)) {
+        // No internal transfers (chain or project setting): a seller's plain-ETH payout is invisible,
+        // so the fallback only accepts sellers that are ordinary wallets.
+        const sellers = new Set<string>();
+        for (const h of fallbackHashes) for (const m of byTx.get(h)!) sellers.add(m.from);
+        const unknown = Array.from(sellers).filter((a) => !stats.codeCache.has(a));
+        if (unknown.length) {
+          const code = await this.evmRpcMany<string>(endpoint, 'eth_getCode', unknown, (a) => [a, 'latest']);
+          for (const [a, c] of code) stats.codeCache.set(a, c !== '0x' && c !== '0x0');
         }
       }
-      stats.pricedTokens += prices.size;
     } catch (err) {
       stats.errors += 1;
       this.logger.error(`[EVM] sale price lookup failed for ${collection.id}: ${(err as Error).stack || (err as Error).message}`);
     }
+
+    for (const [hash, movements] of byTx) {
+      const receipt = receipts.get(hash);
+      if (!receipt) continue;
+      try {
+        const valueHex = txs.get(hash)?.value;
+        let internalIn: Map<string, bigint> | null = null;
+        if (stats.useInternalTransfers && receipt.blockNumber) {
+          internalIn = new Map();
+          for (const address of new Set(movements.flatMap((m) => [m.from, m.to]))) {
+            const rows = internal.get(`${receipt.blockNumber}|${address}`);
+            if (!rows) {
+              internalIn = null; // lookup failed: don't treat "no rows" as "paid nothing"
+              break;
+            }
+            const sum = rows
+              .filter((r) => (r.hash || '').toLowerCase() === hash)
+              .reduce((acc, r) => acc + (r.rawContract?.value ? BigInt(r.rawContract.value) : 0n), 0n);
+            internalIn.set(address, sum);
+          }
+        }
+        const derived = deriveSalePrices(chain, collection.contractAddress, receipt, movements, {
+          txValue: valueHex ? BigInt(valueHex) : null,
+          internalIn,
+          isContract: (a) => stats.codeCache.get(a),
+        });
+        for (const [key, price] of derived) prices.set(`${hash}:${key}`, price);
+      } catch (err) {
+        stats.errors += 1;
+        this.logger.warn(`[EVM] couldn't price tx ${hash} for ${collection.id}: ${(err as Error).message}`);
+      }
+    }
+    stats.pricedTokens += prices.size;
     return prices;
   }
 
