@@ -1,0 +1,356 @@
+import { decodeEventLog, parseAbi, toEventSelector } from 'viem';
+
+/**
+ * Recover NFT sale prices from the sale transaction itself, replacing Alchemy's
+ * getNFTSales (deprecated and now returning 404).
+ *
+ * Two sources, in order:
+ *  1. Seaport `OrderFulfilled` events (OpenSea, Magic Eden and most other
+ *     Seaport-based marketplaces). These list every payment in the order, so
+ *     they give an exact buyer price and the seller's net after fees.
+ *  2. A payment-flow fallback for everything else (Blur, direct contract
+ *     sales): what the buyer paid in the transaction (the ETH sent with the
+ *     transaction, plus wrapped-native / Blur Pool transfers out of the buyer's
+ *     wallet), split across the NFTs the buyer received in it. The seller's net
+ *     comes from wrapped-native transfers they received; when the payout was in
+ *     plain ETH (invisible in logs) the seller is assumed to have received the
+ *     full price.
+ *
+ * Only the chain's native coin and its 1:1 equivalents count as payment. A sale
+ * paid in any other token (USDC, APE on Ethereum, …) gets no price rather than
+ * a wrong one.
+ */
+
+export interface SalePrice {
+  /** What the buyer paid all-in (cost basis), in the chain's native coin. */
+  gross: number;
+  /** What the seller received after marketplace fee and royalty, in the native coin. */
+  sellerNet: number;
+}
+
+export interface ReceiptLog {
+  address: string;
+  topics: string[];
+  data: string;
+}
+
+export interface SaleReceipt {
+  transactionHash: string;
+  from: string;
+  logs: ReceiptLog[];
+}
+
+/** One transfer of a token in the scanned collection, from the transfer feed. */
+export interface SaleMovement {
+  tokenId: string;
+  from: string;
+  to: string;
+}
+
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+/** ERC-20 tokens worth exactly one unit of the chain's native coin. */
+const NATIVE_EQUIVALENT_TOKENS: Record<string, string[]> = {
+  ethereum: [
+    '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2', // WETH
+    '0x0000000000a39bb272e79075ade125fd351887ac', // Blur Pool (BETH)
+  ],
+  base: ['0x4200000000000000000000000000000000000006'], // WETH
+  polygon: ['0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270'], // WPOL
+  abstract: [
+    '0x3439153eb7af838ad19d56e1571fbd09333c2809', // WETH
+    // zkSync-stack chains move native ETH through this system contract, which
+    // logs an ERC-20 Transfer for every ETH movement (including contract payouts).
+    '0x000000000000000000000000000000000000800a',
+  ],
+  apechain: ['0x48b62137edfa95a428d35c09e44256a739f6b557'], // WAPE
+};
+
+/** zkSync-stack chains: native ETH shows up as Transfer logs, so tx.value must not be added on top. */
+const ZKSYNC_CHAINS = new Set(['abstract']);
+/** zkSync bootloader: gas is paid to it and refunded from it as native Transfer logs. */
+const ZKSYNC_BOOTLOADER = '0x0000000000000000000000000000000000008001';
+
+const ABI = parseAbi([
+  'event Transfer(address indexed from, address indexed to, uint256 value)',
+  'event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)',
+  'event TransferBatch(address indexed operator, address indexed from, address indexed to, uint256[] ids, uint256[] values)',
+  'struct SpentItem { uint8 itemType; address token; uint256 identifier; uint256 amount; }',
+  'struct ReceivedItem { uint8 itemType; address token; uint256 identifier; uint256 amount; address recipient; }',
+  'event OrderFulfilled(bytes32 orderHash, address indexed offerer, address indexed zone, address recipient, SpentItem[] offer, ReceivedItem[] consideration)',
+]);
+
+export const TRANSFER_TOPIC = toEventSelector('Transfer(address,address,uint256)');
+const TRANSFER_SINGLE_TOPIC = toEventSelector('TransferSingle(address,address,address,uint256,uint256)');
+const TRANSFER_BATCH_TOPIC = toEventSelector('TransferBatch(address,address,address,uint256[],uint256[])');
+export const ORDER_FULFILLED_TOPIC = toEventSelector(
+  'OrderFulfilled(bytes32,address,address,address,(uint8,address,uint256,uint256)[],(uint8,address,uint256,uint256,address)[])',
+);
+
+// Seaport ItemType
+const NATIVE = 0;
+const ERC20 = 1;
+const NFT_ITEM_TYPES = new Set([2, 3, 4, 5]); // ERC721, ERC1155, and their criteria variants
+
+interface SeaportItem {
+  itemType: number;
+  token: string;
+  identifier: bigint;
+  amount: bigint;
+  recipient?: string;
+}
+
+interface DecodedOrder {
+  offerer: string;
+  offer: SeaportItem[];
+  consideration: SeaportItem[];
+}
+
+interface NftMove {
+  contract: string;
+  tokenId: string;
+  from: string;
+  to: string;
+  units: bigint;
+}
+
+interface FungibleMove {
+  token: string;
+  from: string;
+  to: string;
+  amount: bigint;
+}
+
+/** True when this chain's sale prices can be derived (we know its native-equivalent tokens). */
+export function supportsSalePrices(chain: string): boolean {
+  return chain in NATIVE_EQUIVALENT_TOKENS;
+}
+
+/** True when the fallback needs the transaction's ETH value (not visible in the receipt). */
+export function needsTxValue(chain: string): boolean {
+  return !ZKSYNC_CHAINS.has(chain);
+}
+
+/**
+ * Sale prices for this collection's tokens that changed hands in one
+ * transaction, keyed by tokenId. Mints and burns are never priced.
+ *
+ * `txValue` is the wei sent with the transaction (null if unknown); it is only
+ * used by the payment-flow fallback.
+ */
+export function deriveSalePrices(
+  chain: string,
+  collectionAddress: string,
+  receipt: SaleReceipt,
+  movements: SaleMovement[],
+  txValue: bigint | null,
+): Map<string, SalePrice> {
+  const out = new Map<string, SalePrice>();
+  const nativeTokens = new Set(NATIVE_EQUIVALENT_TOKENS[chain] ?? []);
+  if (nativeTokens.size === 0) return out;
+  const collection = collectionAddress.toLowerCase();
+  const sales = movements
+    .map((m) => ({ tokenId: m.tokenId, from: m.from.toLowerCase(), to: m.to.toLowerCase() }))
+    .filter((m) => m.from && m.to && m.from !== ZERO_ADDRESS && m.to !== ZERO_ADDRESS);
+  if (sales.length === 0) return out;
+
+  const orders: DecodedOrder[] = [];
+  const nftMoves: NftMove[] = [];
+  const fungibleMoves: FungibleMove[] = [];
+  for (const log of receipt.logs ?? []) {
+    const topic0 = log.topics?.[0]?.toLowerCase();
+    if (topic0 === ORDER_FULFILLED_TOPIC) {
+      const order = decodeOrder(log);
+      if (order) orders.push(order);
+    } else if (topic0 === TRANSFER_TOPIC) {
+      const address = log.address.toLowerCase();
+      if (log.topics.length === 4) {
+        // ERC-721: tokenId is indexed.
+        nftMoves.push({
+          contract: address,
+          from: topicAddress(log.topics[1]),
+          to: topicAddress(log.topics[2]),
+          tokenId: BigInt(log.topics[3]).toString(),
+          units: 1n,
+        });
+      } else if (log.topics.length === 3 && nativeTokens.has(address)) {
+        const amount = safeBigInt(log.data);
+        if (amount !== null) {
+          fungibleMoves.push({ token: address, from: topicAddress(log.topics[1]), to: topicAddress(log.topics[2]), amount });
+        }
+      }
+    } else if (topic0 === TRANSFER_SINGLE_TOPIC || topic0 === TRANSFER_BATCH_TOPIC) {
+      nftMoves.push(...decode1155(log));
+    }
+  }
+
+  // 1. Seaport. A bid-side order (the buyer is the offerer, paying with what it
+  //    offers) is preferred over a listing-side one: when a bid is accepted via
+  //    matched orders, the seller's counter-order lists only their net payout.
+  const fromBids = new Map<string, SalePrice>();
+  const fromListings = new Map<string, SalePrice>();
+  for (const order of orders) {
+    const offerNfts = order.offer.filter((i) => NFT_ITEM_TYPES.has(i.itemType));
+    const considerationNfts = order.consideration.filter((i) => NFT_ITEM_TYPES.has(i.itemType));
+    const offerPay = paymentTotal(order.offer, nativeTokens);
+    const considerationPay = paymentTotal(order.consideration, nativeTokens);
+    if (offerPay === null || considerationPay === null) continue; // paid in a token we can't value
+
+    if (offerNfts.length > 0 && offerPay === 0n && considerationNfts.length === 0) {
+      // Listing: the offerer sells NFTs; consideration is the payments.
+      const units = nftUnits(offerNfts);
+      if (considerationPay === 0n || units === 0n) continue;
+      const toSeller = paymentTotal(
+        order.consideration.filter((i) => (i.recipient ?? '').toLowerCase() === order.offerer),
+        nativeTokens,
+      )!;
+      for (const item of offerNfts) {
+        if (item.token.toLowerCase() !== collection) continue;
+        fromListings.set(item.identifier.toString(), {
+          gross: toNative((considerationPay * itemUnits(item)) / units),
+          sellerNet: toNative((toSeller * itemUnits(item)) / units),
+        });
+      }
+    } else if (offerNfts.length === 0 && offerPay > 0n && considerationNfts.length > 0) {
+      // Bid: the offerer pays; consideration is the NFTs it receives plus fees
+      // taken out of its payment. The seller gets what's left.
+      const units = nftUnits(considerationNfts);
+      if (units === 0n) continue;
+      const net = offerPay > considerationPay ? offerPay - considerationPay : 0n;
+      for (const item of considerationNfts) {
+        if (item.token.toLowerCase() !== collection) continue;
+        fromBids.set(item.identifier.toString(), {
+          gross: toNative((offerPay * itemUnits(item)) / units),
+          sellerNet: toNative((net * itemUnits(item)) / units),
+        });
+      }
+    }
+  }
+  for (const sale of sales) {
+    const price = fromBids.get(sale.tokenId) ?? fromListings.get(sale.tokenId);
+    if (price && price.gross > 0) out.set(sale.tokenId, price);
+  }
+  // Any Seaport activity means the payment flows below are mixed up with
+  // orders we've already read; don't guess on top of them.
+  if (orders.length > 0) return out;
+
+  // 2. Payment-flow fallback, per buyer.
+  const zksync = ZKSYNC_CHAINS.has(chain);
+  const txFrom = (receipt.from ?? '').toLowerCase();
+  const buyers = new Set(sales.filter((s) => !out.has(s.tokenId)).map((s) => s.to));
+  for (const buyer of buyers) {
+    // Every NFT moved in this tx must land with this buyer; otherwise the
+    // payment can't be attributed (aggregator hops, gifts to third parties).
+    const received = nftMoves.filter((m) => m.from !== ZERO_ADDRESS);
+    if (received.length === 0 || received.some((m) => m.to !== buyer)) continue;
+    const units = received.reduce((sum, m) => sum + m.units, 0n);
+
+    let paid = 0n;
+    if (!zksync && txFrom === buyer && txValue !== null) paid += txValue;
+    for (const f of fungibleMoves) {
+      if (f.from !== buyer) continue;
+      if (zksync && f.to === ZKSYNC_BOOTLOADER) continue; // gas
+      paid += f.amount;
+    }
+    if (paid === 0n || units === 0n) continue;
+    const grossPerUnit = paid / units;
+
+    for (const sale of sales) {
+      if (sale.to !== buyer || out.has(sale.tokenId)) continue;
+      const seller = sale.from;
+      const sellerUnits = received.filter((m) => m.from === seller).reduce((sum, m) => sum + m.units, 0n);
+      const toSeller = fungibleMoves
+        .filter((f) => f.to === seller && f.from !== ZKSYNC_BOOTLOADER)
+        .reduce((sum, f) => sum + f.amount, 0n);
+      let netPerUnit = toSeller > 0n && sellerUnits > 0n ? toSeller / sellerUnits : grossPerUnit;
+      if (netPerUnit > grossPerUnit) netPerUnit = grossPerUnit;
+      out.set(sale.tokenId, { gross: toNative(grossPerUnit), sellerNet: toNative(netPerUnit) });
+    }
+  }
+  return out;
+}
+
+function decodeOrder(log: ReceiptLog): DecodedOrder | null {
+  try {
+    const { args } = decodeEventLog({
+      abi: ABI,
+      eventName: 'OrderFulfilled',
+      topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+      data: log.data as `0x${string}`,
+    });
+    return {
+      offerer: args.offerer.toLowerCase(),
+      offer: args.offer.map((i) => ({ ...i, itemType: Number(i.itemType) })),
+      consideration: args.consideration.map((i) => ({ ...i, itemType: Number(i.itemType) })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function decode1155(log: ReceiptLog): NftMove[] {
+  try {
+    const decoded = decodeEventLog({
+      abi: ABI,
+      topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+      data: log.data as `0x${string}`,
+    });
+    const contract = log.address.toLowerCase();
+    if (decoded.eventName === 'TransferSingle') {
+      const { from, to, id, value } = decoded.args;
+      return [{ contract, from: from.toLowerCase(), to: to.toLowerCase(), tokenId: id.toString(), units: value }];
+    }
+    if (decoded.eventName === 'TransferBatch') {
+      const { from, to, ids, values } = decoded.args;
+      return ids.map((id, i) => ({
+        contract,
+        from: from.toLowerCase(),
+        to: to.toLowerCase(),
+        tokenId: id.toString(),
+        units: values[i] ?? 0n,
+      }));
+    }
+  } catch {
+    // Not decodable as ERC-1155; ignore.
+  }
+  return [];
+}
+
+/** Sum of native / native-equivalent payments, or null if any payment is in another token. */
+function paymentTotal(items: SeaportItem[], nativeTokens: Set<string>): bigint | null {
+  let total = 0n;
+  for (const item of items) {
+    if (item.itemType === NATIVE) total += item.amount;
+    else if (item.itemType === ERC20) {
+      if (!nativeTokens.has(item.token.toLowerCase())) return null;
+      total += item.amount;
+    }
+  }
+  return total;
+}
+
+/** An NFT item's share of its order: its amount (1 for ERC-721), never less than 1. */
+function itemUnits(item: SeaportItem): bigint {
+  return item.amount > 0n ? item.amount : 1n;
+}
+
+function nftUnits(items: SeaportItem[]): bigint {
+  return items.reduce((sum, i) => sum + itemUnits(i), 0n);
+}
+
+function topicAddress(topic: string): string {
+  return `0x${topic.slice(-40)}`.toLowerCase();
+}
+
+function safeBigInt(hex: string): bigint | null {
+  try {
+    return hex && hex !== '0x' ? BigInt(hex) : 0n;
+  } catch {
+    return null;
+  }
+}
+
+/** Wei (18 decimals — every native coin and equivalent above) to a native-coin number. */
+function toNative(wei: bigint): number {
+  return Number(wei) / 1e18;
+}
