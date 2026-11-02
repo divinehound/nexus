@@ -161,7 +161,8 @@ export class HolderAnalysisReportService {
     r.summary.timing = { load_ms: t1 - t0, analyse_ms: t2 - t1, transfers: transfers.length };
     // What this report saw, so the 10-minute check can tell when it's out of date.
     r.summary.blocks = blocks;
-    r.summary.collections = project.collections.map((c) => ({ id: c.id, collectionId: c.collectionId, chain: c.chain, name: c.name, core: c.core, standard: c.standard }));
+    // Alongside the analysis' own per-collection stats (summary.collections, keyed by short id), never over them.
+    r.summary.nexus_collections = project.collections.map((c) => ({ id: c.id, collectionId: c.collectionId, chain: c.chain, name: c.name, core: c.core, standard: c.standard }));
 
     const p = project.id;
     await this.db.transaction(async (tx) => {

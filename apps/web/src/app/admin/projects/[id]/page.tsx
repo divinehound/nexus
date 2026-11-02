@@ -7,6 +7,7 @@ import { CHAIN_META } from '@nexus/types';
 import { apiFetch } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
 import { ConfirmModal } from '@/components/ui/confirm-modal';
+import { HolderAnalysisAdminPanel } from '@/components/holder-analysis/admin-panel';
 
 interface CollectionRow {
   id: string;
@@ -371,6 +372,10 @@ export default function AdminProjectEditorPage({ params }: { params: Promise<{ i
           </button>
         </div>
       </section>
+
+      {accessToken && (
+        <HolderAnalysisAdminPanel key={project.collections.map((c) => c.id).join(',')} projectId={project.id} slug={project.slug} token={accessToken} />
+      )}
 
       <ConfirmModal
         isOpen={!!moveTarget}

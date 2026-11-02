@@ -28,6 +28,12 @@ export class HolderAnalysisController {
     private readonly cron: HolderAnalysisSyncCron,
   ) {}
 
+  @Get('access')
+  @ApiOperation({ summary: 'Whether the viewer may open the report (403 otherwise) and whether it is turned on' })
+  access(@Param('projectId', ParseUUIDPipe) projectId: string) {
+    return this.analysis.access(projectId);
+  }
+
   @Get()
   @ApiOperation({ summary: 'The latest report: summary, collections, what the analysis is waiting for' })
   overview(@Param('projectId', ParseUUIDPipe) projectId: string, @Req() req: AuthRequest) {
@@ -79,8 +85,8 @@ export class HolderAnalysisController {
 
   @Get('groups')
   @ApiOperation({ summary: 'Groups of wallets that are likely one person' })
-  groups(@Param('projectId', ParseUUIDPipe) projectId: string, @Query() q: Paging) {
-    return this.analysis.groups(projectId, q);
+  groups(@Param('projectId', ParseUUIDPipe) projectId: string, @Req() req: AuthRequest, @Query() q: Paging) {
+    return this.analysis.groups(projectId, req.user.sub, q);
   }
 
   @Get('activity')

@@ -3,6 +3,7 @@ import { apiFetch, type CollectionVerificationStatus } from '@/lib/api';
 import { TrustBadge, TrustDisclaimer } from '@/components/trust/trust-badge';
 import { formatPrice, truncateAddress, chainCurrency } from '@/lib/utils';
 import { ProjectTabs } from '@/components/project/project-tabs';
+import { HolderAnalysisLink } from '@/components/holder-analysis/report-link';
 
 interface ProjectPageProps {
   params: Promise<{ slug: string }>;
@@ -106,7 +107,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
           {project.description && (
             <p className="mt-2 text-gray-400">{project.description}</p>
           )}
-          <div className="mt-2 flex gap-4">
+          <div className="mt-2 flex items-center gap-4">
             {project.websiteUrl && (
               <a href={project.websiteUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-gray-500 hover:text-white">Website</a>
             )}
@@ -116,6 +117,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
             {project.discordUrl && (
               <a href={project.discordUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-gray-500 hover:text-white">Discord</a>
             )}
+            <HolderAnalysisLink projectId={project.id} slug={project.slug} />
           </div>
         </div>
       </div>
