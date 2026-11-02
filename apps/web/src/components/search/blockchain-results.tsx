@@ -19,7 +19,7 @@ interface BlockchainContractInfo {
 }
 
 interface ImportResult {
-  collection: { id: string; contractAddress: string };
+  collection: { id: string; contractAddress: string; chain?: string };
   project: { id: string; slug: string } | null;
   alreadyExisted: boolean;
 }
@@ -102,7 +102,7 @@ function BlockchainResultCard({ info }: { info: BlockchainContractInfo }) {
             router.push(
               imported.project
                 ? `/project/${imported.project.slug}/${info.contractAddress}`
-                : `/collection/${info.chain}/${info.contractAddress}`,
+                : `/collection/${imported.collection.chain ?? info.chain}/${imported.collection.contractAddress}`,
             )
           }
           className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-500"

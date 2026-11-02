@@ -61,4 +61,15 @@ describeDb('new collections get no project of their own (database)', () => {
     expect(row?.projectId).toBeNull();
     expect(await projectCount()).toBe(before);
   });
+
+  it('stores an imported EVM address lowercase and finds it again in any case', async () => {
+    const lower = address(4);
+    const mixed = `0x${lower.slice(2).toUpperCase()}`;
+    const service = new CollectionImportService(db, lookup(mixed) as any);
+    const first = await service.importCollection(mixed, 'ethereum');
+    created.push(first.collection.id);
+    expect(first.collection.contractAddress).toBe(lower);
+    const again = await service.importCollection(mixed, 'ethereum');
+    expect(again).toMatchObject({ alreadyExisted: true, collection: { id: first.collection.id } });
+  });
 });

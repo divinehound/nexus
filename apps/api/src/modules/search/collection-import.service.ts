@@ -7,7 +7,7 @@ import {
   collections,
   marketSnapshots,
 } from '@nexus/database';
-import { isContractAddress } from '@nexus/types';
+import { isContractAddress, isEvmAddress } from '@nexus/types';
 import { BlockchainLookupService } from './blockchain-lookup.service';
 
 @Injectable()
@@ -24,14 +24,20 @@ export class CollectionImportService {
    * Auto-matches to an existing project by deployer address; otherwise the
    * collection has no project until an admin groups it into one.
    */
-  async importCollection(contractAddress: string, chain: string) {
-    if (!isContractAddress(contractAddress)) {
+  async importCollection(rawAddress: string, chain: string) {
+    if (typeof rawAddress !== 'string' || !isContractAddress(rawAddress.trim())) {
       throw new BadRequestException('Invalid contract address');
     }
+    // EVM addresses are stored lowercase (as trackCollection does), so a pasted
+    // checksummed address matches existing rows and the /collection page.
+    const evm = isEvmAddress(rawAddress.trim());
+    const contractAddress = evm ? rawAddress.trim().toLowerCase() : rawAddress.trim();
 
     // Check if already exists
     const existing = await this.db.query.collections.findFirst({
-      where: eq(collections.contractAddress, contractAddress),
+      where: evm
+        ? sql`LOWER(${collections.contractAddress}) = ${contractAddress}`
+        : eq(collections.contractAddress, contractAddress),
       with: { project: true },
     });
     if (existing) {
@@ -60,7 +66,7 @@ export class CollectionImportService {
       .insert(collections)
       .values({
         projectId: project?.id ?? null,
-        contractAddress: contractInfo.contractAddress,
+        contractAddress: evm ? contractInfo.contractAddress.toLowerCase() : contractInfo.contractAddress,
         chain: contractInfo.chain as any,
         name: contractInfo.name,
         imageUrl: contractInfo.imageUrl,
