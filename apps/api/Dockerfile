@@ -17,6 +17,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY apps/api/package.json apps/api/
 COPY packages/database/package.json packages/database/
 COPY packages/types/package.json packages/types/
+COPY packages/holder-analysis/package.json packages/holder-analysis/
 COPY packages/eslint-config/package.json packages/eslint-config/
 RUN pnpm install --frozen-lockfile
 

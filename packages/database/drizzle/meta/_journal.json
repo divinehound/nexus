@@ -260,6 +260,13 @@
       "when": 1791160000000,
       "tag": "0036_drop_zero_balance_holders",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1793650000000,
+      "tag": "0037_holder_analysis",
+      "breakpoints": true
     }
   ]
 }

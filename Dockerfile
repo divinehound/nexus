@@ -8,6 +8,7 @@ WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml* package.json ./
 COPY packages/database/package.json packages/database/
 COPY packages/types/package.json packages/types/
+COPY packages/holder-analysis/package.json packages/holder-analysis/
 COPY packages/eslint-config/package.json packages/eslint-config/
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
