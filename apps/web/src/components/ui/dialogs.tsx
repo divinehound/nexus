@@ -1,4 +1,5 @@
-import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useLocation } from 'react-router';
 import * as Dialog from '@radix-ui/react-dialog';
 
 /**
@@ -8,7 +9,8 @@ import * as Dialog from '@radix-ui/react-dialog';
  *   const name = await promptDialog({ title: 'Name this passkey', defaultValue: 'Laptop' });
  *
  * They work from anywhere, hooks or not, as long as <DialogHost /> is mounted once (it is, in
- * the root layout). Requests made while a dialog is open wait their turn.
+ * the root layout). Requests made while a dialog is open wait their turn. Changing page cancels
+ * anything still open, so an answer can't act on a page that's gone.
  */
 
 type Variant = 'default' | 'danger' | 'warning';
@@ -60,6 +62,18 @@ function settle(id: number, value: boolean | string | null) {
   else request.resolve(typeof value === 'string' ? value : null);
 }
 
+/** Cancels every open or waiting dialog. */
+function cancelAll() {
+  const pending = queue;
+  if (pending.length === 0) return;
+  queue = [];
+  emit();
+  for (const r of pending) {
+    if (r.kind === 'confirm') r.resolve(false);
+    else r.resolve(null);
+  }
+}
+
 /** Asks a yes/no question. Resolves true on confirm, false on cancel, Escape or clicking away. */
 export function confirmDialog(options: ConfirmOptions): Promise<boolean> {
   return new Promise((resolve) => enqueue({ id: nextId++, kind: 'confirm', options, resolve }));
@@ -95,6 +109,9 @@ const CONFIRM_BUTTON_BASE = 'rounded-lg px-4 py-2 text-sm font-medium text-white
 /** Renders whichever dialog is first in line. Mount once, near the root. */
 export function DialogHost() {
   const current = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const { pathname } = useLocation();
+  // Leaving the page (back button, redirect) or unmounting cancels pending dialogs.
+  useEffect(() => cancelAll, [pathname]);
   if (!current) return null;
   // Keyed so each request starts with fresh field state.
   return <HostedDialog key={current.id} request={current} />;
@@ -108,6 +125,7 @@ function HostedDialog({ request }: { request: Request }) {
   const inputRef = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const openedAt = useRef(Date.now());
   const blocked = Boolean(promptOptions?.required && !value.trim());
 
   const cancel = () => settle(request.id, isPrompt ? null : false);
@@ -127,8 +145,16 @@ function HostedDialog({ request }: { request: Request }) {
             // which focus Cancel so a stray Enter doesn't delete anything.
             e.preventDefault();
             // The default text is selected so typing replaces it, as window.prompt does.
-            if (isPrompt) inputRef.current?.select();
+            if (isPrompt) {
+              inputRef.current?.focus();
+              inputRef.current?.select();
+            }
             else (options.variant === 'danger' ? cancelRef : confirmRef).current?.focus();
+          }}
+          onPointerDownOutside={(e) => {
+            // The second click of a double-click on the button that opened this lands on the
+            // overlay; don't let it count as clicking away.
+            if (Date.now() - openedAt.current < 400) e.preventDefault();
           }}
           {...(options.message ? {} : { 'aria-describedby': undefined })}
         >
