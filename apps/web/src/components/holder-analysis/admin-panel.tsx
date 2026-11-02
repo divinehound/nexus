@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { type AdminStatus, day, holderAnalysis, minute, num } from '@/lib/holder-analysis';
+import { ImportOldApp } from './import-old-app';
 import { BUTTON, INPUT, SELECT } from './shared';
 
 type Draft = { shortId: string; standard: string; core: boolean; decimals: string; staking: string };
@@ -212,6 +213,8 @@ export function HolderAnalysisAdminPanel({ projectId, slug, token }: { projectId
           );
         })}
       </div>
+
+      <ImportOldApp projectId={projectId} token={token} onDone={load} />
     </section>
   );
 }

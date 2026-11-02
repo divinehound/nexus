@@ -89,6 +89,32 @@ export type AdminStatus = {
   wallets: { total: number; read: number; delegations: number; named: number };
 };
 
+export type ImportResult = {
+  settings: { from: string; saved: string[]; failed: { collection: string; error: string }[]; missing: string[] } | null;
+  labels: { sent: number; added: number; kept: number; skipped: number };
+  unlinks: { sent: number; added: number; kept: number; skipped: number };
+  queued: boolean;
+};
+
+/**
+ * Sorts rows exported from the old app's D1 (`wrangler d1 execute ... --json`, or plain lists of
+ * rows) into its projects, wallet notes and unlinks, by their columns.
+ */
+export function sortOldAppRows(json: unknown) {
+  const out = { projects: [] as Record<string, unknown>[], notes: [] as Record<string, unknown>[], unlinks: [] as Record<string, unknown>[] };
+  const visit = (v: unknown) => {
+    if (Array.isArray(v)) return v.forEach(visit);
+    if (!v || typeof v !== 'object') return;
+    const o = v as Record<string, unknown>;
+    if (Array.isArray(o.results)) return visit(o.results);
+    if ('collections' in o && 'id' in o) out.projects.push(o);
+    else if ('wallet' in o && ('label' in o || 'note' in o)) out.notes.push(o);
+    else if ('a' in o && 'b' in o) out.unlinks.push(o);
+  };
+  visit(json);
+  return out;
+}
+
 const base = (projectId: string) => `/projects/${projectId}/holder-analysis`;
 const qs = (q: Record<string, string | number | undefined>) => {
   const u = new URLSearchParams();
@@ -121,6 +147,8 @@ export const holderAnalysis = {
   adminSaveSettings: (collectionId: string, body: Record<string, unknown>, token: string) =>
     apiFetch<AdminStatus>(`/admin/holder-analysis/collections/${collectionId}/settings`, { method: 'PUT', body: JSON.stringify(body), token }),
   adminSync: (token: string) => apiFetch<{ queued: boolean }>(`/admin/holder-analysis/sync`, { method: 'POST', token }),
+  adminImport: (projectId: string, body: { projects?: unknown[]; notes?: unknown[]; unlinks?: unknown[] }, token: string) =>
+    apiFetch<ImportResult>(`/admin/holder-analysis/projects/${projectId}/import`, { method: 'POST', body: JSON.stringify(body), token }),
 };
 
 /** Downloads one of the report's CSVs (they need the sign-in token, so a plain link won't do). */

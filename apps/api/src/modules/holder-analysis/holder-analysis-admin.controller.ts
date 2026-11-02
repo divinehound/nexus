@@ -1,7 +1,8 @@
-import { BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AdminGuard } from '../../common/guards/admin.guard';
 import { type CollectionSettingsInput, HolderAnalysisAdminService } from './holder-analysis-admin.service';
+import { HolderAnalysisImportService, type ImportInput } from './import.service';
 import { HolderAnalysisSyncCron } from './sync.processor';
 
 @ApiTags('admin')
@@ -12,6 +13,7 @@ export class HolderAnalysisAdminController {
   constructor(
     private readonly admin: HolderAnalysisAdminService,
     private readonly cron: HolderAnalysisSyncCron,
+    private readonly importer: HolderAnalysisImportService,
   ) {}
 
   @Get('projects/:id')
@@ -31,6 +33,13 @@ export class HolderAnalysisAdminController {
   @ApiOperation({ summary: "Save how the analysis treats a collection (short id, core, standard, staking contracts…)" })
   saveSettings(@Param('id', ParseUUIDPipe) id: string, @Body() body: CollectionSettingsInput) {
     return this.admin.saveSettings(id, body ?? {});
+  }
+
+  @Post('projects/:id/import')
+  @ApiOperation({ summary: "Bring over the old holder analysis app's collection settings, wallet labels and notes, and unlinks (rows from its D1)" })
+  async import(@Param('id', ParseUUIDPipe) id: string, @Req() req: { user: { sub: string } }, @Body() body: ImportInput) {
+    const result = await this.importer.import(id, req.user.sub, body ?? {});
+    return { ...result, queued: await this.cron.enqueueAnalysis(id) };
   }
 
   @Post('sync')
