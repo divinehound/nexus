@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { type Database, collections, projects } from '@nexus/database';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { CollectionsService } from '../collections/collections.service';
@@ -16,6 +16,11 @@ export type ProjectFields = {
   twitterUrl?: string | null;
   discordUrl?: string | null;
 };
+
+/** Most projects one bulk delete takes. */
+export const MAX_BULK_DELETE = 500;
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const EDITABLE: (keyof ProjectFields)[] = ['name', 'slug', 'description', 'imageUrl', 'websiteUrl', 'twitterUrl', 'discordUrl'];
 
@@ -207,6 +212,115 @@ export class AdminProjectsService {
       .set({ projectId: null, mappingStatus: 'unmapped', lastSeenAt: new Date() })
       .where(eq(collections.id, collectionId));
     return { collectionId, removed: true };
+  }
+
+  /**
+   * Deletes projects without deleting their collections.
+   *
+   * collections.project_id cascades on delete, so deleting a project row on its
+   * own would also delete its collections (and their holders, sales and metrics).
+   * Here the collections are taken out of the project first and stay tracked,
+   * unmapped. Pending suggestions pointing at a deleted project are cleared.
+   * Data that belongs to the project itself goes with it: owners, wiki pages and
+   * suggestions, events, activity feed rows and its holder-analysis data.
+   *
+   * The intake bucket for unassigned contracts is never deleted. With
+   * markCollectionsSpam, the unlinked collections are also flagged as spam
+   * (manual, score 100), as marking one collection as spam from the admin does.
+   */
+  async deleteProjects(projectIds: unknown, opts: { markCollectionsSpam?: boolean } = {}) {
+    if (!Array.isArray(projectIds) || projectIds.some((id) => typeof id !== 'string')) {
+      throw new BadRequestException('projectIds must be an array of project ids');
+    }
+    const ids = [...new Set(projectIds as string[])];
+    if (ids.length === 0) throw new BadRequestException('Choose at least one project');
+    if (ids.length > MAX_BULK_DELETE) {
+      throw new BadRequestException(`Delete at most ${MAX_BULK_DELETE} projects at a time`);
+    }
+    const invalid = ids.filter((id) => !UUID_RE.test(id));
+    if (invalid.length) throw new BadRequestException(`Not a project id: ${invalid.slice(0, 3).join(', ')}`);
+
+    return this.db.transaction(async (tx) => {
+      // FOR UPDATE stops a collection being added to one of these projects while we
+      // work: that insert needs a key-share lock on the project row. Otherwise the
+      // new collection would be deleted with the project by the cascade.
+      const found = await tx
+        .select({ id: projects.id, name: projects.name, slug: projects.slug })
+        .from(projects)
+        .where(inArray(projects.id, ids))
+        .for('update');
+      const foundIds = new Set(found.map((p) => p.id));
+      const notFound = ids.filter((id) => !foundIds.has(id));
+      const skipped = found
+        .filter((p) => p.slug === UNASSIGNED_SLUG)
+        .map((p) => ({ id: p.id, name: p.name, reason: 'The intake bucket for unassigned contracts is kept' }));
+      const targets = found.filter((p) => p.slug !== UNASSIGNED_SLUG);
+      const targetIds = targets.map((p) => p.id);
+      if (targetIds.length === 0) {
+        return { deleted: [], unlinkedCollections: 0, flaggedSpam: 0, skipped, notFound };
+      }
+
+      const now = new Date();
+      // Flag first, and only collections not already flagged, so an earlier
+      // detection keeps its source, reason and time.
+      const flagged = opts.markCollectionsSpam
+        ? await tx
+            .update(collections)
+            .set({
+              isSpam: true,
+              spamScore: 100,
+              spamReason: 'project_deleted_as_spam',
+              spamDetectedAt: now,
+              spamDetectedBy: 'manual',
+            })
+            .where(and(inArray(collections.projectId, targetIds), sql`${collections.isSpam} IS NOT TRUE`))
+            .returning({ id: collections.id })
+        : [];
+
+      // Only "mapped" means mapped to this project; a "suggested" (for another
+      // project) or "rejected" status is left as it is.
+      const unlinked = await tx
+        .update(collections)
+        .set({
+          projectId: null,
+          mappingStatus: sql`CASE WHEN ${collections.mappingStatus} = 'mapped' THEN 'unmapped'::mapping_status ELSE ${collections.mappingStatus} END`,
+          lastSeenAt: now,
+        })
+        .where(inArray(collections.projectId, targetIds))
+        .returning({ id: collections.id });
+
+      // proposed_project_id is ON DELETE SET NULL, which would leave these
+      // "suggested" with nothing suggested; put them back to unmapped.
+      await tx
+        .update(collections)
+        .set({
+          proposedProjectId: null,
+          mappingConfidence: null,
+          mappingStatus: sql`CASE WHEN ${collections.mappingStatus} = 'suggested' THEN 'unmapped'::mapping_status ELSE ${collections.mappingStatus} END`,
+        })
+        .where(inArray(collections.proposedProjectId, targetIds));
+
+      const deleted = await tx
+        .delete(projects)
+        .where(inArray(projects.id, targetIds))
+        .returning({ id: projects.id, name: projects.name });
+
+      return {
+        deleted,
+        unlinkedCollections: unlinked.length,
+        flaggedSpam: flagged.length,
+        skipped,
+        notFound,
+      };
+    });
+  }
+
+  /** Deletes one project, keeping its collections (see deleteProjects). */
+  async deleteProject(projectId: string) {
+    const result = await this.deleteProjects([projectId]);
+    if (result.skipped.length) throw new BadRequestException(result.skipped[0].reason);
+    if (result.deleted.length === 0) throw new NotFoundException('Project not found');
+    return { deleted: true, unlinkedCollections: result.unlinkedCollections };
   }
 
   /** Moves a collection into the project; returns the project it was in before. */

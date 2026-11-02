@@ -7,7 +7,7 @@ import {
   collections,
   marketSnapshots,
 } from '@nexus/database';
-import { isContractAddress } from '@nexus/types';
+import { isContractAddress, isEvmAddress } from '@nexus/types';
 import { BlockchainLookupService } from './blockchain-lookup.service';
 
 @Injectable()
@@ -21,16 +21,23 @@ export class CollectionImportService {
 
   /**
    * Import a contract from the blockchain into the local database.
-   * Auto-matches to an existing project by deployer address, or creates a new unverified project.
+   * Auto-matches to an existing project by deployer address; otherwise the
+   * collection has no project until an admin groups it into one.
    */
-  async importCollection(contractAddress: string, chain: string) {
-    if (!isContractAddress(contractAddress)) {
+  async importCollection(rawAddress: string, chain: string) {
+    if (typeof rawAddress !== 'string' || !isContractAddress(rawAddress.trim())) {
       throw new BadRequestException('Invalid contract address');
     }
+    // EVM addresses are stored lowercase (as trackCollection does), so a pasted
+    // checksummed address matches existing rows and the /collection page.
+    const evm = isEvmAddress(rawAddress.trim());
+    const contractAddress = evm ? rawAddress.trim().toLowerCase() : rawAddress.trim();
 
     // Check if already exists
     const existing = await this.db.query.collections.findFirst({
-      where: eq(collections.contractAddress, contractAddress),
+      where: evm
+        ? sql`LOWER(${collections.contractAddress}) = ${contractAddress}`
+        : eq(collections.contractAddress, contractAddress),
       with: { project: true },
     });
     if (existing) {
@@ -48,40 +55,18 @@ export class CollectionImportService {
     const contractInfo = results[0];
 
     // Try to match to an existing project by deployer address
-    let project = null;
-    if (contractInfo.deployerAddress) {
-      project = await this.db.query.projects.findFirst({
-        where: sql`${contractInfo.deployerAddress} = ANY(${projects.deployerAddresses})`,
-      });
-    }
-
-    // No deployer match — create a new unverified project
-    if (!project) {
-      const slug = await this.generateUniqueSlug(contractInfo.name);
-      const deployerAddresses = contractInfo.deployerAddress
-        ? [contractInfo.deployerAddress]
-        : [];
-
-      const [newProject] = await this.db
-        .insert(projects)
-        .values({
-          name: contractInfo.name,
-          slug,
-          imageUrl: contractInfo.imageUrl,
-          deployerAddresses,
-          isVerified: false,
-        })
-        .returning();
-
-      project = newProject;
-    }
+    const project = contractInfo.deployerAddress
+      ? ((await this.db.query.projects.findFirst({
+          where: sql`${contractInfo.deployerAddress} = ANY(${projects.deployerAddresses})`,
+        })) ?? null)
+      : null;
 
     // Insert the collection
     const [newCollection] = await this.db
       .insert(collections)
       .values({
-        projectId: project.id,
-        contractAddress: contractInfo.contractAddress,
+        projectId: project?.id ?? null,
+        contractAddress: evm ? contractInfo.contractAddress.toLowerCase() : contractInfo.contractAddress,
         chain: contractInfo.chain as any,
         name: contractInfo.name,
         imageUrl: contractInfo.imageUrl,
@@ -98,28 +83,6 @@ export class CollectionImportService {
       project,
       alreadyExisted: false,
     };
-  }
-
-  /**
-   * Generate a unique slug from a name.
-   */
-  private async generateUniqueSlug(name: string): Promise<string> {
-    const base = name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      || 'unknown';
-
-    // Check if slug exists
-    const existing = await this.db.query.projects.findFirst({
-      where: eq(projects.slug, base),
-    });
-
-    if (!existing) return base;
-
-    // Append random suffix
-    const suffix = Math.random().toString(36).slice(2, 6);
-    return `${base}-${suffix}`;
   }
 
   /**

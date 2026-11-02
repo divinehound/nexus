@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import { eq, and, count, sql, desc, or } from 'drizzle-orm';
+import { eq, and, count, sql, desc, or, inArray, type SQL } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import {
   type Database,
@@ -91,17 +91,68 @@ export class AdminService {
 
   // --- Project Management ---
 
-  async listProjects(page = 1, limit = 50) {
+  /**
+   * filter: "auto" = made automatically from a contract (slug auto-…),
+   * "spam" = has a collection flagged as spam, "empty" = has no collections.
+   * q matches the name or slug.
+   */
+  async listProjects(page = 1, limit = 50, opts: { q?: string; filter?: string } = {}) {
+    page = Number.isFinite(page) && page >= 1 ? Math.floor(page) : 1;
+    limit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 500) : 50;
     const offset = (page - 1) * limit;
-    const items = await this.db.query.projects.findMany({
-      limit,
-      offset,
-      with: { collections: true },
-      orderBy: (projects, { desc }) => [desc(projects.createdAt)],
-    });
-    const [[total]] = await Promise.all([
-      this.db.select({ value: count() }).from(projects),
+
+    const conditions: SQL[] = [];
+    const q = opts.q?.trim();
+    if (q) {
+      const like = `%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`;
+      conditions.push(sql`(${projects.name} ILIKE ${like} OR ${projects.slug} ILIKE ${like})`);
+    }
+    switch (opts.filter) {
+      case undefined:
+      case '':
+      case 'all':
+        break;
+      case 'auto':
+        conditions.push(sql`${projects.slug} LIKE 'auto-%'`);
+        break;
+      case 'spam':
+        conditions.push(
+          sql`EXISTS (SELECT 1 FROM collections c WHERE c.project_id = ${projects.id} AND c.is_spam IS TRUE)`,
+        );
+        break;
+      case 'empty':
+        conditions.push(sql`NOT EXISTS (SELECT 1 FROM collections c WHERE c.project_id = ${projects.id})`);
+        break;
+      default:
+        throw new BadRequestException('filter must be all, auto, spam or empty');
+    }
+    const where = conditions.length ? and(...conditions) : undefined;
+
+    // Page the ids with the core builder (the relational builder aliases the
+    // table, which the raw subqueries above can't see), then load the rows.
+    const [pageRows, [total]] = await Promise.all([
+      this.db
+        .select({ id: projects.id })
+        .from(projects)
+        .where(where)
+        .orderBy(desc(projects.createdAt), projects.id)
+        .limit(limit)
+        .offset(offset),
+      this.db.select({ value: count() }).from(projects).where(where),
     ]);
+    const ids = pageRows.map((r) => r.id);
+    const rows = ids.length
+      ? await this.db.query.projects.findMany({
+          where: inArray(projects.id, ids),
+          with: {
+            collections: {
+              columns: { id: true, name: true, contractAddress: true, chain: true, isSpam: true },
+            },
+          },
+        })
+      : [];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const items = ids.map((id) => byId.get(id)).filter((r) => r !== undefined);
     return { items, total: total.value, page, limit };
   }
 
@@ -138,15 +189,6 @@ export class AdminService {
       .returning();
     if (!updated) throw new NotFoundException('Project not found');
     return updated;
-  }
-
-  async deleteProject(projectId: string) {
-    const [deleted] = await this.db
-      .delete(projects)
-      .where(eq(projects.id, projectId))
-      .returning();
-    if (!deleted) throw new NotFoundException('Project not found');
-    return { deleted: true };
   }
 
   // --- Collections Search ---

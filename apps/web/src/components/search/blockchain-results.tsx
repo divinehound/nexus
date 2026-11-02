@@ -19,8 +19,8 @@ interface BlockchainContractInfo {
 }
 
 interface ImportResult {
-  collection: { id: string; contractAddress: string };
-  project: { id: string; slug: string };
+  collection: { id: string; contractAddress: string; chain?: string };
+  project: { id: string; slug: string } | null;
   alreadyExisted: boolean;
 }
 
@@ -92,13 +92,17 @@ function BlockchainResultCard({ info }: { info: BlockchainContractInfo }) {
           <p className="text-sm text-gray-500">
             {imported.alreadyExisted
               ? 'This collection already existed.'
-              : 'Collection and project created. Data generation has started.'}
+              : imported.project
+                ? 'Collection added to its project. Data generation has started.'
+                : 'Collection added. Data generation has started.'}
           </p>
         </div>
         <button
           onClick={() =>
             router.push(
-              `/project/${imported.project.slug}/${info.contractAddress}`,
+              imported.project
+                ? `/project/${imported.project.slug}/${info.contractAddress}`
+                : `/collection/${imported.collection.chain ?? info.chain}/${imported.collection.contractAddress}`,
             )
           }
           className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-purple-500"

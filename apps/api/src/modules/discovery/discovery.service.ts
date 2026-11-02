@@ -76,8 +76,12 @@ export class DiscoveryService {
     });
 
     const heldProjectIds = [...new Set(cols.map((c) => c.projectId).filter((id): id is string => id !== null))];
+    // Without this, an empty list would load every project in the catalogue.
+    if (heldProjectIds.length === 0) {
+      return { walletAddress, echoScore: 50, label: 'Explorer' };
+    }
     const heldProjects = await this.db.query.projects.findMany({
-      where: heldProjectIds.length > 0 ? inArray(projects.id, heldProjectIds) : undefined,
+      where: inArray(projects.id, heldProjectIds),
     });
 
     const clusterIds = heldProjects
