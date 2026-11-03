@@ -8,6 +8,7 @@ const CHAIN_CURRENCIES: Record<string, string> = {
   abstract: 'ETH',
   apechain: 'APE',
   polygon: 'POL',
+  robinhood: 'ETH',
   solana: 'SOL',
 };
 
@@ -30,6 +31,7 @@ const EXPLORER_ADDRESS_URLS: Record<string, string> = {
   polygon: 'https://polygonscan.com/address/',
   abstract: 'https://explorer.abs.xyz/address/',
   apechain: 'https://apescan.io/address/',
+  robinhood: 'https://robinhoodchain.blockscout.com/address/',
   solana: 'https://solscan.io/account/',
 };
 

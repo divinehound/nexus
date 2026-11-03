@@ -169,6 +169,7 @@ const EXPLORERS: Record<string, string> = {
   abstract: 'https://abscan.org',
   apechain: 'https://apescan.io',
   polygon: 'https://polygonscan.com',
+  robinhood: 'https://robinhoodchain.blockscout.com',
 };
 export const explorerAddress = (chain: string, address: string) => `${EXPLORERS[chain] ?? EXPLORERS.ethereum}/address/${address}`;
 export const explorerTx = (chain: string, tx: string) => `${EXPLORERS[chain] ?? EXPLORERS.ethereum}/tx/${tx}`;

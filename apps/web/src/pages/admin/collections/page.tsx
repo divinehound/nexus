@@ -830,6 +830,7 @@ export default function AdminCollectionsPage() {
             <option value="solana">Solana</option>
             <option value="abstract">Abstract</option>
             <option value="apechain">ApeChain</option>
+            <option value="robinhood">Robinhood Chain</option>
             <option value="arbitrum">Arbitrum</option>
             <option value="optimism">Optimism</option>
             <option value="avalanche">Avalanche</option>

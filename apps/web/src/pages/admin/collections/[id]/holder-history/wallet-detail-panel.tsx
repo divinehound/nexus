@@ -62,6 +62,7 @@ export default function WalletDetailPanel({ entries, xDomain, chain }: Props) {
     if (chain === 'ethereum') return `https://etherscan.io/tx/${sig}`;
     if (chain === 'base') return `https://basescan.org/tx/${sig}`;
     if (chain === 'polygon') return `https://polygonscan.com/tx/${sig}`;
+    if (chain === 'robinhood') return `https://robinhoodchain.blockscout.com/tx/${sig}`;
     return null;
   };
 
@@ -75,6 +76,7 @@ export default function WalletDetailPanel({ entries, xDomain, chain }: Props) {
     if (chain === 'ethereum') return `https://etherscan.io/address/${addr}`;
     if (chain === 'base') return `https://basescan.org/address/${addr}`;
     if (chain === 'polygon') return `https://polygonscan.com/address/${addr}`;
+    if (chain === 'robinhood') return `https://robinhoodchain.blockscout.com/address/${addr}`;
     return null;
   };
 

@@ -4,6 +4,7 @@ export enum Chain {
   ABSTRACT = 'abstract',
   APECHAIN = 'apechain',
   POLYGON = 'polygon',
+  ROBINHOOD = 'robinhood',
   SOLANA = 'solana',
 }
 
@@ -16,6 +17,7 @@ export const EVM_CHAINS: Chain[] = [
   Chain.ABSTRACT,
   Chain.APECHAIN,
   Chain.POLYGON,
+  Chain.ROBINHOOD,
 ];
 
 export function isEvmChain(chain: string): boolean {

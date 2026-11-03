@@ -323,6 +323,13 @@
       "when": 1793730000000,
       "tag": "0045_holder_history_status",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1793740000000,
+      "tag": "0046_robinhood_chain",
+      "breakpoints": true
     }
   ]
 }

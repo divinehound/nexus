@@ -14,6 +14,7 @@ const CHAIN_NATIVE_TOKEN: Record<string, { symbol: string; coinId: string }> = {
   abstract: { symbol: 'ETH', coinId: 'ethereum' },
   polygon: { symbol: 'POL', coinId: 'matic-network' },
   apechain: { symbol: 'APE', coinId: 'apecoin' },
+  robinhood: { symbol: 'ETH', coinId: 'ethereum' },
   solana: { symbol: 'SOL', coinId: 'solana' },
 };
 

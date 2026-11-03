@@ -1,6 +1,6 @@
 import { cookieStorage, createStorage } from 'wagmi';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
-import { mainnet, base, polygon, type AppKitNetwork } from '@reown/appkit/networks';
+import { mainnet, base, polygon, defineChain, type AppKitNetwork } from '@reown/appkit/networks';
 
 // The container's WALLETCONNECT_PROJECT_ID at runtime, else the build-time value.
 export const projectId =
@@ -10,8 +10,19 @@ if (projectId === 'placeholder') {
   console.warn('WALLETCONNECT_PROJECT_ID is not set - wallet connections will not work');
 }
 
+/** Robinhood Chain mainnet (Arbitrum Orbit). Not in viem/AppKit's built-in list yet. */
+const robinhoodChain = defineChain({
+  id: 4663,
+  name: 'Robinhood Chain',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: { default: { http: ['https://rpc.mainnet.chain.robinhood.com'] } },
+  blockExplorers: { default: { name: 'Blockscout', url: 'https://robinhoodchain.blockscout.com' } },
+  chainNamespace: 'eip155',
+  caipNetworkId: 'eip155:4663',
+});
+
 // Define networks
-export const networks: [AppKitNetwork, ...AppKitNetwork[]] = [mainnet, base, polygon];
+export const networks: [AppKitNetwork, ...AppKitNetwork[]] = [mainnet, base, polygon, robinhoodChain];
 
 // Create Wagmi adapter
 export const wagmiAdapter = new WagmiAdapter({

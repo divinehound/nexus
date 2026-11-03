@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { SiweMessage, generateNonce } from 'siwe';
 import { createPublicClient, http, hashMessage, encodeAbiParameters, concat, type Hex } from 'viem';
 import { mainnet, base, abstract as abstractChain, polygon } from 'viem/chains';
+import { robinhoodChain } from '../../common/evm-chains';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { and, eq, sql } from 'drizzle-orm';
@@ -195,6 +196,7 @@ export class AuthService {
       8453: base,
       2741: abstractChain,
       137: polygon,
+      4663: robinhoodChain,
     };
     const chain = chains[chainId] ?? mainnet;
 
@@ -217,6 +219,7 @@ export class AuthService {
       2741: 'abstract',
       33139: 'apechain',
       137: 'polygon',
+      4663: 'robinhood',
     };
     return idToChain[chainId ?? 1] ?? 'ethereum';
   }

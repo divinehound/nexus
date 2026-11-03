@@ -49,6 +49,14 @@ export const CHAIN_META: Record<Chain, ChainMeta> = {
     alchemySubdomain: 'polygon-mainnet',
     isEvm: true,
   },
+  [Chain.ROBINHOOD]: {
+    // Robinhood's Arbitrum Orbit L2 (mainnet). Testnet is 46630 / robinhood-testnet.
+    name: 'Robinhood Chain',
+    currency: 'ETH',
+    evmChainId: 4663,
+    alchemySubdomain: 'robinhood-mainnet',
+    isEvm: true,
+  },
   [Chain.SOLANA]: {
     name: 'Solana',
     currency: 'SOL',

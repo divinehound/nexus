@@ -20,6 +20,7 @@ import {
 } from '@nexus/database';
 import { randomUUID } from 'crypto';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
+import { EVM_CHAINS } from '@nexus/types';
 import { WALLET_INDEXING_QUEUE } from '../../common/queue/queues';
 import { BlockchainLookupService } from '../search/blockchain-lookup.service';
 import { BlockchainIndexerService } from './blockchain-indexer.service';
@@ -287,21 +288,35 @@ export class HoldingsService {
       // For Solana, only index Solana chain
       const chainsToIndex = wallet.chain === 'solana' 
         ? ['solana']
-        : ['ethereum', 'base', 'polygon', 'abstract', 'apechain'];
+        : EVM_CHAINS;
 
       this.logger.log(`Indexing wallet ${wallet.address} across chains: ${chainsToIndex.join(', ')}`);
 
       const allHoldings: { contractAddress: string; tokenCount: number; chain: string }[] = [];
       const fullyFetchedChains: string[] = [];
 
+      // One chain's outage (or a chain the Alchemy app doesn't serve) shouldn't fail the
+      // whole wallet: a failed chain keeps its old rows (it's left out of fullyFetchedChains).
+      // Only when every chain fails does the job fail and retry.
+      const failedChains: string[] = [];
+      let lastError: unknown;
       for (const chain of chainsToIndex) {
-        const { holdings: chainHoldings, complete } = await this.blockchainIndexer.fetchWalletHoldings(
-          wallet.address,
-          chain,
-        );
-        allHoldings.push(...chainHoldings.map(h => ({ ...h, chain })));
-        if (complete) fullyFetchedChains.push(chain);
+        try {
+          const { holdings: chainHoldings, complete } = await this.blockchainIndexer.fetchWalletHoldings(
+            wallet.address,
+            chain,
+          );
+          allHoldings.push(...chainHoldings.map(h => ({ ...h, chain })));
+          if (complete) fullyFetchedChains.push(chain);
+        } catch (error) {
+          failedChains.push(chain);
+          lastError = error;
+          this.logger.warn(
+            `Skipping ${chain} for wallet ${wallet.address}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
+      if (failedChains.length === chainsToIndex.length) throw lastError;
 
       const sorted = allHoldings.sort((a, b) => b.tokenCount - a.tokenCount);
       const inScope = sorted.slice(0, this.maxCollectionsPerRun);
@@ -389,6 +404,7 @@ export class HoldingsService {
           statsJson: {
             holdingsDiscovered: allHoldings.length,
             chainsIndexed: chainsToIndex,
+            chainsFailed: failedChains,
             staleRemoved,
             active,
             lightweight,

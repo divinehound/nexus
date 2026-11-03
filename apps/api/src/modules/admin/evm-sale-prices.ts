@@ -66,6 +66,7 @@ const NATIVE_EQUIVALENT_TOKENS: Record<string, string[]> = {
     '0x000000000000000000000000000000000000800a',
   ],
   apechain: ['0x48b62137edfa95a428d35c09e44256a739f6b557'], // WAPE
+  robinhood: ['0x0bd7d308f8e1639fab988df18a8011f41eacad73'], // WETH
 };
 
 /** zkSync-stack chains: native ETH shows up as Transfer logs, so tx.value must not be added on top. */

@@ -98,7 +98,7 @@ nexus/
 
 | Enum | Values | Used by |
 |------|--------|---------|
-| `chain` | `ethereum`, `base`, `abstract`, `apechain`, `polygon`, `solana` | collections, wallets, holders |
+| `chain` | `ethereum`, `base`, `abstract`, `apechain`, `polygon`, `solana`, `robinhood` | collections, wallets, holders |
 | `collection_type` | `erc721`, `erc1155`, `spl` | collections |
 | `user_role` | `user`, `admin` | users |
 | `event_type` | `spaces`, `ama`, `mint`, `collab`, `irl`, `other` | events |
@@ -616,6 +616,7 @@ apiFetch<T>(path, { method?, body?, token? }) → Promise<T>
 | Abstract | EVM | 2741 | ETH | Abstract Global Wallet |
 | ApeChain | EVM | 33139 | APE | — |
 | Polygon | EVM | 137 | POL | — |
+| Robinhood Chain | EVM (Arbitrum Orbit) | 4663 | ETH | — |
 | Solana | SVM | — | SOL | — |
 
 - **Base Smart Wallet**: Enabled automatically via Coinbase Wallet SDK (bundled with RainbowKit). Supports gasless transactions on Base.
