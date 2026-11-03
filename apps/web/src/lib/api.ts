@@ -388,26 +388,73 @@ export function adminDiscoverCollections(
   );
 }
 
-export function adminUpdateCollection(
-  collectionId: string,
-  updates: {
-    name?: string;
-    description?: string;
-    discordUrl?: string;
-    twitterUrl?: string;
-    websiteUrl?: string;
-    telegramUrl?: string;
-    externalUrl?: string;
-  },
-  token: string
-) {
-  return apiFetch<{ success: boolean; collectionId: string }>(
-    `/admin/collections/${collectionId}/update`,
-    {
-      method: 'PATCH',
-      token,
-      body: JSON.stringify(updates),
-    }
+export interface AdminCollectionDetail {
+  id: string;
+  name: string;
+  /** Set when an admin renamed the collection; metadata refreshes keep that name. */
+  nameEditedAt: string | null;
+  chain: string;
+  contractAddress: string;
+  imageUrl: string | null;
+  supply: number | null;
+  floorPrice: number | null;
+  holderCount: number | null;
+  listedCount: number | null;
+  collectionType: string;
+  verificationStatus: CollectionVerificationStatus;
+  mappingStatus: CollectionMappingStatus;
+  mappingConfidence: string | null;
+  verificationNotes: string | null;
+  trackingTier: string;
+  indexStatus: string;
+  isSpam: boolean | null;
+  spamScore: number | null;
+  spamReason: string | null;
+  spamDetectedBy: string | null;
+  qualityScore: string | null;
+  qualityReason: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastIndexFinishedAt: string | null;
+  lastIndexStatus: string | null;
+  lastIndexError: string | null;
+  holderHistoryLastScannedAt: string | null;
+  discoveredOverlapCount: number | null;
+  description: string | null;
+  discordUrl: string | null;
+  twitterUrl: string | null;
+  websiteUrl: string | null;
+  telegramUrl: string | null;
+  externalUrl: string | null;
+  project: { id: string; name: string; slug: string } | null;
+  proposedProject: { id: string; name: string; slug: string } | null;
+  discoveredFrom: { id: string; name: string; chain: string; contractAddress: string } | null;
+}
+
+export type AdminCollectionEditableFields = Partial<
+  Pick<
+    AdminCollectionDetail,
+    'name' | 'description' | 'discordUrl' | 'twitterUrl' | 'websiteUrl' | 'telegramUrl' | 'externalUrl'
+  >
+>;
+
+export function adminGetCollection(collectionId: string, token: string) {
+  return apiFetch<AdminCollectionDetail>(`/admin/collections/${collectionId}`, { token });
+}
+
+/** A new name is kept over the name from chain metadata until it is reset. */
+export function adminUpdateCollection(collectionId: string, updates: AdminCollectionEditableFields, token: string) {
+  return apiFetch<AdminCollectionDetail>(`/admin/collections/${collectionId}/update`, {
+    method: 'PATCH',
+    token,
+    body: JSON.stringify(updates),
+  });
+}
+
+export function adminResetCollectionName(collectionId: string, token: string) {
+  return apiFetch<{ refreshed: boolean; collection: AdminCollectionDetail }>(
+    `/admin/collections/${collectionId}/name/reset`,
+    { method: 'POST', token },
   );
 }
 

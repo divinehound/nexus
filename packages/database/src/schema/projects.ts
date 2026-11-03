@@ -126,6 +126,9 @@ export const collections = pgTable(
     contractAddress: varchar('contract_address', { length: 255 }).notNull(),
     chain: chainEnum('chain').notNull(),
     name: varchar('name', { length: 255 }).notNull(),
+    // Set when an admin renames the collection. Metadata refreshes keep the
+    // admin's name while this is set.
+    nameEditedAt: timestamp('name_edited_at', { withTimezone: true }),
     imageUrl: text('image_url'),
     supply: integer('supply'),
     mintDate: timestamp('mint_date', { withTimezone: true }),

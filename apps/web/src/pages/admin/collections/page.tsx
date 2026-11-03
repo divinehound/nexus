@@ -28,6 +28,7 @@ import { useAuth } from '@/context/auth-context';
 import { AddressDisplay } from '@/components/ui/address-display';
 import { ConfirmModal } from '@/components/ui/confirm-modal';
 import { mediaUrl } from '@/lib/media';
+import { explorerAddressUrl as getExplorerLink } from '@/lib/utils';
 
 interface AdminProject {
   id: string;
@@ -1059,7 +1060,9 @@ export default function AdminCollectionsPage() {
                     </div>
                   )}
                   <div>
-                    <h3 className="font-medium">{c.name}</h3>
+                    <Link to={`/admin/collections/${c.id}`} className="font-medium hover:text-purple-300">
+                      {c.name}
+                    </Link>
                     <p className="text-sm text-gray-500">
                       {c.chain} · <AddressDisplay address={c.contractAddress} chain={c.chain} className="text-sm text-gray-500" />
                       {isInvalidAddress(c.chain, c.contractAddress) && (
@@ -1199,6 +1202,13 @@ export default function AdminCollectionsPage() {
                   {indexing[c.id] ? 'Indexing...' : '🔍 Index Holders'}
                 </button>
                 <Link
+                  to={`/admin/collections/${c.id}`}
+                  className="rounded border border-gray-600 px-3 py-1.5 text-xs font-medium text-gray-200 hover:border-gray-400 hover:text-white"
+                  title="Details, rename and edit links"
+                >
+                  Details
+                </Link>
+                <Link
                   to={`/admin/collections/${c.id}/holder-history`}
                   className="rounded border border-purple-700 px-3 py-1.5 text-xs font-medium text-purple-300 hover:border-purple-500 hover:text-white"
                   title="View full holder history"
@@ -1273,29 +1283,4 @@ function isInvalidAddress(chain: string, address: string): boolean {
   }
   // EVM chains need exactly 0x + 40 hex chars
   return !/^0x[a-f0-9]{40}$/.test(addr) || addr.length !== 42;
-}
-
-function getExplorerLink(chain: string, contractAddress: string): string | null {
-  const chainLower = chain.toLowerCase();
-  
-  if (chainLower === 'ethereum') {
-    return `https://etherscan.io/address/${contractAddress}`;
-  }
-  if (chainLower === 'base') {
-    return `https://basescan.org/address/${contractAddress}`;
-  }
-  if (chainLower === 'polygon') {
-    return `https://polygonscan.com/address/${contractAddress}`;
-  }
-  if (chainLower === 'abstract') {
-    return `https://explorer.abs.xyz/address/${contractAddress}`;
-  }
-  if (chainLower === 'apechain') {
-    return `https://apescan.io/address/${contractAddress}`;
-  }
-  if (chainLower === 'solana') {
-    return `https://solscan.io/account/${contractAddress}`;
-  }
-  
-  return null;
 }

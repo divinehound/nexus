@@ -31,6 +31,16 @@ import { SpamCheckerService } from '../indexing/spam-checker.service';
 import { CollectionDiscoveryService } from '../indexing/collection-discovery.service';
 import { COLLECTION_DISCOVERY_QUEUE } from '../../common/queue/queues';
 
+/** Free-text collection fields an admin can edit. Empty strings are stored as null. */
+const COLLECTION_TEXT_FIELDS = [
+  'description',
+  'discordUrl',
+  'twitterUrl',
+  'websiteUrl',
+  'telegramUrl',
+  'externalUrl',
+] as const;
+
 @Injectable()
 export class AdminService {
   private readonly logger = new Logger(AdminService.name);
@@ -888,10 +898,12 @@ export class AdminService {
       return { success: false, message: 'No metadata available from blockchain lookup' };
     }
 
+    // An admin's rename wins over the name from chain metadata.
+    const keepName = collection.nameEditedAt != null;
     const [updated] = await this.db
       .update(collections)
       .set({
-        name: metadata.name,
+        ...(keepName ? {} : { name: metadata.name }),
         imageUrl: metadata.imageUrl,
         supply: metadata.totalSupply,
         collectionType: metadata.tokenType as any,
@@ -909,14 +921,14 @@ export class AdminService {
         await this.db
           .update(projects)
           .set({
-            name: metadata.name,
+            name: updated.name,
             imageUrl: metadata.imageUrl,
           })
           .where(eq(projects.id, project.id));
       }
     }
 
-    this.logger.log(`Enriched collection ${collectionId}: ${metadata.name}`);
+    this.logger.log(`Enriched collection ${collectionId}: ${updated.name}${keepName ? ' (kept admin name)' : ''}`);
 
     return { success: true, collection: updated, metadata };
   }
@@ -1077,30 +1089,90 @@ export class AdminService {
   /**
    * Update collection metadata (description, social links)
    */
-  async updateCollection(
-    idOrContract: string,
-    updates: {
-      name?: string;
-      description?: string;
-      discordUrl?: string;
-      twitterUrl?: string;
-      websiteUrl?: string;
-      telegramUrl?: string;
-      externalUrl?: string;
-      supply?: number;
-    }
-  ) {
+  /** One collection with its project links, for the admin collection page. */
+  async getCollectionDetail(idOrContract: string) {
     const collectionId = await this.resolveCollectionId(idOrContract);
+    const collection = await this.db.query.collections.findFirst({
+      where: eq(collections.id, collectionId),
+      with: {
+        project: { columns: { id: true, name: true, slug: true } },
+        proposedProject: { columns: { id: true, name: true, slug: true } },
+      },
+    });
+    if (!collection) throw new NotFoundException('Collection not found');
 
-    await this.db
+    const discoveredFrom = collection.discoveredFromCollectionId
+      ? ((await this.db.query.collections.findFirst({
+          where: eq(collections.id, collection.discoveredFromCollectionId),
+          columns: { id: true, name: true, chain: true, contractAddress: true },
+        })) ?? null)
+      : null;
+
+    return { ...collection, discoveredFrom };
+  }
+
+  /**
+   * Edit a collection's name, description and links. A new name is marked as
+   * an admin edit so metadata refreshes keep it (see resetCollectionName).
+   */
+  async updateCollection(idOrContract: string, updates: Record<string, unknown>) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
+    const existing = await this.db.query.collections.findFirst({
+      where: eq(collections.id, collectionId),
+      columns: { id: true, name: true },
+    });
+    if (!existing) throw new NotFoundException('Collection not found');
+
+    const set: Partial<typeof collections.$inferInsert> = {};
+
+    if (updates.name !== undefined) {
+      if (typeof updates.name !== 'string') throw new BadRequestException('name must be a string');
+      const name = updates.name.trim();
+      if (!name) throw new BadRequestException('Name cannot be empty');
+      if (name.length > 255) throw new BadRequestException('Name must be 255 characters or fewer');
+      if (name !== existing.name) {
+        set.name = name;
+        set.nameEditedAt = new Date();
+      }
+    }
+
+    for (const key of COLLECTION_TEXT_FIELDS) {
+      const value = updates[key];
+      if (value === undefined) continue;
+      if (value !== null && typeof value !== 'string') throw new BadRequestException(`${key} must be a string`);
+      set[key] = value?.trim() || null;
+    }
+
+    if (Object.keys(set).length > 0) {
+      await this.db.update(collections).set(set).where(eq(collections.id, collectionId));
+    }
+
+    return this.getCollectionDetail(collectionId);
+  }
+
+  /**
+   * Drop an admin's rename and take the name from chain metadata again. The
+   * metadata lookup runs now; if it finds nothing the current name stays until
+   * the next successful refresh.
+   */
+  async resetCollectionName(idOrContract: string) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
+    const [cleared] = await this.db
       .update(collections)
-      .set({
-        ...updates,
-        lastSeenAt: new Date(),
-      })
-      .where(eq(collections.id, collectionId));
+      .set({ nameEditedAt: null })
+      .where(eq(collections.id, collectionId))
+      .returning({ id: collections.id });
+    if (!cleared) throw new NotFoundException('Collection not found');
 
-    return { success: true, collectionId };
+    let refreshed = false;
+    try {
+      const result = await this.enrichCollection(collectionId);
+      refreshed = result.success;
+    } catch (err) {
+      this.logger.warn(`Name reset for ${collectionId}: metadata refresh failed: ${err}`);
+    }
+
+    return { refreshed, collection: await this.getCollectionDetail(collectionId) };
   }
 
   /**
