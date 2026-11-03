@@ -433,6 +433,12 @@ export class AdminController {
     });
   }
 
+  // Declared after the other GET collections/* routes so it doesn't shadow them.
+  @Get('collections/:id')
+  @ApiOperation({ summary: 'One collection with its project links' })
+  getCollection(@Param('id') id: string) {
+    return this.adminService.getCollectionDetail(id);
+  }
   @Post('collections/:id/enrich')
   @ApiOperation({ summary: 'Re-fetch blockchain metadata for a collection' })
   enrichCollection(@Param('id') id: string) {
@@ -467,20 +473,15 @@ export class AdminController {
   }
 
   @Patch('collections/:id/update')
-  @ApiOperation({ summary: 'Update collection metadata (description, social links)' })
-  updateCollection(
-    @Param('id') id: string,
-    @Body() body: {
-      name?: string;
-      description?: string;
-      discordUrl?: string;
-      twitterUrl?: string;
-      websiteUrl?: string;
-      telegramUrl?: string;
-      externalUrl?: string;
-    }
-  ) {
-    return this.adminService.updateCollection(id, body);
+  @ApiOperation({ summary: 'Edit a collection: name (kept over metadata refreshes), description, links' })
+  updateCollection(@Param('id') id: string, @Body() body: Record<string, unknown>) {
+    return this.adminService.updateCollection(id, body ?? {});
+  }
+
+  @Post('collections/:id/name/reset')
+  @ApiOperation({ summary: 'Drop an admin rename and take the name from chain metadata again' })
+  resetCollectionName(@Param('id') id: string) {
+    return this.adminService.resetCollectionName(id);
   }
 
   @Patch('collections/:id/link-project')

@@ -91,10 +91,15 @@ export const router = createBrowserRouter([
               { index: true, ...page(() => import('@/pages/admin/page')) },
               { path: 'collections', ...page(() => import('@/pages/admin/collections/page')) },
               {
-                path: 'collections/:id/holder-history',
-                ...pageKeyedByParams(
-                  () => import('@/pages/admin/collections/[id]/holder-history/page'),
-                ),
+                path: 'collections/:id',
+                ...pageKeyedByParams(() => import('@/pages/admin/collections/[id]/layout')),
+                children: [
+                  { index: true, ...page(() => import('@/pages/admin/collections/[id]/page')) },
+                  {
+                    path: 'holder-history',
+                    ...page(() => import('@/pages/admin/collections/[id]/holder-history/page')),
+                  },
+                ],
               },
               { path: 'projects', ...page(() => import('@/pages/admin/projects/page')) },
               {

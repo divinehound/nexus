@@ -183,31 +183,20 @@ export default function AdminCollectionHolderHistoryPage() {
   usePrefetchSolanaDomains(prefetchAddresses, collectionChain);
 
   if (loading) {
-    return <div className="p-6 text-sm text-gray-400">Loading holder history...</div>;
+    return <div className="text-sm text-gray-400">Loading holder history...</div>;
   }
 
-  const collectionName = data?.collection?.name || 'Unknown collection';
-  const collectionContract = data?.collection?.contractAddress || '';
   const isSnapshot = data?.dataSource === 'snapshot';
 
+  // The collection's name, chain and contract are in the page header above this tab.
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6">
       <div className="flex flex-col gap-4 rounded-xl border border-gray-800 bg-gray-950/50 p-5 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0 flex-1">
           <div className="text-xs uppercase tracking-wide text-gray-500">Holder history</div>
-          <h1 className="mt-1 text-2xl font-semibold text-white">{collectionName}</h1>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-400">
-            {collectionChain && (
-              <span className="rounded border border-gray-800 bg-gray-900 px-2 py-0.5 uppercase tracking-wide">
-                {collectionChain}
-              </span>
-            )}
-            {collectionContract && (
-              <span className="truncate font-mono" title={collectionContract}>
-                {collectionContract}
-              </span>
-            )}
-          </div>
+          <p className="mt-1 text-sm text-gray-400">
+            Scan the chain from a block to rebuild every wallet&apos;s balance over time.
+          </p>
         </div>
         <div className="flex shrink-0 gap-3">
           <input

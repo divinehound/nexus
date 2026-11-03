@@ -23,3 +23,18 @@ export function formatPrice(price: number, currency = 'ETH'): string {
 export function cn(...classes: (string | false | null | undefined)[]): string {
   return classes.filter(Boolean).join(' ');
 }
+
+const EXPLORER_ADDRESS_URLS: Record<string, string> = {
+  ethereum: 'https://etherscan.io/address/',
+  base: 'https://basescan.org/address/',
+  polygon: 'https://polygonscan.com/address/',
+  abstract: 'https://explorer.abs.xyz/address/',
+  apechain: 'https://apescan.io/address/',
+  solana: 'https://solscan.io/account/',
+};
+
+/** Block explorer page for a contract or account, or null for chains without one. */
+export function explorerAddressUrl(chain: string, address: string): string | null {
+  const base = EXPLORER_ADDRESS_URLS[chain.toLowerCase()];
+  return base ? `${base}${address}` : null;
+}
