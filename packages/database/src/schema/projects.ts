@@ -180,6 +180,11 @@ export const collections = pgTable(
     lastIndexJobId: varchar('last_index_job_id', { length: 64 }),
     holderHistoryLastCheckedBlock: bigint('holder_history_last_checked_block', { mode: 'number' }),
     holderHistoryLastScannedAt: timestamp('holder_history_last_scanned_at', { withTimezone: true }),
+    // The last holder history scan's outcome, kept apart from the holder snapshot's last_index_* fields.
+    holderHistoryStatus: varchar('holder_history_status', { length: 16 }),
+    holderHistoryError: text('holder_history_error'),
+    /** Holder history scans that failed in a row; the nightly Premium run stops retrying at 3. */
+    holderHistoryFailures: integer('holder_history_failures').notNull().default(0),
     // Refresh schedule. `serviceLevelPinned` = an admin set the level, so the
     // weekly check leaves it alone (premium is only ever set this way).
     serviceLevel: serviceLevelEnum('service_level').default('dormant').notNull(),

@@ -283,7 +283,7 @@ export class HolderHistoryService {
         },
       },
       balanceHistory: history,
-      scanJob: this.jobs.get(collectionId) ?? null,
+      scanJob: await this.scanJobFor(collection),
     };
   }
 
@@ -311,9 +311,22 @@ export class HolderHistoryService {
 
     if (!collection) throw new NotFoundException('Collection not found');
 
-    const existing = this.jobs.get(collectionId);
-    if (existing && (existing.status === 'queued' || existing.status === 'running')) {
-      return { queued: true, alreadyRunning: true, job: existing };
+    // Redis knows whether a scan is really queued or running (on any instance); this
+    // instance's map can be stale, and a second add would be dropped by deduplication.
+    if (await this.hasLiveScan(collectionId)) {
+      const existing = this.jobs.get(collectionId);
+      const job: InMemoryScanJob =
+        existing && (existing.status === 'queued' || existing.status === 'running')
+          ? existing
+          : {
+              collectionId,
+              status: 'queued',
+              fromBlock: collection.holderHistoryLastCheckedBlock ? collection.holderHistoryLastCheckedBlock + 1 : 0,
+              processedTransfers: 0,
+              touchedWallets: 0,
+              mode: collection.chain === 'solana' ? 'solana_hybrid' : 'alchemy_backfill',
+            };
+      return { queued: true, alreadyRunning: true, job };
     }
 
     const fromBlock = input?.fromBlock ?? (collection.holderHistoryLastCheckedBlock ? collection.holderHistoryLastCheckedBlock + 1 : 0);
@@ -330,9 +343,9 @@ export class HolderHistoryService {
     this.logger.log(`Queued holder history scan for ${collectionId} from block ${fromBlock}`);
 
     // Durable BullMQ job; deduplication prevents concurrent scans of the
-    // same collection even across API instances. Scans checkpoint their
-    // progress (holder_history_last_checked_block / parse cursors) in the
-    // DB, so a retried or re-queued scan resumes rather than restarts.
+    // same collection even across API instances. A finished EVM scan saves
+    // holder_history_last_checked_block, so the next one starts after it;
+    // one that dies part way starts again from the previous checkpoint.
     await this.scanQueue.add(
       'scan',
       { collectionId, fromBlock },
@@ -340,6 +353,35 @@ export class HolderHistoryService {
     );
 
     return { queued: true, alreadyRunning: false, job };
+  }
+
+  /**
+   * This instance's view of the collection's scan, corrected by Redis (a scan queued or run
+   * by another instance) and by the last scan's saved outcome.
+   */
+  private async scanJobFor(collection: typeof collections.$inferSelect) {
+    const local = this.jobs.get(collection.id);
+    const live = await this.hasLiveScan(collection.id);
+    if (local && (local.status === 'queued' || local.status === 'running')) {
+      if (live) return local;
+    } else if (local) {
+      return local;
+    }
+    if (live) return { collectionId: collection.id, status: 'queued' as const, fromBlock: (collection.holderHistoryLastCheckedBlock ?? -1) + 1, processedTransfers: 0, touchedWallets: 0 };
+    if (collection.holderHistoryStatus === 'failed') {
+      return { collectionId: collection.id, status: 'failed' as const, fromBlock: (collection.holderHistoryLastCheckedBlock ?? -1) + 1, processedTransfers: 0, touchedWallets: 0, error: collection.holderHistoryError ?? undefined };
+    }
+    return null;
+  }
+
+  /** True when a scan for the collection is waiting or running in the queue (from any API instance). */
+  async hasLiveScan(collectionId: string): Promise<boolean> {
+    const jobId = await this.scanQueue.getDeduplicationJobId(collectionId);
+    if (!jobId) return false;
+    const live = await this.scanQueue.getJob(jobId);
+    if (!live) return false;
+    const state = await live.getState();
+    return state === 'waiting' || state === 'active' || state === 'delayed' || state === 'prioritized' || state === 'waiting-children';
   }
 
   async getCollectionHolderHistoryScanStatus(collectionId: string) {
@@ -513,9 +555,9 @@ export class HolderHistoryService {
       await this.db
         .update(collections)
         .set({
-          lastIndexFinishedAt: new Date(),
-          lastIndexStatus: 'failed',
-          lastIndexError: error?.message || 'Unknown error',
+          holderHistoryStatus: 'failed',
+          holderHistoryError: error?.message || 'Unknown error',
+          holderHistoryFailures: sql`${collections.holderHistoryFailures} + 1`,
         })
         .where(eq(collections.id, collectionId));
 
@@ -1710,58 +1752,64 @@ export class HolderHistoryService {
       });
     }
 
-    if (summaryRows.length > 0) {
-      for (const batch of chunkArray(summaryRows, 500)) {
-        await this.db.insert(collectionHolderSummaries).values(batch).onConflictDoUpdate({
-          target: [collectionHolderSummaries.collectionId, collectionHolderSummaries.address],
-          set: {
-            currentBalance: sql`excluded.current_balance`,
-            firstReceivedAt: sql`excluded.first_received_at`,
-            firstReceivedBlock: sql`excluded.first_received_block`,
-            lastReceivedAt: sql`excluded.last_received_at`,
-            lastReceivedBlock: sql`excluded.last_received_block`,
-            totalReceivedCount: sql`excluded.total_received_count`,
-            totalSentCount: sql`excluded.total_sent_count`,
-            updatedAt: sql`excluded.updated_at`,
-          },
-        });
+    // One transaction: summaries and the checkpoint move together, so a crash between them
+    // can't make the next incremental scan replay transfers into already-updated balances.
+    await this.db.transaction(async (tx) => {
+      if (summaryRows.length > 0) {
+        for (const batch of chunkArray(summaryRows, 500)) {
+          await tx.insert(collectionHolderSummaries).values(batch).onConflictDoUpdate({
+            target: [collectionHolderSummaries.collectionId, collectionHolderSummaries.address],
+            set: {
+              currentBalance: sql`excluded.current_balance`,
+              firstReceivedAt: sql`excluded.first_received_at`,
+              firstReceivedBlock: sql`excluded.first_received_block`,
+              lastReceivedAt: sql`excluded.last_received_at`,
+              lastReceivedBlock: sql`excluded.last_received_block`,
+              totalReceivedCount: sql`excluded.total_received_count`,
+              totalSentCount: sql`excluded.total_sent_count`,
+              updatedAt: sql`excluded.updated_at`,
+            },
+          });
+        }
       }
-    }
 
-    if (holderRows.length > 0) {
-      for (const batch of chunkArray(holderRows, 500)) {
-        await this.db.insert(collectionHolders).values(batch).onConflictDoUpdate({
-          target: [collectionHolders.collectionId, collectionHolders.address],
-          set: {
-            tokenCount: sql`excluded.token_count`,
-            lastSeenAt: sql`excluded.last_seen_at`,
-          },
-        });
+      if (holderRows.length > 0) {
+        for (const batch of chunkArray(holderRows, 500)) {
+          await tx.insert(collectionHolders).values(batch).onConflictDoUpdate({
+            target: [collectionHolders.collectionId, collectionHolders.address],
+            set: {
+              tokenCount: sql`excluded.token_count`,
+              lastSeenAt: sql`excluded.last_seen_at`,
+            },
+          });
+        }
       }
-    }
 
-    for (const batch of chunkArray(exitedAddresses, 500)) {
-      await this.db
-        .delete(collectionHolders)
-        .where(and(eq(collectionHolders.collectionId, collection.id), inArray(collectionHolders.address, batch)));
-    }
+      for (const batch of chunkArray(exitedAddresses, 500)) {
+        await tx
+          .delete(collectionHolders)
+          .where(and(eq(collectionHolders.collectionId, collection.id), inArray(collectionHolders.address, batch)));
+      }
 
-    await this.db
-      .update(collections)
-      .set({
-        holderHistoryLastCheckedBlock: maxBlockNumber,
-        holderHistoryLastScannedAt: new Date(),
-        holderCount: Array.from(summaryState.values()).filter((v) => v.currentBalance > 0).length,
-        lastIndexFinishedAt: new Date(),
-        lastIndexStatus: 'success',
-        lastIndexError: null,
-      })
-      .where(eq(collections.id, collection.id));
+      await tx
+        .update(collections)
+        .set({
+          holderHistoryLastCheckedBlock: maxBlockNumber,
+          holderHistoryLastScannedAt: new Date(),
+          holderCount: Array.from(summaryState.values()).filter((v) => v.currentBalance > 0).length,
+          holderHistoryStatus: 'success',
+          holderHistoryError: null,
+          holderHistoryFailures: 0,
+        })
+        .where(eq(collections.id, collection.id));
+    });
 
     // Derive per-wallet PnL from the freshly-written full transfer ledger.
     // Best-effort: a PnL failure must not fail an otherwise-successful scan.
+    // An incremental EVM scan that found nothing new leaves PnL as it was (the nightly Premium runs).
+    const nothingNew = collection.chain !== 'solana' && collection.holderHistoryLastCheckedBlock != null && job.processedTransfers === 0;
     try {
-      await this.recomputeAndPersistWalletPnl(collection);
+      if (!nothingNew) await this.recomputeAndPersistWalletPnl(collection);
     } catch (err) {
       this.logger.error(
         `[PnL] Failed to compute wallet PnL for ${collection.id}: ${(err as Error).stack || (err as Error).message}`,
