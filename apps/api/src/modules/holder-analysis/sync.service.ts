@@ -4,6 +4,7 @@
 // for the next. Ported from the holder analysis Worker (spooky-bar apps/holder-analysis/src/
 // sync.ts) onto Postgres; only projects with holder_analysis_enabled are followed.
 
+import { disabledChains } from '../indexing/chain-switches';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { sql } from 'drizzle-orm';
@@ -118,7 +119,11 @@ export class HolderAnalysisSyncService {
     const s = this.settings();
     const b = budget ?? budgetFor(s.runCalls, s.callGapMs);
     const log: SyncLog = { calls: 0, transfers: 0, txs: 0, wallets: 0, delegations: 0, refreshed: 0, names: 0, usage: 0, caughtUp: [], errors: [] };
-    const projects = projectsIn ?? (await loadEnabledProjects(this.db));
+    // Collections on chains an admin switched off aren't read (their stored data stays).
+    const off = await disabledChains(this.db);
+    const projects = (projectsIn ?? (await loadEnabledProjects(this.db)))
+      .map((p) => ({ ...p, collections: p.collections.filter((c) => !off.has(c.chain)) }))
+      .filter((p) => p.collections.length);
     if (!projects.length) return log;
     const collections = uniqueCollections(projects);
     const coreIds = collections.filter((c) => c.core).map((c) => c.collectionId);

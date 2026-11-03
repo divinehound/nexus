@@ -1,3 +1,4 @@
+import { disabledChains } from './chain-switches';
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { eq, sql, and, inArray } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
@@ -74,6 +75,8 @@ export class CollectionDiscoveryService {
       throw new Error('Collection not found');
     }
 
+    // Collections on chains an admin switched off aren't added (or auto-indexed).
+    const offChains = await disabledChains(this.db);
     const discoveredContracts = new Map<string, { chain: string; address: string; holderOverlap: number }>();
     const existingContracts = new Set<string>();
     let holdersChecked = 0;
@@ -146,7 +149,7 @@ export class CollectionDiscoveryService {
             : nft.contractAddress.toLowerCase();
           const key = `${nft.chain}:${normalizedAddress}`;
 
-          if (existingContracts.has(key)) continue;
+          if (existingContracts.has(key) || offChains.has(nft.chain)) continue;
 
           // Count how many of the source collection's holders also hold this
           // contract — the ranking signal for what's worth adding.

@@ -419,6 +419,10 @@ export interface AdminCollectionDetail {
   lastIndexStatus: string | null;
   lastIndexError: string | null;
   holderHistoryLastScannedAt: string | null;
+  serviceLevel: ServiceLevel;
+  serviceLevelPinned: boolean;
+  serviceLevelReason: string | null;
+  serviceLevelCheckedAt: string | null;
   discoveredOverlapCount: number | null;
   description: string | null;
   discordUrl: string | null;
@@ -440,6 +444,37 @@ export type AdminCollectionEditableFields = Partial<
 
 export function adminGetCollection(collectionId: string, token: string) {
   return apiFetch<AdminCollectionDetail>(`/admin/collections/${collectionId}`, { token });
+}
+
+export type AdminChain = { chain: string; enabled: boolean; collections: number; scheduled: number; updatedAt: string | null };
+
+export function getAdminChains(token: string) {
+  return apiFetch<AdminChain[]>('/admin/chains', { token });
+}
+
+/** Switches a chain's background work (scheduled refreshes, backlog, discovery, holder analysis) on or off. */
+export function setAdminChainEnabled(chain: string, enabled: boolean, token: string) {
+  return apiFetch<AdminChain[]>(`/admin/chains/${chain}`, { method: 'PUT', token, body: JSON.stringify({ enabled }) });
+}
+
+export type ServiceLevel = 'dormant' | 'slow' | 'active' | 'hot' | 'premium';
+
+/** Each service level and how often its holders refresh (matches the API's collection-refresh cron). */
+export const SERVICE_LEVELS: { value: ServiceLevel; label: string; refresh: string }[] = [
+  { value: 'dormant', label: 'Dormant', refresh: 'only when asked' },
+  { value: 'slow', label: 'Slow', refresh: 'weekly' },
+  { value: 'active', label: 'Active', refresh: 'daily' },
+  { value: 'hot', label: 'Hot', refresh: 'every 6 hours' },
+  { value: 'premium', label: 'Premium', refresh: 'hourly' },
+];
+
+/** Pins a collection's service level, or with `null` hands it back to the weekly check. */
+export function adminSetCollectionServiceLevel(collectionId: string, level: ServiceLevel | null, token: string) {
+  return apiFetch<AdminCollectionDetail>(`/admin/collections/${collectionId}/service-level`, {
+    method: 'PATCH',
+    token,
+    body: JSON.stringify(level ? { level } : { pinned: false }),
+  });
 }
 
 /** A new name is kept over the name from chain metadata until it is reset. */

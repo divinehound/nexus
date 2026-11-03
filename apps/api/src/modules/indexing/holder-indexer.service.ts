@@ -4,6 +4,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
+import { chainIsOn } from './chain-switches';
 import { HOLDER_INDEXING_QUEUE } from '../../common/queue/queues';
 import { type Database, collections, collectionHolders } from '@nexus/database';
 
@@ -103,6 +104,7 @@ export class HolderIndexerService {
       AND c.tracking_tier != 'suppressed'
       AND (c.supply IS NULL OR (c.supply >= 2 AND c.supply <= 100000))
       AND c.last_index_status IS DISTINCT FROM 'skipped'
+      AND ${chainIsOn(sql`c.chain`)}
       AND NOT EXISTS (SELECT 1 FROM collection_holders ch WHERE ch.collection_id = c.id)
     `;
   }

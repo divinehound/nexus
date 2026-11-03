@@ -3,6 +3,7 @@
 // transaction, so a page never sees half of one. Ported from the holder analysis Worker
 // (spooky-bar apps/holder-analysis/src/report.ts).
 
+import { disabledChains } from '../indexing/chain-switches';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { sql } from 'drizzle-orm';
 import type { Database } from '@nexus/database';
@@ -235,7 +236,11 @@ export class HolderAnalysisReportService {
           FROM holder_reports r WHERE r.project_id = ANY(${uuids(projects.map((p) => p.id))})`)),
       ].map((r) => [r.project_id, r]),
     );
+    // A project with a collection on a switched-off chain keeps its last report rather than
+    // being re-analysed without that collection.
+    const off = await disabledChains(this.db);
     for (const project of projects) {
+      if (project.collections.some((c) => off.has(c.chain))) continue;
       if (opts.changedOnly) {
         const r = reports.get(project.id);
         if (r && r.analysis_version === ANALYSIS_VERSION && !(r.settings_at && new Date(r.settings_at) > new Date(r.analysed_at))) {
