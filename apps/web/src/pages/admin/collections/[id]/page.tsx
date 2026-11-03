@@ -317,6 +317,12 @@ export default function AdminCollectionOverviewPage() {
               ))}
             </select>
             {c.serviceLevelReason && <span className="mt-1 block text-xs text-gray-500">{c.serviceLevelReason}</span>}
+            {c.serviceLevelCheckedAt && (
+              <span className="block text-xs text-gray-600">
+                Checked {when(c.serviceLevelCheckedAt)}
+                {c.lastTransferAt ? ` · last transfer ${when(c.lastTransferAt)}` : ''}
+              </span>
+            )}
           </Fact>
           <Fact label="Index status">{c.indexStatus}</Fact>
           <Fact label="Last indexed">

@@ -423,6 +423,8 @@ export interface AdminCollectionDetail {
   serviceLevelPinned: boolean;
   serviceLevelReason: string | null;
   serviceLevelCheckedAt: string | null;
+  recentTransfers: number | null;
+  lastTransferAt: string | null;
   discoveredOverlapCount: number | null;
   description: string | null;
   discordUrl: string | null;
@@ -444,6 +446,20 @@ export type AdminCollectionEditableFields = Partial<
 
 export function adminGetCollection(collectionId: string, token: string) {
   return apiFetch<AdminCollectionDetail>(`/admin/collections/${collectionId}`, { token });
+}
+
+export type AdminServiceLevels = {
+  levels: { level: ServiceLevel; total: number; pinned: number }[];
+  check: { running: boolean; finishedAt: string | null; result: { checked: number; failed: number; skipped: number } | null; error: string | null };
+};
+
+export function getAdminServiceLevels(token: string) {
+  return apiFetch<AdminServiceLevels>('/admin/service-levels', { token });
+}
+
+/** Runs the weekly service level check now (one Alchemy call per collection). */
+export function runAdminServiceLevelCheck(token: string) {
+  return apiFetch<{ queued: boolean }>('/admin/service-levels/check', { method: 'POST', token });
 }
 
 export type AdminChain = { chain: string; enabled: boolean; collections: number; scheduled: number; updatedAt: string | null };
@@ -468,7 +484,7 @@ export const SERVICE_LEVELS: { value: ServiceLevel; label: string; refresh: stri
   { value: 'premium', label: 'Premium', refresh: 'hourly' },
 ];
 
-/** Pins a collection's service level, or with `null` hands it back to the weekly check. */
+/** Pins a collection's service level, or with `null` hands it back to the automatic checks. */
 export function adminSetCollectionServiceLevel(collectionId: string, level: ServiceLevel | null, token: string) {
   return apiFetch<AdminCollectionDetail>(`/admin/collections/${collectionId}/service-level`, {
     method: 'PATCH',

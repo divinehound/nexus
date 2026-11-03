@@ -186,6 +186,9 @@ export const collections = pgTable(
     serviceLevelPinned: boolean('service_level_pinned').default(false).notNull(),
     serviceLevelReason: text('service_level_reason'),
     serviceLevelCheckedAt: timestamp('service_level_checked_at', { withTimezone: true }),
+    // Transfers in the 30 days before the last weekly check (capped at 1,000), and the newest one.
+    recentTransfers: integer('recent_transfers'),
+    lastTransferAt: timestamp('last_transfer_at', { withTimezone: true }),
     // How many of the source collection's holders also held this contract
     // when discovery found it, and which collection it was discovered from
     discoveredOverlapCount: integer('discovered_overlap_count'),

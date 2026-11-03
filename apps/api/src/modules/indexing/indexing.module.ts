@@ -7,6 +7,7 @@ import { CollectionDiscoveryService } from './collection-discovery.service';
 import { CollectionDiscoveryProcessor } from './collection-discovery.processor';
 import { RetentionCron } from './retention.cron';
 import { CollectionRefreshCron } from './collection-refresh.cron';
+import { ServiceLevelCheckCron, ServiceLevelCheckProcessor, ServiceLevelCheckService } from './service-level-check';
 import { SearchModule } from '../search/search.module';
 import { QueueModule } from '../../common/queue/queue.module';
 
@@ -21,7 +22,10 @@ import { QueueModule } from '../../common/queue/queue.module';
     CollectionDiscoveryProcessor,
     RetentionCron,
     CollectionRefreshCron,
+    ServiceLevelCheckService,
+    ServiceLevelCheckCron,
+    ServiceLevelCheckProcessor,
   ],
-  exports: [HolderIndexerService, HolderSnapshotService, SpamCheckerService, CollectionDiscoveryService, QueueModule],
+  exports: [ServiceLevelCheckCron, HolderIndexerService, HolderSnapshotService, SpamCheckerService, CollectionDiscoveryService, QueueModule],
 })
 export class IndexingModule {}
