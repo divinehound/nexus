@@ -295,14 +295,28 @@ export class HoldingsService {
       const allHoldings: { contractAddress: string; tokenCount: number; chain: string }[] = [];
       const fullyFetchedChains: string[] = [];
 
+      // One chain's outage (or a chain the Alchemy app doesn't serve) shouldn't fail the
+      // whole wallet: a failed chain keeps its old rows (it's left out of fullyFetchedChains).
+      // Only when every chain fails does the job fail and retry.
+      const failedChains: string[] = [];
+      let lastError: unknown;
       for (const chain of chainsToIndex) {
-        const { holdings: chainHoldings, complete } = await this.blockchainIndexer.fetchWalletHoldings(
-          wallet.address,
-          chain,
-        );
-        allHoldings.push(...chainHoldings.map(h => ({ ...h, chain })));
-        if (complete) fullyFetchedChains.push(chain);
+        try {
+          const { holdings: chainHoldings, complete } = await this.blockchainIndexer.fetchWalletHoldings(
+            wallet.address,
+            chain,
+          );
+          allHoldings.push(...chainHoldings.map(h => ({ ...h, chain })));
+          if (complete) fullyFetchedChains.push(chain);
+        } catch (error) {
+          failedChains.push(chain);
+          lastError = error;
+          this.logger.warn(
+            `Skipping ${chain} for wallet ${wallet.address}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
+      if (failedChains.length === chainsToIndex.length) throw lastError;
 
       const sorted = allHoldings.sort((a, b) => b.tokenCount - a.tokenCount);
       const inScope = sorted.slice(0, this.maxCollectionsPerRun);
@@ -390,6 +404,7 @@ export class HoldingsService {
           statsJson: {
             holdingsDiscovered: allHoldings.length,
             chainsIndexed: chainsToIndex,
+            chainsFailed: failedChains,
             staleRemoved,
             active,
             lightweight,
