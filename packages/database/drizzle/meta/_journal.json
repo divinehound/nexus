@@ -309,6 +309,13 @@
       "when": 1793710000000,
       "tag": "0043_collection_service_levels",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1793720000000,
+      "tag": "0044_collection_recent_transfers",
+      "breakpoints": true
     }
   ]
 }

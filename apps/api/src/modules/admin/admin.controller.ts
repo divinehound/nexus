@@ -14,6 +14,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminGuard } from '../../common/guards/admin.guard';
 import { AdminService } from './admin.service';
+import { ServiceLevelCheckCron } from '../indexing/service-level-check';
 import { HolderHistoryService } from './holder-history.service';
 import { AdminProjectsService, type ProjectFields } from './admin-projects.service';
 
@@ -26,6 +27,7 @@ export class AdminController {
     private readonly adminService: AdminService,
     private readonly holderHistoryService: HolderHistoryService,
     private readonly adminProjectsService: AdminProjectsService,
+    private readonly serviceLevelCheck: ServiceLevelCheckCron,
   ) {}
 
   // --- Dashboard ---
@@ -440,6 +442,18 @@ export class AdminController {
   getCollection(@Param('id') id: string) {
     return this.adminService.getCollectionDetail(id);
   }
+  @Get('service-levels')
+  @ApiOperation({ summary: 'How many collections sit at each service level, and the last weekly check' })
+  async getServiceLevels() {
+    return { levels: await this.adminService.getServiceLevelCounts(), check: await this.serviceLevelCheck.lastRun() };
+  }
+
+  @Post('service-levels/check')
+  @ApiOperation({ summary: 'Run the weekly service level check now (one Alchemy call per collection)' })
+  async runServiceLevelCheck() {
+    return { queued: await this.serviceLevelCheck.enqueue() };
+  }
+
   @Get('chains')
   @ApiOperation({ summary: 'Every chain: switched on or off, and its collection counts' })
   getChains() {

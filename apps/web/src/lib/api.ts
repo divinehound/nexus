@@ -423,6 +423,8 @@ export interface AdminCollectionDetail {
   serviceLevelPinned: boolean;
   serviceLevelReason: string | null;
   serviceLevelCheckedAt: string | null;
+  recentTransfers: number | null;
+  lastTransferAt: string | null;
   discoveredOverlapCount: number | null;
   description: string | null;
   discordUrl: string | null;
@@ -444,6 +446,20 @@ export type AdminCollectionEditableFields = Partial<
 
 export function adminGetCollection(collectionId: string, token: string) {
   return apiFetch<AdminCollectionDetail>(`/admin/collections/${collectionId}`, { token });
+}
+
+export type AdminServiceLevels = {
+  levels: { level: ServiceLevel; total: number; pinned: number }[];
+  check: { running: boolean; finishedAt: string | null; result: { checked: number; failed: number; skipped: number } | null };
+};
+
+export function getAdminServiceLevels(token: string) {
+  return apiFetch<AdminServiceLevels>('/admin/service-levels', { token });
+}
+
+/** Runs the weekly service level check now (one Alchemy call per collection). */
+export function runAdminServiceLevelCheck(token: string) {
+  return apiFetch<{ queued: boolean }>('/admin/service-levels/check', { method: 'POST', token });
 }
 
 export type AdminChain = { chain: string; enabled: boolean; collections: number; scheduled: number; updatedAt: string | null };

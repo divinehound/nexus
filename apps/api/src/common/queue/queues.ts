@@ -9,3 +9,4 @@ export const HOLDER_INDEXING_QUEUE = 'holder-indexing';
 export const COLLECTION_DISCOVERY_QUEUE = 'collection-discovery';
 export const HOLDER_HISTORY_SCAN_QUEUE = 'holder-history-scan';
 export const HOLDER_ANALYSIS_SYNC_QUEUE = 'holder-analysis-sync';
+export const SERVICE_LEVEL_QUEUE = 'service-level-check';

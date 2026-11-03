@@ -5,6 +5,7 @@ import {
   HOLDER_ANALYSIS_SYNC_QUEUE,
   HOLDER_HISTORY_SCAN_QUEUE,
   HOLDER_INDEXING_QUEUE,
+  SERVICE_LEVEL_QUEUE,
   WALLET_INDEXING_QUEUE,
 } from './queues';
 
@@ -21,6 +22,7 @@ import {
       { name: COLLECTION_DISCOVERY_QUEUE },
       { name: HOLDER_HISTORY_SCAN_QUEUE },
       { name: HOLDER_ANALYSIS_SYNC_QUEUE },
+      { name: SERVICE_LEVEL_QUEUE },
     ),
   ],
   exports: [BullModule],

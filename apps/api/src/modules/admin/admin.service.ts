@@ -1117,6 +1117,15 @@ export class AdminService {
     return { ...collection, discoveredFrom };
   }
 
+  /** Collections at each service level (pinned ones counted apart). */
+  async getServiceLevelCounts() {
+    const rows = await this.db.execute<{ level: string; total: number; pinned: number }>(sql`
+      SELECT service_level::text AS level, count(*)::int AS total, count(*) FILTER (WHERE service_level_pinned)::int AS pinned
+      FROM collections GROUP BY 1`);
+    const byLevel = new Map([...rows].map((r) => [r.level, r]));
+    return SERVICE_LEVELS.map((level) => ({ level, total: byLevel.get(level)?.total ?? 0, pinned: byLevel.get(level)?.pinned ?? 0 }));
+  }
+
   /** Every chain, whether it's switched on, and how many collections it has (by service level). */
   async getChains() {
     const rows = await this.db.execute<{ chain: string; enabled: boolean; collections: number; refreshed: number; updated_at: string | null }>(sql`
