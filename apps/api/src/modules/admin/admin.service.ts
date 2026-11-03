@@ -898,35 +898,21 @@ export class AdminService {
       return { success: false, message: 'No metadata available from blockchain lookup' };
     }
 
-    // An admin's rename wins over the name from chain metadata.
-    const keepName = collection.nameEditedAt != null;
+    // An admin's rename wins over the name from chain metadata. Checked in the
+    // UPDATE itself, so a rename made while the lookup ran is kept too.
     const [updated] = await this.db
       .update(collections)
       .set({
-        ...(keepName ? {} : { name: metadata.name }),
+        name: sql`CASE WHEN ${collections.nameEditedAt} IS NULL THEN ${metadata.name} ELSE ${collections.name} END`,
         imageUrl: metadata.imageUrl,
         supply: metadata.totalSupply,
         collectionType: metadata.tokenType as any,
       })
       .where(eq(collections.id, collectionId))
       .returning();
+    const keepName = updated.nameEditedAt != null;
 
-    // Also update parent project if it's an auto-generated one
-    if (updated.projectId) {
-      const project = await this.db.query.projects.findFirst({
-        where: eq(projects.id, updated.projectId),
-      });
-
-      if (project && project.name.startsWith('Auto ')) {
-        await this.db
-          .update(projects)
-          .set({
-            name: updated.name,
-            imageUrl: metadata.imageUrl,
-          })
-          .where(eq(projects.id, project.id));
-      }
-    }
+    await this.syncAutoProjectName(updated.projectId, updated.name, metadata.imageUrl);
 
     this.logger.log(`Enriched collection ${collectionId}: ${updated.name}${keepName ? ' (kept admin name)' : ''}`);
 
@@ -1089,6 +1075,23 @@ export class AdminService {
   /**
    * Update collection metadata (description, social links)
    */
+  /**
+   * Auto-created projects ("Auto 0x…") take their collection's name, and image
+   * when one is given, until an admin names the project.
+   */
+  private async syncAutoProjectName(projectId: string | null, name: string, imageUrl?: string | null) {
+    if (!projectId) return;
+    const project = await this.db.query.projects.findFirst({
+      where: eq(projects.id, projectId),
+      columns: { id: true, name: true },
+    });
+    if (!project?.name.startsWith('Auto ')) return;
+    await this.db
+      .update(projects)
+      .set({ name, ...(imageUrl !== undefined ? { imageUrl } : {}) })
+      .where(eq(projects.id, project.id));
+  }
+
   /** One collection with its project links, for the admin collection page. */
   async getCollectionDetail(idOrContract: string) {
     const collectionId = await this.resolveCollectionId(idOrContract);
@@ -1144,7 +1147,12 @@ export class AdminService {
     }
 
     if (Object.keys(set).length > 0) {
-      await this.db.update(collections).set(set).where(eq(collections.id, collectionId));
+      const [row] = await this.db
+        .update(collections)
+        .set(set)
+        .where(eq(collections.id, collectionId))
+        .returning({ projectId: collections.projectId, name: collections.name });
+      if (set.name) await this.syncAutoProjectName(row.projectId, row.name);
     }
 
     return this.getCollectionDetail(collectionId);

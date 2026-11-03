@@ -76,6 +76,24 @@ describeDb('renaming collections (database)', () => {
     expect((await db.query.projects.findFirst({ where: eq(projects.id, p.id) }))!.name).toBe('Admin Name');
   });
 
+  it('keeps a rename made while the metadata lookup is running', async () => {
+    const c = await collection();
+    lookup.mockImplementation(async () => {
+      await admin.updateCollection(c.id, { name: 'Renamed Mid-Lookup' });
+      return [{ name: 'Chain Name', imageUrl: null, totalSupply: 1, tokenType: 'erc721' }];
+    });
+    await admin.enrichCollection(c.id);
+    expect(await row(c.id)).toMatchObject({ name: 'Renamed Mid-Lookup' });
+  });
+
+  it('a rename also renames an auto-created project right away', async () => {
+    const [p] = await db.insert(projects).values({ name: 'Auto 0xdef', slug: `auto-direct-${run}` }).returning();
+    projectIds.push(p.id);
+    const c = await collection({ projectId: p.id });
+    await admin.updateCollection(c.id, { name: 'Direct Name' });
+    expect((await db.query.projects.findFirst({ where: eq(projects.id, p.id) }))!.name).toBe('Direct Name');
+  });
+
   it('reset drops the rename and takes the chain name again', async () => {
     const c = await collection();
     await admin.updateCollection(c.id, { name: 'Custom' });

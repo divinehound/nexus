@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router';
 import { toast } from 'sonner';
 import { CHAIN_META } from '@nexus/types';
@@ -34,15 +34,21 @@ export default function AdminCollectionLayout() {
   const [collection, setCollection] = useState<AdminCollectionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
+  const loaded = useRef(false);
 
   const reload = useCallback(async () => {
     if (!accessToken || !collectionId) return;
     try {
       setCollection(await adminGetCollection(collectionId, accessToken));
+      loaded.current = true;
       setError(null);
     } catch (err) {
       const status = err instanceof ApiError ? err.status : 0;
-      setError(status === 404 ? 'There is no collection with this id.' : err instanceof Error ? err.message : 'Could not load the collection');
+      const message =
+        status === 404 ? 'There is no collection with this id.' : err instanceof Error ? err.message : 'Could not load the collection';
+      // Once the page is showing, a failed refresh is a toast, so the tabs and any unsaved edits stay.
+      if (loaded.current) toast.error(message);
+      else setError(message);
     }
   }, [accessToken, collectionId]);
 
