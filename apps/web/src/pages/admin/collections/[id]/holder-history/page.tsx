@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { useParams } from 'react-router';
 import { useAuth } from '@/context/auth-context';
-import { adminGetCollectionHolderHistory, adminGetCollectionHolderHistoryStatus, adminScanCollectionHolderHistory } from '@/lib/api';
+import {
+  adminGetCollectionHolderHistory,
+  adminGetCollectionHolderHistoryStatus,
+  adminScanCollectionHolderHistory,
+  adminSetExactSalePayouts,
+} from '@/lib/api';
 import { AddressDisplay } from '@/components/ui/address-display';
 import { usePrefetchSolanaDomains } from '@/hooks/use-resolve-domain';
 import BalanceLineChart from './balance-line-chart';
@@ -46,6 +51,22 @@ export default function AdminCollectionHolderHistoryPage() {
   const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
   const [walletSearch, setWalletSearch] = useState('');
   const [activeTab, setActiveTab] = useState<'wallets' | 'reconciliation'>('wallets');
+  const [savingPayouts, setSavingPayouts] = useState(false);
+
+  const toggleExactPayouts = async () => {
+    if (!accessToken || !data?.project) return;
+    const enabled = !data.project.exactSalePayouts;
+    setSavingPayouts(true);
+    try {
+      const project = await adminSetExactSalePayouts(collectionId, enabled, accessToken);
+      setData((d: any) => ({ ...d, project }));
+      toast.success(enabled ? 'Exact seller payouts on — rescan from block 0 to apply' : 'Exact seller payouts off');
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to save');
+    } finally {
+      setSavingPayouts(false);
+    }
+  };
 
   const load = async () => {
     if (!accessToken || !collectionId) return;
@@ -214,6 +235,26 @@ export default function AdminCollectionHolderHistoryPage() {
           value={data?.collection?.holderHistoryLastScannedAt ? new Date(data.collection.holderHistoryLastScannedAt).toLocaleString() : '—'}
         />
       </div>
+
+      {data?.project && ['ethereum', 'polygon'].includes(data?.collection?.chain) && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-800 bg-gray-950/50 px-4 py-2 text-xs text-gray-400">
+          <span>
+            Exact seller payouts for <strong className="text-gray-200">{data.project.name}</strong>:{' '}
+            <strong className="text-gray-200">{data.project.exactSalePayouts ? 'on' : 'off'}</strong>. When on,
+            Blur and other non-OpenSea sales also look up the ETH paid out to the seller (about two extra Alchemy
+            calls per sale) and any refund to the buyer. When off, a wallet seller is assumed to have received the full
+            price, and multi-NFT ETH sweeps stay unpriced.
+          </span>
+          <button
+            type="button"
+            onClick={toggleExactPayouts}
+            disabled={savingPayouts}
+            className="rounded border border-gray-700 px-3 py-1 text-gray-200 hover:border-purple-500 disabled:opacity-50"
+          >
+            {data.project.exactSalePayouts ? 'Turn off' : 'Turn on'}
+          </button>
+        </div>
+      )}
 
       {data?.summary?.pnl?.walletsWithPnl > 0 && (
         <>

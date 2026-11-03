@@ -214,6 +214,7 @@ export function adminIndexCollectionHolders(collectionId: string, token: string)
 export function adminGetCollectionHolderHistory(collectionId: string, token: string) {
   return apiFetch<{
     collection: any;
+    project: { id: string; name: string; exactSalePayouts: boolean } | null;
     dataSource: 'history' | 'snapshot' | 'none';
     summary: { wallets: any[]; totalWallets: number; totalTokensHeld: number };
     balanceHistory: any[];
@@ -241,6 +242,13 @@ export function adminScanCollectionHolderHistory(collectionId: string, token: st
     token,
     body: JSON.stringify({ fromBlock }),
   });
+}
+
+export function adminSetExactSalePayouts(collectionId: string, enabled: boolean, token: string) {
+  return apiFetch<{ id: string; name: string; exactSalePayouts: boolean }>(
+    `/admin/collections/${collectionId}/holder-history/exact-sale-payouts`,
+    { method: 'PATCH', token, body: JSON.stringify({ enabled }) },
+  );
 }
 
 export function adminGetCollectionHolderHistoryStatus(collectionId: string, token: string) {

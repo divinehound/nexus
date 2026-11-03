@@ -106,6 +106,10 @@ export const projects = pgTable('projects', {
   isFeatured: boolean('is_featured').default(false).notNull(),
   // Holder analysis is opt-in per project: only enabled projects' collections are read from the chain.
   holderAnalysisEnabled: boolean('holder_analysis_enabled').default(false).notNull(),
+  // Holder-history sale pricing: also look up the ETH contracts paid out in
+  // non-OpenSea sales (Blur etc.) for exact seller proceeds and buyer refunds.
+  // Costs extra Alchemy calls per sale, so it's opt-in per project.
+  exactSalePayouts: boolean('exact_sale_payouts').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   lastIndexStartedAt: timestamp('last_index_started_at', { withTimezone: true }),
   lastIndexFinishedAt: timestamp('last_index_finished_at', { withTimezone: true }),

@@ -214,6 +214,13 @@ export class AdminController {
     return this.holderHistoryService.queueCollectionHolderHistoryScan(id, body);
   }
 
+  @Patch('collections/:id/holder-history/exact-sale-payouts')
+  @ApiOperation({ summary: "Turn exact seller payouts on or off for the collection's project (extra Alchemy calls per non-OpenSea sale)" })
+  setExactSalePayouts(@Param('id') id: string, @Body() body: { enabled?: unknown }) {
+    if (typeof body?.enabled !== 'boolean') throw new BadRequestException('Send { enabled: true | false }');
+    return this.holderHistoryService.setExactSalePayouts(id, body.enabled);
+  }
+
   @Get('collections/:id/holder-history/status')
   @ApiOperation({ summary: 'Get holder history scan job status for a collection' })
   getCollectionHolderHistoryStatus(@Param('id') id: string) {
