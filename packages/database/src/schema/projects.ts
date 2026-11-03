@@ -27,6 +27,7 @@ export const chainEnum = pgEnum('chain', [
   'apechain',
   'polygon',
   'solana',
+  'robinhood',
 ]);
 
 export const verificationStatusEnum = pgEnum('verification_status', [

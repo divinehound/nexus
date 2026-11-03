@@ -4,6 +4,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { and, eq, lt, sql } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
+import { alchemyNetwork } from '../../common/evm-chains';
 import { chainIsOn } from './chain-switches';
 import { HOLDER_INDEXING_QUEUE } from '../../common/queue/queues';
 import { type Database, collections, collectionHolders } from '@nexus/database';
@@ -537,13 +538,6 @@ export class HolderIndexerService {
    * Map chain name to Alchemy network identifier
    */
   private getAlchemyNetwork(chain: string): string {
-    const networks: Record<string, string> = {
-      ethereum: 'eth-mainnet',
-      base: 'base-mainnet',
-      polygon: 'polygon-mainnet',
-      abstract: 'abstract-mainnet',
-      apechain: 'apechain-mainnet',
-    };
-    return networks[chain] || 'eth-mainnet';
+    return alchemyNetwork(chain);
   }
 }

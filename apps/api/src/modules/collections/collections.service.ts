@@ -20,6 +20,7 @@ const SUPPORTED_CHAINS = [
   'abstract',
   'apechain',
   'polygon',
+  'robinhood',
   'solana',
 ] as const;
 

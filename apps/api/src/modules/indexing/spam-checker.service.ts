@@ -2,6 +2,8 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { eq } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
+import { alchemyNetwork } from '../../common/evm-chains';
+import { EVM_CHAINS } from '@nexus/types';
 import { type Database, collections } from '@nexus/database';
 
 /**
@@ -31,13 +33,7 @@ export class SpamCheckerService {
     }
 
     // Get all EVM collections (Solana doesn't have spam detection)
-    const evmChains: Array<'ethereum' | 'base' | 'polygon' | 'abstract' | 'apechain'> = [
-      'ethereum',
-      'base',
-      'polygon',
-      'abstract',
-      'apechain',
-    ];
+    const evmChains = EVM_CHAINS;
     const allCollections = await this.db.query.collections.findMany({
       where: (c, { inArray }) => inArray(c.chain, evmChains),
     });
@@ -258,13 +254,6 @@ export class SpamCheckerService {
   }
 
   private getAlchemyNetwork(chain: string): string {
-    const networks: Record<string, string> = {
-      ethereum: 'eth-mainnet',
-      base: 'base-mainnet',
-      polygon: 'polygon-mainnet',
-      abstract: 'abstract-mainnet',
-      apechain: 'apechain-mainnet',
-    };
-    return networks[chain] || 'eth-mainnet';
+    return alchemyNetwork(chain);
   }
 }

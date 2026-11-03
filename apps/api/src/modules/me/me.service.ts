@@ -32,6 +32,7 @@ import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { randomBytes } from 'crypto';
 import { createPublicClient, http, isAddress } from 'viem';
 import { abstract, apeChain, base, mainnet, polygon } from 'viem/chains';
+import { robinhoodChain } from '../../common/evm-chains';
 import nacl from 'tweetnacl';
 import bs58 from 'bs58';
 import { HoldingsService } from '../holdings/holdings.service';
@@ -49,6 +50,7 @@ const SIGNATURE_CHAINS = [
   { chain: base, alchemy: CHAIN_META.base?.alchemySubdomain },
   { chain: polygon, alchemy: CHAIN_META.polygon?.alchemySubdomain },
   { chain: apeChain, alchemy: CHAIN_META.apechain?.alchemySubdomain },
+  { chain: robinhoodChain, alchemy: CHAIN_META.robinhood?.alchemySubdomain },
 ];
 const MAX_WATCHED_WALLETS = 100;
 

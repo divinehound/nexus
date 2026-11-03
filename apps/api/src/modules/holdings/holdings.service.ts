@@ -20,6 +20,7 @@ import {
 } from '@nexus/database';
 import { randomUUID } from 'crypto';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
+import { EVM_CHAINS } from '@nexus/types';
 import { WALLET_INDEXING_QUEUE } from '../../common/queue/queues';
 import { BlockchainLookupService } from '../search/blockchain-lookup.service';
 import { BlockchainIndexerService } from './blockchain-indexer.service';
@@ -287,7 +288,7 @@ export class HoldingsService {
       // For Solana, only index Solana chain
       const chainsToIndex = wallet.chain === 'solana' 
         ? ['solana']
-        : ['ethereum', 'base', 'polygon', 'abstract', 'apechain'];
+        : EVM_CHAINS;
 
       this.logger.log(`Indexing wallet ${wallet.address} across chains: ${chainsToIndex.join(', ')}`);
 

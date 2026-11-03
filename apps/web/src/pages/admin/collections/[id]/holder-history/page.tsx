@@ -631,6 +631,7 @@ function getExplorerLink(chain: string, address: string): string | null {
   if (c === 'polygon') return `https://polygonscan.com/address/${address}`;
   if (c === 'abstract') return `https://explorer.abs.xyz/address/${address}`;
   if (c === 'apechain') return `https://apescan.io/address/${address}`;
+  if (c === 'robinhood') return `https://robinhoodchain.blockscout.com/address/${address}`;
   if (c === 'solana') return `https://solscan.io/account/${address}`;
   return null;
 }

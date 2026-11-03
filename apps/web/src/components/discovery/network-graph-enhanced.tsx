@@ -26,6 +26,7 @@ const CHAIN_COLORS: Record<string, string> = {
   solana: '#14f195',
   abstract: '#a78bfa',
   apechain: '#fbbf24',
+  robinhood: '#ccff00',
 };
 
 function getChainColor(chain: string): string {

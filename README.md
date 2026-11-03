@@ -87,7 +87,7 @@ Trust disclaimer shown for unverified/rejected:
 
 ### 7) Real blockchain indexing
 - **EVM chains**: Uses Alchemy `getNFTsForOwner` API
-  - Indexes all supported chains: Ethereum, Base, Polygon, Abstract, ApeChain
+  - Indexes all supported chains: Ethereum, Base, Polygon, Abstract, ApeChain, Robinhood Chain
   - Same EVM address is queried across all chains
 - **Solana**: Uses Helius `getAssetsByOwner` API
   - Solana-only indexing (different address format)
@@ -257,7 +257,7 @@ Signature verification notes:
 - Solana: verifies base58 `signMessage` signature against the exact challenge message and base58 public key
 
 **Wallet indexing behavior:**
-- EVM wallets: indexes all supported chains (Ethereum, Base, Polygon, Abstract, ApeChain)
+- EVM wallets: indexes all supported chains (Ethereum, Base, Polygon, Abstract, ApeChain, Robinhood Chain)
 - Solana wallets: indexes Solana only
 - Collections auto-created with real metadata from blockchain
 - Top 50 collections (by token count across all chains) are tracked
