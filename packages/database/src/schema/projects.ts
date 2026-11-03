@@ -62,6 +62,23 @@ export const trackingTierEnum = pgEnum('tracking_tier', [
   'suppressed',
 ]);
 
+/**
+ * Chains an admin has switched off: no scheduled refreshes, backlog or discovery indexing,
+ * or holder analysis on them. A chain with no row is on.
+ */
+export const chainSettings = pgTable('chain_settings', {
+  chain: chainEnum('chain').primaryKey(),
+  enabled: boolean('enabled').default(true).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+/**
+ * How often Nexus refreshes a collection's holders (see collection-refresh.cron.ts):
+ * dormant never on its own, slow weekly, active daily, hot every 6 hours,
+ * premium hourly (plus holder history; premium is set by an admin).
+ */
+export const serviceLevelEnum = pgEnum('service_level', ['dormant', 'slow', 'active', 'hot', 'premium']);
+
 export const indexStatusEnum = pgEnum('index_status', [
   'nexus_only',
   'sampled',
@@ -163,6 +180,12 @@ export const collections = pgTable(
     lastIndexJobId: varchar('last_index_job_id', { length: 64 }),
     holderHistoryLastCheckedBlock: bigint('holder_history_last_checked_block', { mode: 'number' }),
     holderHistoryLastScannedAt: timestamp('holder_history_last_scanned_at', { withTimezone: true }),
+    // Refresh schedule. `serviceLevelPinned` = an admin set the level, so the
+    // weekly check leaves it alone (premium is only ever set this way).
+    serviceLevel: serviceLevelEnum('service_level').default('dormant').notNull(),
+    serviceLevelPinned: boolean('service_level_pinned').default(false).notNull(),
+    serviceLevelReason: text('service_level_reason'),
+    serviceLevelCheckedAt: timestamp('service_level_checked_at', { withTimezone: true }),
     // How many of the source collection's holders also held this contract
     // when discovery found it, and which collection it was discovered from
     discoveredOverlapCount: integer('discovered_overlap_count'),

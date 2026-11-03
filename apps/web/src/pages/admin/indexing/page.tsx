@@ -16,6 +16,7 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/context/auth-context';
 import { confirmDialog } from '@/components/ui/dialogs';
+import { ChainSwitches } from '@/components/admin/chain-switches';
 
 const statusOptions: Array<{ label: string; value: '' | IndexingJobStatus }> = [
   { label: 'All', value: '' },
@@ -278,6 +279,7 @@ export default function AdminIndexingPage() {
 
   return (
     <div>
+      {accessToken && <ChainSwitches token={accessToken} />}
       <div className="mb-6 grid gap-3 md:grid-cols-3">
         <StatusPanel
           title="Wallet Index Status"

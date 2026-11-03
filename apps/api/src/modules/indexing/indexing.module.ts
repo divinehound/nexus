@@ -6,6 +6,7 @@ import { SpamCheckerService } from './spam-checker.service';
 import { CollectionDiscoveryService } from './collection-discovery.service';
 import { CollectionDiscoveryProcessor } from './collection-discovery.processor';
 import { RetentionCron } from './retention.cron';
+import { CollectionRefreshCron } from './collection-refresh.cron';
 import { SearchModule } from '../search/search.module';
 import { QueueModule } from '../../common/queue/queue.module';
 
@@ -19,6 +20,7 @@ import { QueueModule } from '../../common/queue/queue.module';
     CollectionDiscoveryService,
     CollectionDiscoveryProcessor,
     RetentionCron,
+    CollectionRefreshCron,
   ],
   exports: [HolderIndexerService, HolderSnapshotService, SpamCheckerService, CollectionDiscoveryService, QueueModule],
 })

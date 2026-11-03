@@ -9,6 +9,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { eq, and, count, sql, desc, or, inArray, type SQL } from 'drizzle-orm';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
+import { SERVICE_LEVELS, type ServiceLevel } from '../indexing/collection-refresh.cron';
 import {
   type Database,
   projects,
@@ -22,6 +23,8 @@ import {
   walletIndexingJobs,
   wallets,
   spamAllowlist,
+  chainEnum,
+  chainSettings,
 } from '@nexus/database';
 import { CollectionMetricsService } from '../collections/collection-metrics.service';
 import { HoldingsService } from '../holdings/holdings.service';
@@ -1112,6 +1115,59 @@ export class AdminService {
       : null;
 
     return { ...collection, discoveredFrom };
+  }
+
+  /** Every chain, whether it's switched on, and how many collections it has (by service level). */
+  async getChains() {
+    const rows = await this.db.execute<{ chain: string; enabled: boolean; collections: number; refreshed: number; updated_at: string | null }>(sql`
+      SELECT ch.chain, coalesce(cs.enabled, true) AS enabled, cs.updated_at,
+             (SELECT count(*)::int FROM collections c WHERE c.chain::text = ch.chain) AS collections,
+             (SELECT count(*)::int FROM collections c WHERE c.chain::text = ch.chain AND c.service_level <> 'dormant') AS refreshed
+      FROM unnest(enum_range(NULL::chain)::text[]) AS ch(chain)
+      LEFT JOIN chain_settings cs ON cs.chain::text = ch.chain
+      ORDER BY array_position(enum_range(NULL::chain)::text[], ch.chain)`);
+    return [...rows].map((r) => ({ chain: r.chain, enabled: r.enabled, collections: r.collections, scheduled: r.refreshed, updatedAt: r.updated_at }));
+  }
+
+  /** Switches a chain's background work (refreshes, backlog, discovery, holder analysis) on or off. */
+  async setChainEnabled(chain: string, enabled: unknown) {
+    if (!(chainEnum.enumValues as readonly string[]).includes(chain)) throw new NotFoundException('Unknown chain');
+    if (typeof enabled !== 'boolean') throw new BadRequestException('Send { enabled: true | false }');
+    await this.db
+      .insert(chainSettings)
+      .values({ chain: chain as (typeof chainEnum.enumValues)[number], enabled })
+      .onConflictDoUpdate({ target: chainSettings.chain, set: { enabled, updatedAt: new Date() } });
+    return this.getChains();
+  }
+
+  /**
+   * Sets how often a collection's holders are refreshed. A level set here is pinned, so the
+   * weekly check leaves it; `{ pinned: false }` hands the collection back to that check.
+   * Premium is only ever set here.
+   */
+  async setCollectionServiceLevel(idOrContract: string, body: { level?: unknown; pinned?: unknown }) {
+    const collectionId = await this.resolveCollectionId(idOrContract);
+    const set: Partial<typeof collections.$inferInsert> = {};
+    if (body?.level !== undefined) {
+      if (typeof body.level !== 'string' || !(SERVICE_LEVELS as readonly string[]).includes(body.level)) {
+        throw new BadRequestException(`level must be one of ${SERVICE_LEVELS.join(', ')}`);
+      }
+      set.serviceLevel = body.level as ServiceLevel;
+      set.serviceLevelPinned = true;
+      set.serviceLevelReason = 'Set by an admin';
+    } else if (body?.pinned === false) {
+      set.serviceLevelPinned = false;
+      // Premium belongs to admins: back to automatic means leaving it.
+      set.serviceLevelReason = 'Automatic: waiting for the weekly check';
+    } else {
+      throw new BadRequestException('Send { level } to pin a level, or { pinned: false } to make it automatic');
+    }
+    const [updated] = await this.db.update(collections).set(set).where(eq(collections.id, collectionId)).returning({ id: collections.id, serviceLevel: collections.serviceLevel });
+    if (!updated) throw new NotFoundException('Collection not found');
+    if (body?.pinned === false && updated.serviceLevel === 'premium') {
+      await this.db.update(collections).set({ serviceLevel: 'active' }).where(eq(collections.id, collectionId));
+    }
+    return this.getCollectionDetail(collectionId);
   }
 
   /**

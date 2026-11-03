@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Put,
   Delete,
   Param,
   Query,
@@ -439,6 +440,24 @@ export class AdminController {
   getCollection(@Param('id') id: string) {
     return this.adminService.getCollectionDetail(id);
   }
+  @Get('chains')
+  @ApiOperation({ summary: 'Every chain: switched on or off, and its collection counts' })
+  getChains() {
+    return this.adminService.getChains();
+  }
+
+  @Put('chains/:chain')
+  @ApiOperation({ summary: "Switch a chain's background work (refreshes, backlog, discovery, holder analysis) on or off" })
+  setChainEnabled(@Param('chain') chain: string, @Body() body: { enabled?: unknown }) {
+    return this.adminService.setChainEnabled(chain, body?.enabled);
+  }
+
+  @Patch('collections/:id/service-level')
+  @ApiOperation({ summary: "Pin how often a collection's holders refresh (dormant, slow, active, hot, premium), or { pinned: false } for automatic" })
+  setCollectionServiceLevel(@Param('id') id: string, @Body() body: { level?: unknown; pinned?: unknown }) {
+    return this.adminService.setCollectionServiceLevel(id, body ?? {});
+  }
+
   @Post('collections/:id/enrich')
   @ApiOperation({ summary: 'Re-fetch blockchain metadata for a collection' })
   enrichCollection(@Param('id') id: string) {

@@ -12,10 +12,13 @@ import {
   adminMarkCollectionAsNotSpam,
   adminMarkCollectionAsSpam,
   adminRejectCollection,
+  adminSetCollectionServiceLevel,
   adminUpdateCollection,
   adminVerifyCollection,
   type AdminCollectionDetail,
   type AdminCollectionEditableFields,
+  SERVICE_LEVELS,
+  type ServiceLevel,
 } from '@/lib/api';
 import { useAdminCollection } from './layout';
 
@@ -112,6 +115,29 @@ export default function AdminCollectionOverviewPage() {
     } finally {
       setBusy(null);
     }
+  };
+
+  const setServiceLevel = async (value: string) => {
+    const level = value === 'auto' ? null : (value as ServiceLevel);
+    if (level === 'premium' || level === 'hot') {
+      const ok = await confirmDialog({
+        title: `Make ${c.name} ${level}?`,
+        message:
+          level === 'premium'
+            ? 'Its holders refresh every hour and its holder history is kept up to date, which costs the most Alchemy calls.'
+            : 'Its holders refresh every 6 hours.',
+        confirmText: 'Set level',
+      });
+      if (!ok) return;
+    }
+    await act(
+      'level',
+      async () => {
+        await adminSetCollectionServiceLevel(c.id, level, accessToken!);
+        return level ? `Pinned to ${SERVICE_LEVELS.find((l) => l.value === level)?.label}` : 'Set to automatic';
+      },
+      'Could not change the service level',
+    );
   };
 
   const refreshMetadata = () =>
@@ -273,6 +299,25 @@ export default function AdminCollectionOverviewPage() {
           <Fact label="Verification">{c.verificationStatus}</Fact>
           <Fact label="Mapping">{c.mappingStatus}</Fact>
           <Fact label="Tracking tier">{c.trackingTier}</Fact>
+          <Fact label="Service level">
+            <select
+              className={`${INPUT} w-full`}
+              value={c.serviceLevelPinned ? c.serviceLevel : 'auto'}
+              disabled={busy === 'level'}
+              onChange={(e) => setServiceLevel(e.target.value)}
+              aria-label="Service level"
+            >
+              <option value="auto">
+                Automatic ({SERVICE_LEVELS.find((l) => l.value === c.serviceLevel)?.label.toLowerCase()} now)
+              </option>
+              {SERVICE_LEVELS.map((l) => (
+                <option key={l.value} value={l.value}>
+                  {l.label}: {l.refresh}
+                </option>
+              ))}
+            </select>
+            {c.serviceLevelReason && <span className="mt-1 block text-xs text-gray-500">{c.serviceLevelReason}</span>}
+          </Fact>
           <Fact label="Index status">{c.indexStatus}</Fact>
           <Fact label="Last indexed">
             {when(c.lastIndexFinishedAt)}
