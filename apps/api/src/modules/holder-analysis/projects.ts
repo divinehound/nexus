@@ -2,7 +2,6 @@
 // with holder_analysis_enabled, their collections, and each collection's analysis settings.
 // A collection with no settings row gets defaults (core for ERC-721, a short id from its name).
 
-import { chainIsOn } from '../indexing/chain-switches';
 import { sql } from 'drizzle-orm';
 import type { Database } from '@nexus/database';
 import type { Collection, Project, Standard } from '@nexus/holder-analysis';
@@ -86,8 +85,6 @@ export async function loadEnabledProjects(db: Database, projectId?: string): Pro
     JOIN collections c ON c.project_id = p.id
     LEFT JOIN holder_analysis_collection_settings s ON s.collection_id = c.id
     WHERE p.holder_analysis_enabled
-      -- Collections on chains an admin switched off aren't synced or analysed.
-      AND ${chainIsOn(sql`c.chain`)}
       ${projectId ? sql`AND p.id = ${projectId}` : sql``}
     ORDER BY p.created_at, c.first_seen_at, c.id
   `);

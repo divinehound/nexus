@@ -124,7 +124,7 @@ export default function AdminCollectionOverviewPage() {
         title: `Make ${c.name} ${level}?`,
         message:
           level === 'premium'
-            ? 'Its holders refresh every hour and its holder history is kept up to date, which costs the most Alchemy calls.'
+            ? 'Its holders refresh every hour, which costs the most Alchemy calls.'
             : 'Its holders refresh every 6 hours.',
         confirmText: 'Set level',
       });
@@ -308,7 +308,7 @@ export default function AdminCollectionOverviewPage() {
               aria-label="Service level"
             >
               <option value="auto">
-                Automatic ({SERVICE_LEVELS.find((l) => l.value === c.serviceLevel)?.label.toLowerCase()} now)
+                Automatic{c.serviceLevelPinned ? '' : ` (${SERVICE_LEVELS.find((l) => l.value === c.serviceLevel)?.label.toLowerCase()} now)`}
               </option>
               {SERVICE_LEVELS.map((l) => (
                 <option key={l.value} value={l.value}>

@@ -446,7 +446,6 @@ export function adminGetCollection(collectionId: string, token: string) {
   return apiFetch<AdminCollectionDetail>(`/admin/collections/${collectionId}`, { token });
 }
 
-/** A new name is kept over the name from chain metadata until it is reset. */
 export type AdminChain = { chain: string; enabled: boolean; collections: number; scheduled: number; updatedAt: string | null };
 
 export function getAdminChains(token: string) {
@@ -466,7 +465,7 @@ export const SERVICE_LEVELS: { value: ServiceLevel; label: string; refresh: stri
   { value: 'slow', label: 'Slow', refresh: 'weekly' },
   { value: 'active', label: 'Active', refresh: 'daily' },
   { value: 'hot', label: 'Hot', refresh: 'every 6 hours' },
-  { value: 'premium', label: 'Premium', refresh: 'hourly, with holder history' },
+  { value: 'premium', label: 'Premium', refresh: 'hourly' },
 ];
 
 /** Pins a collection's service level, or with `null` hands it back to the weekly check. */
@@ -478,6 +477,7 @@ export function adminSetCollectionServiceLevel(collectionId: string, level: Serv
   });
 }
 
+/** A new name is kept over the name from chain metadata until it is reset. */
 export function adminUpdateCollection(collectionId: string, updates: AdminCollectionEditableFields, token: string) {
   return apiFetch<AdminCollectionDetail>(`/admin/collections/${collectionId}/update`, {
     method: 'PATCH',

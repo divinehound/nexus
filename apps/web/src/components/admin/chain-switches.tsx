@@ -11,11 +11,16 @@ import { type AdminChain, getAdminChains, setAdminChainEnabled } from '@/lib/api
 export function ChainSwitches({ token }: { token: string }) {
   const [chains, setChains] = useState<AdminChain[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
+    let stale = false;
     getAdminChains(token)
-      .then(setChains)
-      .catch((err) => toast.error(err instanceof Error ? err.message : 'Could not load the chains'));
+      .then((c) => !stale && setChains(c))
+      .catch((err) => !stale && setError(err instanceof Error ? err.message : 'Could not load the chains'));
+    return () => {
+      stale = true;
+    };
   }, [token]);
 
   const toggle = async (c: AdminChain) => {
@@ -38,6 +43,7 @@ export function ChainSwitches({ token }: { token: string }) {
     }
   };
 
+  if (error) return <p className="mb-6 text-sm text-red-400">Chains: {error}</p>;
   if (!chains) return null;
   return (
     <section className="mb-6 rounded border border-gray-800 p-4">
@@ -56,7 +62,8 @@ export function ChainSwitches({ token }: { token: string }) {
             </div>
             <button
               onClick={() => toggle(c)}
-              disabled={busy === c.chain}
+              // One switch at a time, so an older reply can't flip another back on screen.
+              disabled={busy !== null}
               className={`rounded border px-3 py-1 text-xs ${c.enabled ? 'border-emerald-800 text-emerald-400' : 'border-gray-700 text-gray-400'}`}
               aria-pressed={c.enabled}
             >

@@ -1156,17 +1156,16 @@ export class AdminService {
       set.serviceLevelPinned = true;
       set.serviceLevelReason = 'Set by an admin';
     } else if (body?.pinned === false) {
+      // Back to automatic: dormant (nothing read) until the weekly check gives it a level.
+      // Premium belongs to admins, so it never stays on through this.
+      set.serviceLevel = 'dormant';
       set.serviceLevelPinned = false;
-      // Premium belongs to admins: back to automatic means leaving it.
-      set.serviceLevelReason = 'Automatic: waiting for the weekly check';
+      set.serviceLevelReason = 'Automatic: dormant until the weekly check';
     } else {
       throw new BadRequestException('Send { level } to pin a level, or { pinned: false } to make it automatic');
     }
-    const [updated] = await this.db.update(collections).set(set).where(eq(collections.id, collectionId)).returning({ id: collections.id, serviceLevel: collections.serviceLevel });
+    const [updated] = await this.db.update(collections).set(set).where(eq(collections.id, collectionId)).returning({ id: collections.id });
     if (!updated) throw new NotFoundException('Collection not found');
-    if (body?.pinned === false && updated.serviceLevel === 'premium') {
-      await this.db.update(collections).set({ serviceLevel: 'active' }).where(eq(collections.id, collectionId));
-    }
     return this.getCollectionDetail(collectionId);
   }
 

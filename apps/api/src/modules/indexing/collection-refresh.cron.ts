@@ -49,7 +49,8 @@ export class CollectionRefreshCron {
   }
 
   async queueDue(): Promise<number> {
-    // A backlog run or the last hour's refreshes still going: wait, rather than pile up.
+    // A backlog run or the last hour's refreshes still waiting: skip this run rather than pile up.
+    // A long backlog run therefore holds refreshes (premium too) until it drains.
     const counts = await this.queue.getJobCounts('waiting', 'delayed');
     if ((counts.waiting ?? 0) + (counts.delayed ?? 0) > 0) {
       this.logger.log('Holder indexing queue still busy; skipping this refresh run');
@@ -73,9 +74,11 @@ export class CollectionRefreshCron {
           AND c.is_spam IS NOT TRUE
           AND c.verification_status != 'rejected'
           AND ${chainIsOn(sql`c.chain`)}
+          -- Suppressed (spam-like) collections only refresh when an admin pinned a level.
+          AND (c.service_level_pinned OR c.tracking_tier != 'suppressed')
           AND (${due})
-          -- Too many holders last time: only premium tries again.
-          AND (c.service_level = 'premium' OR c.last_index_status IS DISTINCT FROM 'skipped')
+          -- Over the holder cap last time: it would be skipped again, so leave it (the admin page shows "skipped").
+          AND c.last_index_status IS DISTINCT FROM 'skipped'
         ORDER BY array_position(ARRAY['premium', 'hot', 'active', 'slow']::text[], c.service_level::text),
                  c.last_index_finished_at ASC NULLS FIRST
         LIMIT ${MAX_PER_RUN}
