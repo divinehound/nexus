@@ -4,6 +4,7 @@ import { AdminProjectsService } from './admin-projects.service';
 import { AdminService } from './admin.service';
 import { HolderHistoryService } from './holder-history.service';
 import { HolderHistoryScanProcessor } from './holder-history-scan.processor';
+import { PremiumHistoryCron } from './premium-history.cron';
 import { PriceOracleService } from './price-oracle.service';
 import { CollectionsModule } from '../collections/collections.module';
 import { HoldingsModule } from '../holdings/holdings.module';
@@ -14,7 +15,7 @@ import { QueueModule } from '../../common/queue/queue.module';
 @Module({
   imports: [CollectionsModule, HoldingsModule, SearchModule, IndexingModule, QueueModule],
   controllers: [AdminController],
-  providers: [AdminService, AdminProjectsService, HolderHistoryService, HolderHistoryScanProcessor, PriceOracleService],
+  providers: [AdminService, AdminProjectsService, HolderHistoryService, HolderHistoryScanProcessor, PremiumHistoryCron, PriceOracleService],
   exports: [PriceOracleService],
 })
 export class AdminModule {}

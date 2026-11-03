@@ -12,8 +12,9 @@ type HolderHistoryScanJobData = {
 /**
  * Runs holder-history scans (EVM transfer backfill / Solana hybrid scan) one
  * at a time — they are the heaviest external-API workloads in the system.
- * The scan itself checkpoints progress in the DB, so a scan that dies with
- * the process resumes from its last checkpoint when re-queued.
+ * An EVM scan saves its checkpoint (the last block read) only when it
+ * finishes: one that dies part way starts again from the previous
+ * checkpoint, or from block 0 (a full rebuild) if it never finished.
  */
 @Processor(HOLDER_HISTORY_SCAN_QUEUE, { concurrency: 1 })
 export class HolderHistoryScanProcessor extends WorkerHost {

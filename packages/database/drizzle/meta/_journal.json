@@ -316,6 +316,13 @@
       "when": 1793720000000,
       "tag": "0044_collection_recent_transfers",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1793730000000,
+      "tag": "0045_holder_history_status",
+      "breakpoints": true
     }
   ]
 }
