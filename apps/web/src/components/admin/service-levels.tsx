@@ -7,18 +7,22 @@ import { type AdminServiceLevels, getAdminServiceLevels, runAdminServiceLevelChe
 export function ServiceLevels({ token }: { token: string }) {
   const [data, setData] = useState<AdminServiceLevels | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   const load = useCallback(() => {
     getAdminServiceLevels(token)
-      .then(setData)
-      .catch((err) => toast.error(err instanceof Error ? err.message : 'Could not load the service levels'));
+      .then((d) => {
+        setData(d);
+        setError('');
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Could not load the service levels'));
   }, [token]);
   useEffect(load, [load]);
 
   const run = async () => {
     const ok = await confirmDialog({
       title: 'Check service levels now?',
-      message: 'Counts recent transfers for every collection that is not pinned (one Alchemy call each), then sets its level. It also runs every Sunday.',
+      message: 'Counts recent transfers for every collection that is not pinned (one Alchemy call each), then sets its level. It also runs every Sunday; other days only new collections are checked.',
       confirmText: 'Check now',
     });
     if (!ok) return;
@@ -34,7 +38,7 @@ export function ServiceLevels({ token }: { token: string }) {
     }
   };
 
-  if (!data) return null;
+  if (!data) return error ? <p className="mb-6 text-sm text-red-400">Service levels: {error}</p> : null;
   const { check } = data;
   return (
     <section className="mb-6 rounded border border-gray-800 p-4">
@@ -45,8 +49,15 @@ export function ServiceLevels({ token }: { token: string }) {
             {check.running
               ? 'A check is running now.'
               : check.finishedAt
-                ? `Last check ${new Date(check.finishedAt).toLocaleString()}${check.result ? `: ${check.result.checked.toLocaleString()} checked, ${check.result.failed} failed` : ''}. Runs every Sunday.`
-                : 'Not checked yet. Runs every Sunday.'}
+                ? `Last full check ${new Date(check.finishedAt).toLocaleString()}${
+                    check.error
+                      ? ` failed: ${check.error}`
+                      : check.result
+                        ? `: ${check.result.checked.toLocaleString()} checked, ${check.result.failed} failed${check.result.skipped ? `, ${check.result.skipped} skipped (no Alchemy key or network)` : ''}`
+                        : ''
+                  }. Runs every Sunday; new collections daily.`
+                : 'No full check yet. Runs every Sunday; new collections daily.'}
+            {error && <span className="block text-red-400">Could not refresh: {error}</span>}
           </p>
         </div>
         <div className="flex gap-2">

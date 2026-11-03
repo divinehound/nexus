@@ -450,7 +450,7 @@ export function adminGetCollection(collectionId: string, token: string) {
 
 export type AdminServiceLevels = {
   levels: { level: ServiceLevel; total: number; pinned: number }[];
-  check: { running: boolean; finishedAt: string | null; result: { checked: number; failed: number; skipped: number } | null };
+  check: { running: boolean; finishedAt: string | null; result: { checked: number; failed: number; skipped: number } | null; error: string | null };
 };
 
 export function getAdminServiceLevels(token: string) {
@@ -484,7 +484,7 @@ export const SERVICE_LEVELS: { value: ServiceLevel; label: string; refresh: stri
   { value: 'premium', label: 'Premium', refresh: 'hourly' },
 ];
 
-/** Pins a collection's service level, or with `null` hands it back to the weekly check. */
+/** Pins a collection's service level, or with `null` hands it back to the automatic checks. */
 export function adminSetCollectionServiceLevel(collectionId: string, level: ServiceLevel | null, token: string) {
   return apiFetch<AdminCollectionDetail>(`/admin/collections/${collectionId}/service-level`, {
     method: 'PATCH',

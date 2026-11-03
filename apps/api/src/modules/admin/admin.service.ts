@@ -1169,7 +1169,9 @@ export class AdminService {
       // Premium belongs to admins, so it never stays on through this.
       set.serviceLevel = 'dormant';
       set.serviceLevelPinned = false;
-      set.serviceLevelReason = 'Automatic: dormant until the weekly check';
+      set.serviceLevelReason = 'Automatic: dormant until the next daily check';
+      // Never checked: the daily run (03:00 UTC) picks it up.
+      set.serviceLevelCheckedAt = null;
     } else {
       throw new BadRequestException('Send { level } to pin a level, or { pinned: false } to make it automatic');
     }
