@@ -124,7 +124,7 @@ export default function AdminCollectionOverviewPage() {
         title: `Make ${c.name} ${level}?`,
         message:
           level === 'premium'
-            ? 'Its holders refresh every hour, which costs the most Alchemy calls.'
+            ? 'Its holders refresh every hour and its holder history is scanned every night, which costs the most API calls. If it has never been scanned, the first night reads its full history.'
             : 'Its holders refresh every 6 hours.',
         confirmText: 'Set level',
       });

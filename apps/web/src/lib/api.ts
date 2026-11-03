@@ -481,7 +481,7 @@ export const SERVICE_LEVELS: { value: ServiceLevel; label: string; refresh: stri
   { value: 'slow', label: 'Slow', refresh: 'weekly' },
   { value: 'active', label: 'Active', refresh: 'daily' },
   { value: 'hot', label: 'Hot', refresh: 'every 6 hours' },
-  { value: 'premium', label: 'Premium', refresh: 'hourly' },
+  { value: 'premium', label: 'Premium', refresh: 'hourly, with nightly holder history' },
 ];
 
 /** Pins a collection's service level, or with `null` hands it back to the automatic checks. */
