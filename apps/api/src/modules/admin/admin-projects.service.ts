@@ -4,9 +4,6 @@ import { type Database, collections, projects } from '@nexus/database';
 import { DATABASE_TOKEN } from '../../common/database/database.module';
 import { CollectionsService } from '../collections/collections.service';
 
-/** Where trackCollection parks contracts nobody has grouped yet (collections.service.ts). */
-const UNASSIGNED_SLUG = 'unassigned-contract-intake';
-
 export type ProjectFields = {
   name?: string;
   slug?: string;
@@ -130,8 +127,7 @@ export class AdminProjectsService {
         ? await this.db.execute<{ id: string }>(sql`
             SELECT c.id
             FROM collections c
-            LEFT JOIN projects p ON p.id = c.project_id
-            WHERE (c.project_id IS NULL OR p.slug = ${UNASSIGNED_SLUG})
+            WHERE c.project_id IS NULL
               AND c.is_spam IS NOT TRUE
               AND c.verification_status != 'rejected'
               AND LOWER(c.name) LIKE ${`%${escapeLike(term)}%`} ESCAPE '\\'
@@ -197,8 +193,7 @@ export class AdminProjectsService {
       previousId && previousId !== projectId
         ? await this.db.query.projects.findFirst({ where: eq(projects.id, previousId) })
         : undefined;
-    // Leaving the intake bucket isn't a move from another project.
-    const movedFrom = previous && previous.slug !== UNASSIGNED_SLUG ? { id: previous.id, name: previous.name } : null;
+    const movedFrom = previous ? { id: previous.id, name: previous.name } : null;
     return { collectionId, tracked, movedFrom };
   }
 
@@ -224,8 +219,7 @@ export class AdminProjectsService {
    * Data that belongs to the project itself goes with it: owners, wiki pages and
    * suggestions, events, activity feed rows and its holder-analysis data.
    *
-   * The intake bucket for unassigned contracts is never deleted. With
-   * markCollectionsSpam, the unlinked collections are also flagged as spam
+   * With markCollectionsSpam, the unlinked collections are also flagged as spam
    * (manual, score 100), as marking one collection as spam from the admin does.
    */
   async deleteProjects(projectIds: unknown, opts: { markCollectionsSpam?: boolean } = {}) {
@@ -245,19 +239,15 @@ export class AdminProjectsService {
       // work: that insert needs a key-share lock on the project row. Otherwise the
       // new collection would be deleted with the project by the cascade.
       const found = await tx
-        .select({ id: projects.id, name: projects.name, slug: projects.slug })
+        .select({ id: projects.id })
         .from(projects)
         .where(inArray(projects.id, ids))
         .for('update');
       const foundIds = new Set(found.map((p) => p.id));
       const notFound = ids.filter((id) => !foundIds.has(id));
-      const skipped = found
-        .filter((p) => p.slug === UNASSIGNED_SLUG)
-        .map((p) => ({ id: p.id, name: p.name, reason: 'The intake bucket for unassigned contracts is kept' }));
-      const targets = found.filter((p) => p.slug !== UNASSIGNED_SLUG);
-      const targetIds = targets.map((p) => p.id);
+      const targetIds = [...foundIds];
       if (targetIds.length === 0) {
-        return { deleted: [], unlinkedCollections: 0, flaggedSpam: 0, skipped, notFound };
+        return { deleted: [], unlinkedCollections: 0, flaggedSpam: 0, notFound };
       }
 
       const now = new Date();
@@ -309,7 +299,6 @@ export class AdminProjectsService {
         deleted,
         unlinkedCollections: unlinked.length,
         flaggedSpam: flagged.length,
-        skipped,
         notFound,
       };
     });
@@ -318,7 +307,6 @@ export class AdminProjectsService {
   /** Deletes one project, keeping its collections (see deleteProjects). */
   async deleteProject(projectId: string) {
     const result = await this.deleteProjects([projectId]);
-    if (result.skipped.length) throw new BadRequestException(result.skipped[0].reason);
     if (result.deleted.length === 0) throw new NotFoundException('Project not found');
     return { deleted: true, unlinkedCollections: result.unlinkedCollections };
   }

@@ -6,6 +6,7 @@ import { count, eq, inArray } from 'drizzle-orm';
 import { createDatabase, collections, projects } from '@nexus/database';
 import { HoldingsService } from './holdings.service';
 import { CollectionImportService } from '../search/collection-import.service';
+import { CollectionsService } from '../collections/collections.service';
 
 const url = process.env.TEST_DATABASE_URL;
 const describeDb = url ? describe : describe.skip;
@@ -18,10 +19,14 @@ describeDb('new collections get no project of their own (database)', () => {
   const address = (n: number) => `0x${stamp}${n}`.padEnd(42, 'a').toLowerCase();
   const lookup = (contractAddress: string, deployerAddress?: string) => ({
     lookup: async () => [
-      { contractAddress, chain: 'ethereum', name: 'Wallet Thing', tokenType: 'erc721', totalSupply: 10, deployerAddress },
+      { contractAddress, chain: 'ethereum', name: thing, tokenType: 'erc721', totalSupply: 10, deployerAddress },
     ],
   });
-  const projectCount = async () => (await db.select({ n: count() }).from(projects))[0].n;
+  // Unique to this run, so suites running alongside can't change the count.
+  const thing = `Wallet Thing ${stamp}`;
+  // The old code named the project it created after the contract.
+  const projectCount = async () =>
+    (await db.select({ n: count() }).from(projects).where(eq(projects.name, thing)))[0].n;
 
   afterAll(async () => {
     if (created.length) await db.delete(collections).where(inArray(collections.id, created));
@@ -35,7 +40,7 @@ describeDb('new collections get no project of their own (database)', () => {
     const before = await projectCount();
     const row = await (holdings as any).ensureCollection('ethereum', contract, { tier: 'lightweight', score: 40, reason: 'x' });
     created.push(row.id);
-    expect(row).toMatchObject({ projectId: null, name: 'Wallet Thing', mappingStatus: 'unmapped' });
+    expect(row).toMatchObject({ projectId: null, name: thing, mappingStatus: 'unmapped' });
     expect(await projectCount()).toBe(before);
   });
 
@@ -71,5 +76,14 @@ describeDb('new collections get no project of their own (database)', () => {
     expect(first.collection.contractAddress).toBe(lower);
     const again = await service.importCollection(mixed, 'ethereum');
     expect(again).toMatchObject({ alreadyExisted: true, collection: { id: first.collection.id } });
+  });
+
+  it('tracking a contract leaves it without a project', async () => {
+    const metrics = { refreshCollectionMetricsNow: async () => ({ queued: false, deduped: false, jobId: null }) };
+    const service = new CollectionsService(db, metrics as any);
+    const result = await service.trackCollection({ chain: 'ethereum', contractAddress: address(5) });
+    created.push(result.collectionId);
+    const row = await db.query.collections.findFirst({ where: eq(collections.id, result.collectionId) });
+    expect(row).toMatchObject({ projectId: null, mappingStatus: 'unmapped' });
   });
 });

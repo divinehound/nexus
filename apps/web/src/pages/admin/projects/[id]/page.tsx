@@ -212,7 +212,7 @@ export default function AdminProjectEditorPage() {
 
   // Collections in another real project need a confirmation before they move here.
   const pick = (c: SearchRow) => {
-    const elsewhere = c.project && c.project.id !== project?.id && c.project.slug !== 'unassigned-contract-intake';
+    const elsewhere = c.project && c.project.id !== project?.id;
     if (elsewhere) setMoveTarget(c);
     else add({ collectionId: c.id }, c.name);
   };
@@ -329,7 +329,7 @@ export default function AdminProjectEditorPage() {
           <div className="mt-2 divide-y divide-gray-800 rounded border border-gray-800">
             {results.map((c) => (
               <CollectionLine key={c.id} c={c}>
-                {c.project && c.project.slug !== 'unassigned-contract-intake' && c.project.id !== project.id && (
+                {c.project && c.project.id !== project.id && (
                   <span className="text-xs text-amber-300">in {c.project.name}</span>
                 )}
                 {inProject.has(c.id) ? (

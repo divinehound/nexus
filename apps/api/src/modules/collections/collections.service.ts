@@ -270,12 +270,11 @@ export class CollectionsService {
       input.contractAddress,
     );
 
-    const intakeProjectId = await this.ensureUnassignedProject();
-
     const [trackedCollection] = await this.db
       .insert(collections)
       .values({
-        projectId: intakeProjectId,
+        // No project until an admin groups it into one.
+        projectId: null,
         chain,
         contractAddress: normalizedAddress,
         name: this.defaultCollectionName(chain, normalizedAddress),
@@ -426,28 +425,6 @@ export class CollectionsService {
 
   private defaultCollectionName(chain: SupportedChain, address: string): string {
     return `${chain}:${address.slice(0, 8)}...`;
-  }
-
-  private async ensureUnassignedProject(): Promise<string> {
-    const slug = 'unassigned-contract-intake';
-
-    const existing = await this.db.query.projects.findFirst({
-      where: eq(projects.slug, slug),
-    });
-    if (existing) return existing.id;
-
-    const [created] = await this.db
-      .insert(projects)
-      .values({
-        name: 'Unassigned Contract Intake',
-        slug,
-        description:
-          'Auto-generated placeholder project for contract-first intake before project mapping.',
-        isVerified: false,
-      })
-      .returning();
-
-    return created.id;
   }
 
   async getRelatedCollections(collectionId: string, limit: number = 10, minShared: number = 3) {

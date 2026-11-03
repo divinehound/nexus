@@ -38,7 +38,6 @@ interface BulkDeleteResult {
   deleted: { id: string; name: string }[];
   unlinkedCollections: number;
   flaggedSpam: number;
-  skipped: { id: string; name: string; reason: string }[];
   notFound: string[];
 }
 
@@ -167,7 +166,6 @@ export default function AdminProjectsPage() {
       ];
       if (result.flaggedSpam) parts.push(`flagged ${result.flaggedSpam} as spam`);
       toast.success(parts.join(', '));
-      for (const s of result.skipped) toast.warning(`Kept ${s.name}: ${s.reason}`);
       if (result.notFound.length) {
         toast.info(`${result.notFound.length} had already been deleted`);
       }
